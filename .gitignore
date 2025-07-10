@@ -3,6 +3,12 @@
 *.log
 *.png
 *.pkl
+*.out
+*.err
+*.sh
+*slurm_logs/*
+*Figures/*
+*logs/*
 
 # Cache directories
 **__pycache__
