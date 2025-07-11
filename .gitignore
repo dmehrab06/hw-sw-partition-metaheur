@@ -12,3 +12,4 @@
 
 # Cache directories
 **__pycache__
+**.ipynb_checkpoints
