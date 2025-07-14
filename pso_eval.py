@@ -8,8 +8,8 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 import os
-from TaskGraph import TaskGraph
-from pso_utils import simulate_PSO, random_assignment
+from meta_heuristic.TaskGraph import TaskGraph
+from meta_heuristic.pso_utils import simulate_PSO, random_assignment
 
 warnings.filterwarnings('ignore')
 

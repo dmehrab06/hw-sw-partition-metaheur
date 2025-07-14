@@ -6,9 +6,11 @@
 *.out
 *.err
 *.sh
+*.sbatch
 *slurm_logs/*
 *Figures/*
 *logs/*
+*notebook*
 
 # Cache directories
 **__pycache__
