@@ -1,7 +1,20 @@
 import networkx as nx
 import random
 import numpy as np
-import logging
+import os, sys
+
+if __name__ == "__main__":
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sys.path.append(parent_dir)
+
+from utils.logging_utils import LogManager
+
+# Set up logging
+if __name__ == "__main__":
+    LogManager.initialize("logs/task_graph.log")
+
+logger = LogManager.get_logger(__name__)
 
 class TaskGraph:
     """
@@ -43,8 +56,7 @@ class TaskGraph:
         self.total_area = 0.0
         
         # Use the same logger as the main module
-        self.logger = logging.getLogger('__main__')
-        self.logger.info("TaskGraph initialized with area constraint: %f", area_constraint)
+        logger.info("TaskGraph initialized with area constraint: %f", area_constraint)
 
     def load_graph_from_pydot(self, pydot_file, k=1.5, l=0.2, mu=0.5, A_max=100):
         """
@@ -54,7 +66,7 @@ class TaskGraph:
         specific distributions to simulate realistic hardware-software partitioning scenarios.
         
         Args:
-            pydot_file (str): Name of the PyDot file to load from test-data directory
+            pydot_file (str): Path to the PyDot file to load
             k (float): Hardware cost scale factor relative to software costs (default: 1.5)
             l (float): Hardware cost variance factor (default: 0.2)
             mu (float): Communication cost scale factor (default: 0.5)
@@ -70,9 +82,8 @@ class TaskGraph:
             - Communication costs are uniformly distributed between 0 and 2*mu*s_max
         """
         # Load graph structure
-        graph_path = f'/people/mehr668/encode_scripts/hw_sw_partition_min_cut/{pydot_file}'
-        self.graph = nx.Graph(nx.nx_pydot.read_dot(graph_path))
-        self.logger.info(f"Loaded graph from {pydot_file} with {len(self.graph.nodes())} nodes")
+        self.graph = nx.Graph(nx.nx_pydot.read_dot(pydot_file))
+        logger.info(f"Loaded graph from {pydot_file} with {len(self.graph.nodes())} nodes")
         
         # Assign software costs and hardware areas
         self.software_costs = {node: random.uniform(1, 100) for node in self.graph.nodes()}
@@ -102,7 +113,7 @@ class TaskGraph:
             comm_cost = random.uniform(0, 2 * mu * s_max)
             self.communication_costs[(u, v)] = comm_cost
             
-        self.logger.info(f"Graph initialized with total area: {self.total_area}")
+        logger.info(f"Graph initialized with total area: {self.total_area}")
 
     def evaluate_partition_cost(self, solution):
         """
@@ -214,7 +225,7 @@ class TaskGraph:
         for node in self.graph.nodes():
             total_time += min(self.hardware_costs[node], self.software_costs[node])
         
-        self.logger.debug(f"Calculated naive lower bound: {total_time}")
+        logger.info(f"Calculated naive lower bound: {total_time}")
         return total_time
 
     def greedy_heur(self):
@@ -257,5 +268,5 @@ class TaskGraph:
             area_used += self.hardware_area[node]
         
         best_cost_heur = self.evaluate_partition_cost(assignment)
-        self.logger.info(f"Greedy heuristic found solution with cost: {best_cost_heur}")
+        logger.info(f"Greedy heuristic found solution with cost: {best_cost_heur}")
         return best_cost_heur, assignment

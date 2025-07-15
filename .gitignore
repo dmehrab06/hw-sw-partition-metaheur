@@ -7,6 +7,9 @@
 *.err
 *.sh
 *.sbatch
+*.dot
+
+# Directories
 *slurm_logs/*
 *Figures/*
 *logs/*
@@ -15,3 +18,7 @@
 # Cache directories
 **__pycache__
 **.ipynb_checkpoints
+
+
+# DS_Store
+*.DS_Store

@@ -1,7 +1,20 @@
 import numpy as np
 import pyswarms.backend as P
 from pyswarms.backend.topology import Star
-import logging
+import os, sys
+
+if __name__ == "__main__":
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sys.path.append(parent_dir)
+
+from utils.logging_utils import LogManager
+
+# Set up logging
+if __name__ == "__main__":
+    LogManager.initialize("logs/pso_utils.log")
+
+logger = LogManager.get_logger(__name__)
 
 def simulate_PSO(dim, c1, c2, w, func_to_optimize, iterations=100, n_particles=500, verbose=True, reproduce=True):
     """
@@ -42,17 +55,15 @@ def simulate_PSO(dim, c1, c2, w, func_to_optimize, iterations=100, n_particles=5
         v_new = w * v_old + c1 * r1 * (pbest - position) + c2 * r2 * (gbest - position)
         where r1 and r2 are random numbers between 0 and 1.
     """
-    #logger = logging.getLogger(__name__)
-    logger = logging.getLogger('__main__')
     
     # Set up PSO components
     my_topology = Star()  # Star topology for global best computation
     my_options = {'c1': c1, 'c2': c2, 'w': w}
     my_swarm = P.create_swarm(n_particles=n_particles, dimensions=dim, options=my_options)
     
-    if verbose:
-        logger.info(f'Starting PSO with {n_particles} particles for {iterations} iterations')
-        logger.debug(f'PSO parameters: c1={c1}, c2={c2}, w={w}')
+    
+    logger.info(f'Starting PSO with {n_particles} particles for {iterations} iterations')
+    logger.info(f'PSO parameters: c1={c1}, c2={c2}, w={w}')
     
     # Main PSO loop
     for i in range(iterations):
@@ -66,15 +77,14 @@ def simulate_PSO(dim, c1, c2, w, func_to_optimize, iterations=100, n_particles=5
             my_swarm.best_pos, my_swarm.best_cost = my_topology.compute_gbest(my_swarm)
         
         # Progress reporting
-        if i % 50 == 0 and verbose:
+        if i % 50 == 0:
             logger.info(f'Iteration: {i+1} | Best cost: {my_swarm.best_cost:.4f}')
         
         # Step 3: Update velocities and positions
         my_swarm.velocity = my_topology.compute_velocity(my_swarm)
         my_swarm.position = my_topology.compute_position(my_swarm)
     
-    if verbose:
-        logger.info(f'PSO completed. Best cost: {my_swarm.best_cost:.4f}')
+    logger.info(f'PSO completed. Best cost: {my_swarm.best_cost:.4f}')
     
     return my_swarm.best_cost, my_swarm.best_pos
 
@@ -111,7 +121,6 @@ def random_assignment(dim, func_to_optimize, num_samples=5000, random_prob=0.5, 
         optimization algorithms. The random_prob parameter can be tuned based on
         problem characteristics (e.g., expected ratio of hardware vs software assignments).
     """
-    logger = logging.getLogger(__name__)
     
     # Generate random binary solutions
     all_samples = []
