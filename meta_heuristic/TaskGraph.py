@@ -167,34 +167,40 @@ class TaskGraph:
         assert exp_swarms.shape[1] == len(self.software_costs), \
             f"Swarm dimension {exp_swarms.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
         
+        return self.evaluate_from_random(exp_swarms)
+
+    def evaluate_from_random(self,assignment_candidates):
+        """
+        Evaluate costs for a batch of assignment probabilities.
+        
+        This method is designed to work with assignment probabilities directly, should NOT be DIRECTLY called with PSO.
+        
+        Args:
+            assignment_candidates (np.ndarray): Array of shape (n_candidate, n_nodes) containing assignment probabilities
+        
+        Returns:
+            np.ndarray: Array of costs for each particle solution
+        """
+        assert assignment_candidates.shape[1] == len(self.software_costs), \
+            f"Swarm dimension {assignment_candidates.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+        
         all_costs = []
-        for swarm in exp_swarms:
-            solution = {node: swarm[self.node_to_num[node]] for node in self.graph.nodes()}
+        for assignment in assignment_candidates:
+            solution = {node: assignment[self.node_to_num[node]] for node in self.graph.nodes()}
             all_costs.append(self.evaluate_partition_cost(solution))
         
         return np.array(all_costs)
 
-    def find_best_cost(self, swarms):
-        """
-        Find the best (minimum) cost from a batch of solutions.
+    def get_partitioning(self,solution,method='random'):
         
-        Args:
-            swarms (np.ndarray): Array of particle positions
-            
-        Returns:
-            float: Best (minimum) cost found among all solutions
-        """
-        exp_swarms = np.exp(swarms)
-        assert exp_swarms.shape[1] == len(self.software_costs)
-        
-        best_cost = 1e9
-        for swarm in exp_swarms:
-            solution = {node: swarm[self.node_to_num[node]] for node in self.graph.nodes()}
-            cur_cost = self.evaluate_partition_cost(solution)
-            if cur_cost < best_cost:
-                best_cost = cur_cost
-        
-        return best_cost
+        assert method in ['random','pso'], f"Method type {method} is not supported"
+        assert solution.shape[0] == len(self.software_costs), \
+            f"Solution dimension {solution.shape[0]} doesn't match number of nodes {len(self.software_costs)}"
+
+        if method=='pso':
+            solution = 1.0 / (1 + np.exp(-solution))
+
+        return {node: (1 if solution[self.node_to_num[node]]>0.5 else 0) for node in self.graph.nodes()}
 
     def naive_lower_bound(self):
         """

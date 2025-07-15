@@ -7,10 +7,13 @@
 *.err
 *.sh
 *.sbatch
+*.pkl
 *slurm_logs/*
 *Figures/*
 *logs/*
 *notebook*
+*partitions/*
+
 
 # Cache directories
 **__pycache__

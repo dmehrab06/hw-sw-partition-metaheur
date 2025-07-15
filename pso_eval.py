@@ -8,10 +8,30 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 import os
+import pickle
 from meta_heuristic.TaskGraph import TaskGraph
 from meta_heuristic.pso_utils import simulate_PSO, random_assignment
 
 warnings.filterwarnings('ignore')
+
+def save_partition(args,solution,method='random'):
+    
+    assert isinstance(solution, dict), "The object is not of type 'dict'"
+
+    graph_name = Path(args.graph_file).stem
+    
+    filename = (f"taskgraph-{graph_name}_"
+               f"area-{args.area_constraint:.2f}_"
+               f"hwscale-{args.hw_scale_factor:.1f}_"
+               f"hwvar-{args.hw_scale_variance:.2f}_"
+               f"comm-{args.comm_scale_factor:.2f}_"
+               f"seed-{args.seed}_"
+               f"assignment-{method}.pkl")
+
+    # Save dictionary to a pickle file
+    with open(f"{args.solution_dir}/{filename}", "wb") as file:
+        pickle.dump(solution, file)
+    
 
 def create_log_filename(args):
     """
@@ -142,6 +162,12 @@ def parse_arguments():
                        help='Random seed for reproducibility')
     parser.add_argument('--log-dir', type=str, default='logs',
                        help='Directory to store log files (default: logs)')
+    parser.add_argument('--solution-dir', type=str, default='partitions',
+                       help='Directory to store partitions (default: partitions)')
+    parser.add_argument('--pso-iter', type=int, default=100,
+                       help='Number of PSO iterations')
+    parser.add_argument('--pso-num-particle', type=int, default=500,
+                       help='Number of PSO particles')
     
     return parser.parse_args()
 
@@ -259,7 +285,7 @@ def main():
             
             best_cost, best_sol = simulate_PSO(
                 N, c1, c2, w, TG.evaluation_from_swarm,
-                n_particles=100, verbose=(args.verbose >= 2)
+                n_particles=args.pso_num_particle, iterations=args.pso_iter, verbose=(args.verbose >= 2)
             )
             
             logger.info(f"  Result: {best_cost:.4f}")
@@ -277,7 +303,7 @@ def main():
         logger.info('STARTING RANDOM ASSIGNMENT')
         logger.info('='*50)
         
-        Random_best_cost, Random_best_soln = random_assignment(N, TG.evaluation_from_swarm)
+        Random_best_cost, Random_best_soln = random_assignment(N, TG.evaluate_from_random)
         logger.info(f'Random assignment result: {Random_best_cost:.4f}')
         
         # Method 3: Greedy heuristic
@@ -291,6 +317,14 @@ def main():
         # Lower bound calculation
         very_naive_lower_bound = TG.naive_lower_bound()
         logger.info(f'Naive lower bound: {very_naive_lower_bound:.4f}')
+
+        # Calculate Assignments
+        os.makedirs(args.solution_dir,exist_ok=True)
+        pso_partition = TG.get_partitioning(PSO_best_soln,method='pso')
+        random_partition = TG.get_partitioning(Random_best_soln,method='random')
+        save_partition(args,pso_partition,method='pso')
+        save_partition(args,random_partition,method='random')
+        save_partition(args,greedy_best_soln,method='greedy')
         
         # Calculate ratios
         pso_ratio = PSO_best_cost / very_naive_lower_bound
