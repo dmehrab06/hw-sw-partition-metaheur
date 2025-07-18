@@ -1,9 +1,10 @@
 import numpy as np
 import pyswarms.backend as P
+import pyswarms as ps
 from pyswarms.backend.topology import Star
 import logging
 
-def simulate_PSO(dim, c1, c2, w, func_to_optimize, iterations=100, n_particles=500, verbose=True, reproduce=True):
+def simulate_vanilla_PSO(dim, c1, c2, w, func_to_optimize, iterations=100, n_particles=500, verbose=True, reproduce=True):
     """
     Simulate Particle Swarm Optimization to minimize a given objective function.
     
@@ -48,35 +49,63 @@ def simulate_PSO(dim, c1, c2, w, func_to_optimize, iterations=100, n_particles=5
     # Set up PSO components
     my_topology = Star()  # Star topology for global best computation
     my_options = {'c1': c1, 'c2': c2, 'w': w}
-    my_swarm = P.create_swarm(n_particles=n_particles, dimensions=dim, options=my_options)
     
+    my_swarm = ps.single.GlobalBestPSO(n_particles=n_particles, dimensions=dim, options=my_options)
+
     if verbose:
         logger.info(f'Starting PSO with {n_particles} particles for {iterations} iterations')
         logger.debug(f'PSO parameters: c1={c1}, c2={c2}, w={w}')
     
-    # Main PSO loop
-    for i in range(iterations):
-        # Step 1: Evaluate current positions and update personal bests
-        my_swarm.current_cost = func_to_optimize(my_swarm.position)
-        my_swarm.pbest_cost = func_to_optimize(my_swarm.pbest_pos)
-        my_swarm.pbest_pos, my_swarm.pbest_cost = P.compute_pbest(my_swarm)
-        
-        # Step 2: Update global best
-        if np.min(my_swarm.pbest_cost) < my_swarm.best_cost:
-            my_swarm.best_pos, my_swarm.best_cost = my_topology.compute_gbest(my_swarm)
-        
-        # Progress reporting
-        if i % 50 == 0 and verbose:
-            logger.info(f'Iteration: {i+1} | Best cost: {my_swarm.best_cost:.4f}')
-        
-        # Step 3: Update velocities and positions
-        my_swarm.velocity = my_topology.compute_velocity(my_swarm)
-        my_swarm.position = my_topology.compute_position(my_swarm)
-    
+    best_cost, best_pos = my_swarm.optimize(func_to_optimize, iters=iterations,verbose=True)
+
     if verbose:
-        logger.info(f'PSO completed. Best cost: {my_swarm.best_cost:.4f}')
+        logger.info(f'PSO completed. Best cost: {best_cost:.4f}')
     
-    return my_swarm.best_cost, my_swarm.best_pos
+    return best_cost, best_pos
+
+def simulate_BPSO(dim, c1, c2, w, func_to_optimize, iterations=100, n_particles=500, verbose=True, reproduce=True):
+    """
+    Simulate Binary Particle Swarm Optimization to minimize a given objective function.
+    
+    This function implements the Discrete PSO algorithm with personal best and global best
+    updates using a star topology for information sharing between particles.
+    
+    Args:
+        dim (int): Dimension of each particle (number of decision variables)
+        c1 (float): Cognitive component coefficient (attraction to personal best)
+        c2 (float): Social component coefficient (attraction to global best)
+        w (float): Inertia weight (momentum factor for velocity updates)
+        func_to_optimize (callable): Objective function to minimize
+            Should accept array of shape (n_particles, dim) and return array of shape (n_particles,)
+        iterations (int, optional): Number of PSO iterations to run (default: 100)
+        n_particles (int, optional): Number of particles in the swarm (default: 500)
+        verbose (bool, optional): If True, print progress information (default: True)
+        reproduce (bool, optional): If True, set random seed for reproducibility (default: True)
+    
+    Returns:
+        tuple: (best_cost, best_position) where:
+            - best_cost (float): Best objective function value found
+            - best_position (np.ndarray): Best particle position of shape (dim,)
+    """
+    #logger = logging.getLogger(__name__)
+    logger = logging.getLogger('__main__')
+    
+    # Set up PSO components
+    #my_topology = Star()  # Star topology for global best computation
+    my_options = {'c1': c1, 'c2': c2, 'w': w, 'k':4, 'p':2}
+    
+    my_swarm = ps.discrete.binary.BinaryPSO(n_particles=n_particles, dimensions=dim, options=my_options)
+
+    if verbose:
+        logger.info(f'Starting DBPSO with {n_particles} particles for {iterations} iterations')
+        logger.debug(f'DBPSO parameters: c1={c1}, c2={c2}, w={w}, k = 4, p = 2')
+    
+    best_cost, best_pos = my_swarm.optimize(func_to_optimize, iters=iterations,verbose=True)
+
+    if verbose:
+        logger.info(f'DBPSO completed. Best cost: {best_cost:.4f}')
+    
+    return best_cost, best_pos
 
 
 def random_assignment(dim, func_to_optimize, num_samples=5000, random_prob=0.5, reproduce=True):

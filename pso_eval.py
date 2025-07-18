@@ -10,7 +10,7 @@ from pathlib import Path
 import os
 import pickle
 from meta_heuristic.TaskGraph import TaskGraph
-from meta_heuristic.pso_utils import simulate_PSO, random_assignment
+from meta_heuristic.pso_utils import simulate_vanilla_PSO, simulate_BPSO, random_assignment
 
 warnings.filterwarnings('ignore')
 
@@ -27,6 +27,23 @@ def save_partition(args,solution,method='random'):
                f"comm-{args.comm_scale_factor:.2f}_"
                f"seed-{args.seed}_"
                f"assignment-{method}.pkl")
+
+    # Save dictionary to a pickle file
+    with open(f"{args.solution_dir}/{filename}", "wb") as file:
+        pickle.dump(solution, file)
+
+def save_taskgraph(args,TG):
+    
+    assert isinstance(solution, dict), "The object is not of type 'dict'"
+
+    graph_name = Path(args.graph_file).stem
+    
+    filename = (f"taskgraph-{graph_name}_"
+               f"area-{args.area_constraint:.2f}_"
+               f"hwscale-{args.hw_scale_factor:.1f}_"
+               f"hwvar-{args.hw_scale_variance:.2f}_"
+               f"comm-{args.comm_scale_factor:.2f}_"
+               f"seed-{args.seed}_input.pkl")
 
     # Save dictionary to a pickle file
     with open(f"{args.solution_dir}/{filename}", "wb") as file:
@@ -213,11 +230,14 @@ def log_results_summary(args, results, logger):
     logger.info(f"  - Random Assignment: {results['random_cost']:.4f} (ratio: {results['random_ratio']:.4f})")
     logger.info(f"  - Greedy Heuristic: {results['greedy_cost']:.4f} (ratio: {results['greedy_ratio']:.4f})")
     logger.info(f"  - PSO Optimization: {results['pso_cost']:.4f} (ratio: {results['pso_ratio']:.4f})")
+    logger.info(f"  - DPSO Optimization: {results['dpso_cost']:.4f} (ratio: {results['dpso_ratio']:.4f})")
     logger.info(f"  - Best PSO params: c1={results['pso_params'][0]}, c2={results['pso_params'][1]}, w={results['pso_params'][2]}")
+    logger.info(f"  - Best DPSO params: c1={results['dpso_params'][0]}, c2={results['dpso_params'][1]}, w={results['dpso_params'][2]}")
     
     logger.info(f"\nPerformance Ranking:")
     methods = [
         ('PSO', results['pso_cost']),
+        ('DPSO', results['dpso_cost']),
         ('Greedy', results['greedy_cost']),
         ('Random', results['random_cost'])
     ]
@@ -258,12 +278,12 @@ def main():
             k=args.hw_scale_factor,
             l=args.hw_scale_variance,
             mu=args.comm_scale_factor,
-            A_max=100
+            A_max=100,seed=args.seed
         )
         N = len(TG.graph.nodes())
         logger.info(f"Graph loaded successfully with {N} nodes")
         
-        # Method 1: Particle Swarm Optimization
+        # Method 1a and 1b: Particle Swarm Optimization, Binary Particle Swarm Optimization
         logger.info('='*50)
         logger.info('STARTING PSO OPTIMIZATION')
         logger.info('='*50)
@@ -271,6 +291,10 @@ def main():
         PSO_best_cost = 1e9
         PSO_best_soln = None
         PSO_params = None
+
+        DPSO_best_cost = 1e9
+        DPSO_best_soln = None
+        DPSO_params = None
         
         param_combinations = []
         for c1 in [0.575, 1.05, 1.525]:
@@ -283,20 +307,34 @@ def main():
         for i, (c1, c2, w) in enumerate(param_combinations, 1):
             logger.info(f"PSO run {i}/{len(param_combinations)}: c1={c1}, c2={c2}, w={w}")
             
-            best_cost, best_sol = simulate_PSO(
+            vpso_best_cost, vpso_best_sol = simulate_vanilla_PSO(
                 N, c1, c2, w, TG.evaluation_from_swarm,
                 n_particles=args.pso_num_particle, iterations=args.pso_iter, verbose=(args.verbose >= 2)
             )
             
-            logger.info(f"  Result: {best_cost:.4f}")
+            #logger.info(f"  Result: {best_cost:.4f}")
             
-            if best_cost < PSO_best_cost:
-                PSO_best_cost = best_cost
-                PSO_best_soln = best_sol
+            if vpso_best_cost < PSO_best_cost:
+                PSO_best_cost = vpso_best_cost
+                PSO_best_soln = vpso_best_sol
                 PSO_params = (c1, c2, w)
                 logger.info(f"  *** NEW BEST PSO SOLUTION ***")
+
+            dpso_best_cost, dpso_best_sol = simulate_BPSO(
+                N, c1, c2, w, TG.evaluate_from_random,
+                n_particles=args.pso_num_particle, iterations=2*args.pso_iter, verbose=(args.verbose >= 2)
+            )
+            
+            #logger.info(f"  Result: {best_cost:.4f}")
+            
+            if dpso_best_cost < DPSO_best_cost:
+                DPSO_best_cost = dpso_best_cost
+                DPSO_best_soln = dpso_best_sol
+                DPSO_params = (c1, c2, w)
+                logger.info(f"  *** NEW BEST DPSO SOLUTION ***")
         
         logger.info(f'Best PSO result: {PSO_best_cost:.4f} with params: {PSO_params}')
+        logger.info(f'Best DPSO result: {DPSO_best_cost:.4f} with params: {DPSO_params}')
         
         # Method 2: Random Assignment
         logger.info('='*50)
@@ -321,13 +359,17 @@ def main():
         # Calculate Assignments
         os.makedirs(args.solution_dir,exist_ok=True)
         pso_partition = TG.get_partitioning(PSO_best_soln,method='pso')
+        dpso_partition = TG.get_partitioning(DPSO_best_soln,method='dpso')
         random_partition = TG.get_partitioning(Random_best_soln,method='random')
+        
         save_partition(args,pso_partition,method='pso')
+        save_partition(args,dpso_partition,method='dpso')
         save_partition(args,random_partition,method='random')
         save_partition(args,greedy_best_soln,method='greedy')
         
         # Calculate ratios
         pso_ratio = PSO_best_cost / very_naive_lower_bound
+        dpso_ratio = DPSO_best_cost / very_naive_lower_bound
         random_ratio = Random_best_cost / very_naive_lower_bound
         greedy_ratio = greedy_best_cost / very_naive_lower_bound
         
@@ -338,10 +380,13 @@ def main():
             'random_cost': Random_best_cost,
             'greedy_cost': greedy_best_cost,
             'pso_cost': PSO_best_cost,
+            'dpso_cost': DPSO_best_cost,
             'pso_params': PSO_params,
+            'dpso_params': DPSO_params,
             'random_ratio': random_ratio,
             'greedy_ratio': greedy_ratio,
-            'pso_ratio': pso_ratio
+            'pso_ratio': pso_ratio,
+            'dpso_ratio': dpso_ratio
         }
         
         # Log comprehensive results summary
@@ -362,20 +407,29 @@ def main():
             'PSO_best_c1': PSO_params[0],
             'PSO_best_c2': PSO_params[1],
             'PSO_best_w': PSO_params[2],
+            'DPSO_best_c1': DPSO_params[0],
+            'DPSO_best_c2': DPSO_params[1],
+            'DPSO_best_w': DPSO_params[2],
             'Random_best': Random_best_cost,
             'Greedy_best': greedy_best_cost,
             'PSO_best': PSO_best_cost,
+            'DPSO_best':DPSO_best_cost,
             'LB_Naive': very_naive_lower_bound,
             'Random_ratio': random_ratio,
             'Greedy_ratio': greedy_ratio,
-            'PSO_ratio': pso_ratio
+            'PSO_ratio': pso_ratio,
+            'DPSO_ratio': dpso_ratio,
+            'random_makespan': TG.get_makespan(random_partition)['makespan'],
+            'pso_makespan': TG.get_makespan(pso_partition)['makespan'],
+            'dpso_makespan': TG.get_makespan(dpso_partition)['makespan'],
+            'greedy_makespan': TG.get_makespan(greedy_best_soln)['makespan']
         }]
         
         result_df = pd.DataFrame.from_dict(result_summary_data)
         
         # Create outputs directory if it doesn't exist
         os.makedirs('outputs', exist_ok=True)
-        file_path = 'outputs/result_summary_soda_graphs.csv'
+        file_path = 'outputs/result_summary_soda_graphs_with_makespan.csv'
         
         # Write header if file doesn't exist
         write_header = not os.path.exists(file_path)

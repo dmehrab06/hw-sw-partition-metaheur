@@ -13,8 +13,10 @@
 *logs/*
 *notebook*
 *partitions/*
-
+*clr*
 
 # Cache directories
 **__pycache__
 **.ipynb_checkpoints
+
+!meta_heuristic_playground.ipynb
