@@ -3,3 +3,5 @@ networkx
 pandas
 matplotlib
 pyswarms
+omegaconf
+pypop7

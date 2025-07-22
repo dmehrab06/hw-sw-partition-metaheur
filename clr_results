@@ -1,0 +1,4 @@
+rm slurm_logs/*
+#rm outputs/result_summary_soda_graphs.csv
+rm logs/*
+rm partitions/*

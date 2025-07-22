@@ -1,7 +1,20 @@
 import networkx as nx
 import random
 import numpy as np
-import logging
+import os, sys
+
+if __name__ == "__main__":
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sys.path.append(parent_dir)
+
+from utils.logging_utils import LogManager
+
+# Set up logging
+if __name__ == "__main__":
+    LogManager.initialize("logs/task_graph.log")
+
+logger = LogManager.get_logger(__name__)
 
 class TaskGraph:
     """
@@ -43,10 +56,9 @@ class TaskGraph:
         self.total_area = 0.0
         
         # Use the same logger as the main module
-        self.logger = logging.getLogger('__main__')
-        self.logger.info("TaskGraph initialized with area constraint: %f", area_constraint)
+        logger.info("TaskGraph initialized with area constraint: %f", area_constraint)
 
-    def load_graph_from_pydot(self, pydot_file, k=1.5, l=0.2, mu=0.5, A_max=100, seed = 42):
+    def load_graph_from_pydot(self, pydot_file, k=1.5, l=0.2, mu=0.5, A_max=100, seed=42, reproduce=True):
         """
         Load a graph from a PyDot file and assign random cost attributes.
         
@@ -54,7 +66,7 @@ class TaskGraph:
         specific distributions to simulate realistic hardware-software partitioning scenarios.
         
         Args:
-            pydot_file (str): Name of the PyDot file to load from test-data directory
+            pydot_file (str): Path to the PyDot file to load
             k (float): Hardware cost scale factor relative to software costs (default: 1.5)
             l (float): Hardware cost variance factor (default: 0.2)
             mu (float): Communication cost scale factor (default: 0.5)
@@ -70,12 +82,12 @@ class TaskGraph:
             - Communication costs are uniformly distributed between 0 and 2*mu*s_max
         """
         # Load graph structure
-        graph_path = f'/people/mehr668/encode_scripts/hw_sw_partition_min_cut/{pydot_file}'
-        self.graph = nx.DiGraph(nx.nx_pydot.read_dot(graph_path))
-        self.logger.info(f"Loaded graph from {pydot_file} with {len(self.graph.nodes())} nodes")
+        self.graph = nx.DiGraph(nx.nx_pydot.read_dot(pydot_file))
+        logger.info(f"Loaded graph from {pydot_file} with {len(self.graph.nodes())} nodes")
 
-        random.seed(seed)
-        np.random.seed(seed)
+        if reproduce:
+            np.random.seed(seed)
+            random.seed(seed)
         
         # Assign software costs and hardware areas
         self.software_costs = {node: random.uniform(1, 100) for node in self.graph.nodes()}
@@ -105,7 +117,7 @@ class TaskGraph:
             comm_cost = random.uniform(0, 2 * mu * s_max)
             self.communication_costs[(u, v)] = comm_cost
             
-        self.logger.info(f"Graph initialized with total area: {self.total_area}")
+        logger.info(f"Graph initialized with total area: {self.total_area}")
 
     def evaluate_partition_cost(self, solution):
         """
@@ -147,7 +159,7 @@ class TaskGraph:
         else:
             return cost
 
-    def evaluation_from_swarm(self, swarms, type='vanilla'):
+    def optimize_swarm(self, swarms):
         """
         Evaluate costs for a batch of particle swarm solutions.
         
@@ -165,15 +177,19 @@ class TaskGraph:
         Note:
             Uses sigmoid transformation: exp_swarms = 1.0/(1+exp(-swarms))
         """
-        if type=='vanilla':
-            swarms = 1.0 / (1 + np.exp(-swarms))
+        exp_swarms = 1.0 / (1 + np.exp(-swarms))
         
-        assert swarms.shape[1] == len(self.software_costs), \
-            f"Swarm dimension {swarms.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+        assert exp_swarms.shape[1] == len(self.software_costs), \
+            f"Swarm dimension {exp_swarms.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
         
-        return self.evaluate_from_random(swarms)
-
-    def evaluate_from_singlepoint(self, x, type='random'):
+        all_costs = []
+        for swarm in exp_swarms:
+            solution = {node: swarm[self.node_to_num[node]] for node in self.graph.nodes()}
+            all_costs.append(self.evaluate_partition_cost(solution))
+        
+        return np.array(all_costs)
+    
+    def optimize_single_point(self, x, type='random'):
         """
         Evaluate costs for a batch of particle swarm solutions.
         
@@ -191,7 +207,7 @@ class TaskGraph:
         Note:
             Uses sigmoid transformation: exp_swarms = 1.0/(1+exp(-swarms))
         """
-        if type=='vanilla':
+        if type=='vanilla' or type=='pso':
             swarms = 1.0 / (1 + np.exp(-x))
         
         assert x.shape[0] == len(self.software_costs), \
@@ -201,7 +217,7 @@ class TaskGraph:
         
         return self.evaluate_partition_cost(solution)
     
-    def evaluate_from_random(self,assignment_candidates):
+    def optimize_random(self,assignment_candidates):
         """
         Evaluate costs for a batch of assignment probabilities.
         
@@ -223,9 +239,76 @@ class TaskGraph:
         
         return np.array(all_costs)
 
-    def get_partitioning(self,solution,method='random'):
+    def find_best_cost(self, swarms):
+        """
+        Find the best (minimum) cost from a batch of solutions.
         
-        assert method in ['random','pso','dpso'], f"Method type {method} is not supported"
+        Args:
+            swarms (np.ndarray): Array of particle positions
+            
+        Returns:
+            float: Best (minimum) cost found among all solutions
+        """
+        exp_swarms = np.exp(swarms)
+        assert exp_swarms.shape[1] == len(self.software_costs)
+        
+        best_cost = 1e9
+        for swarm in exp_swarms:
+            solution = {node: swarm[self.node_to_num[node]] for node in self.graph.nodes()}
+            cur_cost = self.evaluate_partition_cost(solution)
+            if cur_cost < best_cost:
+                best_cost = cur_cost
+        
+        return best_cost
+
+    def greedy_heur(self):
+        """
+        Implement a greedy heuristic based on gain per area ratio.
+        
+        This heuristic selects nodes for hardware implementation based on the
+        gain per unit area, similar to a fractional knapsack approach.
+        
+        Returns:
+            tuple: (best_cost, assignment) where:
+                  - best_cost (float): Cost of the greedy solution
+                  - assignment (dict): Node assignments (0: software, 1: hardware)
+                  
+        Algorithm:
+            1. Calculate gain per area for each node: (software_cost - hardware_cost) / area
+            2. Sort nodes by gain per area in descending order
+            3. Assign nodes to hardware until area constraint is reached
+            4. Assign remaining nodes to software
+        """
+        gain_list = []
+        
+        # Calculate gain per area for each node
+        for node in self.hardware_costs:
+            gain_per_area = (self.software_costs[node] - self.hardware_costs[node]) / self.hardware_area[node]
+            gain_list.append((gain_per_area, node))
+        
+        # Sort by gain per area (descending)
+        gain_list.sort(reverse=True)
+        
+        # Initialize all nodes to software
+        assignment = {node: 0 for node in self.hardware_costs}
+        area_used = 0
+        
+        # Greedily assign nodes to hardware
+        for gain_per_area, node in gain_list:
+            if (area_used + self.hardware_area[node]) / self.total_area > self.area_constraint:
+                break
+            assignment[node] = 1
+            area_used += self.hardware_area[node]
+        
+        best_cost_heur = self.evaluate_partition_cost(assignment)
+        logger.info(f"Greedy heuristic found solution with cost: {best_cost_heur}")
+        return best_cost_heur, assignment
+
+    def get_partitioning(self,solution,method='random'):
+        if method=='greedy':
+            return solution #already in proper format
+        
+        #assert method in ['random','pso','dpso','gl25'], f"Method type {method} is not supported"
         assert solution.shape[0] == len(self.software_costs), \
             f"Solution dimension {solution.shape[0]} doesn't match number of nodes {len(self.software_costs)}"
 
@@ -234,7 +317,7 @@ class TaskGraph:
 
         return {node: (1 if solution[self.node_to_num[node]]>0.5 else 0) for node in self.graph.nodes()}
 
-    def get_makespan(self, partition_assignment, verbose = False):
+    def evaluate_makespan(self, partition_assignment, verbose = False):
         """
         Compute overall execution time (estimated scheduling) for a DAG with given hardware/software partitions
         Adopted from Rounak's function utils/scheduler_utils.py
@@ -495,67 +578,3 @@ class TaskGraph:
                     print(f"  ({u} -> {v}): {delay:.2f}")
         
         return result
-    
-    def naive_lower_bound(self):
-        """
-        Calculate a naive lower bound for the partitioning problem.
-        
-        This bound assumes no communication costs and selects the minimum
-        execution cost (hardware or software) for each node, ignoring area constraints.
-        
-        Returns:
-            float: Naive lower bound on the optimal solution cost
-            
-        Note:
-            This is an optimistic bound that may not be achievable due to
-            area constraints and communication costs.
-        """
-        total_time = 0.0
-        for node in self.graph.nodes():
-            total_time += min(self.hardware_costs[node], self.software_costs[node])
-        
-        self.logger.debug(f"Calculated naive lower bound: {total_time}")
-        return total_time
-
-    def greedy_heur(self):
-        """
-        Implement a greedy heuristic based on gain per area ratio.
-        
-        This heuristic selects nodes for hardware implementation based on the
-        gain per unit area, similar to a fractional knapsack approach.
-        
-        Returns:
-            tuple: (best_cost, assignment) where:
-                  - best_cost (float): Cost of the greedy solution
-                  - assignment (dict): Node assignments (0: software, 1: hardware)
-                  
-        Algorithm:
-            1. Calculate gain per area for each node: (software_cost - hardware_cost) / area
-            2. Sort nodes by gain per area in descending order
-            3. Assign nodes to hardware until area constraint is reached
-            4. Assign remaining nodes to software
-        """
-        gain_list = []
-        
-        # Calculate gain per area for each node
-        for node in self.hardware_costs:
-            gain_per_area = (self.software_costs[node] - self.hardware_costs[node]) / self.hardware_area[node]
-            gain_list.append((gain_per_area, node))
-        
-        # Sort by gain per area (descending)
-        gain_list.sort(reverse=True)
-        
-        # Initialize all nodes to software
-        assignment = {node: 0 for node in self.hardware_costs}
-        area_used = 0
-        
-        # Greedily assign nodes to hardware
-        for gain_per_area, node in gain_list:
-            if (area_used + self.hardware_area[node]) / self.total_area > self.area_constraint:
-                break
-            assignment[node] = 1
-            area_used += self.hardware_area[node]
-        
-        best_cost_heur = self.evaluate_partition_cost(assignment)
-        self.logger.info(f"Greedy heuristic found solution with cost: {best_cost_heur}")
-        return best_cost_heur, assignment

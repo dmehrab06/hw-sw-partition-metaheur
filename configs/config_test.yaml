@@ -1,0 +1,41 @@
+# Graph and problem configuration
+graph-file: "/people/mehr668/encode_scripts/hw_sw_partition_min_cut/soda-benchmark-graphs/pytorch-graphs/squeeze_net_tosa.dot"
+area-constraint: 0.5
+hw-scale-factor: 1.5
+hw-scale-variance: 0.2
+comm-scale-factor: 0.5
+seed: 42
+solution-dir: "partitions"
+
+# Random assignment trials
+random:
+    num_samples: 1000
+    p: 0.5
+
+# PSO Configuration
+pso:
+  c1: 1.05
+  c2: 0.5
+  w: 1.525
+  n_particles: 100
+  iterations: 1000
+  verbose: True
+
+# Discrete Binary PSO Configuration
+dbpso:
+  c1: 1.05
+  c2: 0.5
+  w: 1.525
+  k: 4
+  p: 2
+  n_particles: 100
+  iterations: 1000
+
+# Comprehensive Learning PSO Configuration
+clpso:
+  c: 1
+
+# Genetic GL25 configuration
+gl25:
+  iter: 20000
+  n_pop: 500

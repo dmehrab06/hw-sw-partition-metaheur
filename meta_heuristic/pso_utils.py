@@ -1,226 +1,160 @@
 import numpy as np
-import pyswarms.backend as P
 import pyswarms as ps
+import pyswarms.backend as P
 from pyswarms.backend.topology import Star
+from pypop7.optimizers.pso.clpso import CLPSO
+from pypop7.optimizers.pso.ccpso2 import CCPSO2
+import os, sys
 import logging
 
-def simulate_vanilla_PSO(dim, c1, c2, w, func_to_optimize, iterations=100, n_particles=500, verbose=True, reproduce=True):
+if __name__ == "__main__":
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sys.path.append(parent_dir)
+
+from utils.logging_utils import LogManager
+
+# Set up logging
+if __name__ == "__main__":
+    LogManager.initialize("logs/pso_utils.log")
+
+logger = LogManager.get_logger(__name__)
+
+def simulate_PSO(dim, func_to_optimize, config):
     """
-    Simulate Particle Swarm Optimization to minimize a given objective function.
-    
-    This function implements the standard PSO algorithm with personal best and global best
-    updates using a star topology for information sharing between particles.
+    Simulate Particle Swarm Optimization using configuration.
     
     Args:
-        dim (int): Dimension of each particle (number of decision variables)
-        c1 (float): Cognitive component coefficient (attraction to personal best)
-        c2 (float): Social component coefficient (attraction to global best)
-        w (float): Inertia weight (momentum factor for velocity updates)
-        func_to_optimize (callable): Objective function to minimize
-            Should accept array of shape (n_particles, dim) and return array of shape (n_particles,)
-        iterations (int, optional): Number of PSO iterations to run (default: 100)
-        n_particles (int, optional): Number of particles in the swarm (default: 500)
-        verbose (bool, optional): If True, print progress information (default: True)
-        reproduce (bool, optional): If True, set random seed for reproducibility (default: True)
+        dim: Problem dimension
+        func_to_optimize: Objective function
+        config: Configuration object containing PSO parameters
+        verbose: Whether to log verbose output
     
     Returns:
-        tuple: (best_cost, best_position) where:
-            - best_cost (float): Best objective function value found
-            - best_position (np.ndarray): Best particle position of shape (dim,)
-    
-    Algorithm Details:
-        1. Initialize swarm with random positions and velocities
-        2. For each iteration:
-           a. Evaluate objective function for all particles
-           b. Update personal bests for each particle
-           c. Update global best across all particles
-           d. Update velocities using PSO velocity equation
-           e. Update positions by adding velocities
-        3. Return the best solution found
-    
-    Note:
-        The PSO velocity update equation is:
-        v_new = w * v_old + c1 * r1 * (pbest - position) + c2 * r2 * (gbest - position)
-        where r1 and r2 are random numbers between 0 and 1.
+        tuple: (best_cost, best_position)
     """
-    #logger = logging.getLogger(__name__)
     logger = logging.getLogger('__main__')
     
     # Set up PSO components
-    my_topology = Star()  # Star topology for global best computation
-    my_options = {'c1': c1, 'c2': c2, 'w': w}
+    my_options = {
+        'c1': config['pso']['c1'], 
+        'c2': config['pso']['c2'], 
+        'w': config['pso']['w']
+    }
     
-    my_swarm = ps.single.GlobalBestPSO(n_particles=n_particles, dimensions=dim, options=my_options)
+    my_swarm = ps.single.GlobalBestPSO(
+        n_particles=config['pso']['n_particles'], 
+        dimensions=dim, 
+        options=my_options
+    )
 
-    if verbose:
-        logger.info(f'Starting PSO with {n_particles} particles for {iterations} iterations')
-        logger.debug(f'PSO parameters: c1={c1}, c2={c2}, w={w}')
+    if config["pso"]["verbose"]:
+        logger.info(f'Starting PSO with {config["pso"]["n_particles"]} particles for {config["pso"]["iterations"]} iterations')
+        logger.debug(f'PSO parameters: c1={config["pso"]["c1"]}, c2={config["pso"]["c2"]}, w={config["pso"]["w"]}')
     
-    best_cost, best_pos = my_swarm.optimize(func_to_optimize, iters=iterations,verbose=True)
+    best_cost, best_pos = my_swarm.optimize(
+        func_to_optimize, 
+        iters=config['pso']['iterations'], 
+        verbose=config['pso']['verbose']
+    )
 
-    if verbose:
+    if config["pso"]["verbose"]:
         logger.info(f'PSO completed. Best cost: {best_cost:.4f}')
     
     return best_cost, best_pos
 
-def simulate_BPSO(dim, c1, c2, w, func_to_optimize, iterations=100, n_particles=500, verbose=True, reproduce=True):
+def simulate_DBPSO(dim, func_to_optimize, config):
     """
-    Simulate Binary Particle Swarm Optimization to minimize a given objective function.
-    
-    This function implements the Discrete PSO algorithm with personal best and global best
-    updates using a star topology for information sharing between particles.
+    Simulate Discrete Binary PSO using configuration.
     
     Args:
-        dim (int): Dimension of each particle (number of decision variables)
-        c1 (float): Cognitive component coefficient (attraction to personal best)
-        c2 (float): Social component coefficient (attraction to global best)
-        w (float): Inertia weight (momentum factor for velocity updates)
-        func_to_optimize (callable): Objective function to minimize
-            Should accept array of shape (n_particles, dim) and return array of shape (n_particles,)
-        iterations (int, optional): Number of PSO iterations to run (default: 100)
-        n_particles (int, optional): Number of particles in the swarm (default: 500)
-        verbose (bool, optional): If True, print progress information (default: True)
-        reproduce (bool, optional): If True, set random seed for reproducibility (default: True)
+        dim: Problem dimension
+        func_to_optimize: Objective function
+        config: Configuration object containing DBPSO parameters
+        verbose: Whether to log verbose output
     
     Returns:
-        tuple: (best_cost, best_position) where:
-            - best_cost (float): Best objective function value found
-            - best_position (np.ndarray): Best particle position of shape (dim,)
+        tuple: (best_cost, best_position)
     """
-    #logger = logging.getLogger(__name__)
     logger = logging.getLogger('__main__')
     
     # Set up PSO components
-    #my_topology = Star()  # Star topology for global best computation
-    my_options = {'c1': c1, 'c2': c2, 'w': w, 'k':4, 'p':2}
+    my_options = {
+        'c1': config['dbpso']['c1'], 
+        'c2': config['dbpso']['c2'], 
+        'w': config['dbpso']['w'], 
+        'k': config['dbpso']['k'], 
+        'p': config['dbpso']['p']
+    }
     
-    my_swarm = ps.discrete.binary.BinaryPSO(n_particles=n_particles, dimensions=dim, options=my_options)
+    my_swarm = ps.discrete.BinaryPSO(
+        n_particles=config['dbpso']['n_particles'], 
+        dimensions=dim, 
+        options=my_options
+    )
 
-    if verbose:
-        logger.info(f'Starting DBPSO with {n_particles} particles for {iterations} iterations')
-        logger.debug(f'DBPSO parameters: c1={c1}, c2={c2}, w={w}, k = 4, p = 2')
+    if config['dbpso']['verbose']:
+        logger.info(f'Starting DBPSO with {config["dbpso"]["n_particles"]} particles for {config["dbpso"]["iterations"]} iterations')
+        logger.debug(f'DBPSO parameters: c1={my_options["c1"]}, c2={my_options["c2"]}, w={my_options["w"]}, k = {my_options["k"]}, p = {my_options["p"]}')
     
-    best_cost, best_pos = my_swarm.optimize(func_to_optimize, iters=iterations,verbose=True)
+    best_cost, best_pos = my_swarm.optimize(
+        func_to_optimize, 
+        iters=config['dbpso']['iterations'], 
+        verbose=config['dbpso']['verbose']
+    )
 
-    if verbose:
+    if config['dbpso']['verbose']:
         logger.info(f'DBPSO completed. Best cost: {best_cost:.4f}')
     
     return best_cost, best_pos
 
+def simulate_CLPSO(dim, func_to_optimize, config):
+    """
+    Simulate Comprehensive Learning PSO using configuration.
+    """
+    logger = logging.getLogger('__main__')
+    
+    problem = {
+        'fitness_function': func_to_optimize, 
+        'ndim_problem': dim, 
+        'lower_boundary': 0.0 * np.ones((dim,)), 
+        'upper_boundary': 1.0 * np.ones((dim,))
+    }
+    
+    options = {
+        'max_function_evaluations': config['clpso']['max_evaluations'], 
+        'seed_rng': config.get('seed', 2022),
+        'n_individuals': config['clpso']['n_individuals'],
+        'c': config['clpso']['c']
+    }
+    
+    model = CLPSO(problem, options)
+    results = model.optimize()
 
-def random_assignment(dim, func_to_optimize, num_samples=5000, random_prob=0.5, reproduce=True):
-    """
-    Generate random binary assignments and find the best solution.
-    
-    This function serves as a baseline comparison method that generates random
-    binary solutions using Bernoulli distribution and evaluates them using
-    the provided objective function.
-    
-    Args:
-        dim (int): Dimension of each solution vector (number of decision variables)
-        func_to_optimize (callable): Objective function to minimize
-            Should accept array of shape (num_samples, dim) and return array of shape (num_samples,)
-        num_samples (int, optional): Number of random solutions to generate (default: 5000)
-        random_prob (float, optional): Probability parameter for Bernoulli distribution (default: 0.5)
-            Controls the bias towards 0 or 1 in random assignments
-        reproduce (bool, optional): If True, set random seed for reproducibility (default: True)
-    
-    Returns:
-        tuple: (best_cost, best_solution) where:
-            - best_cost (float): Best objective function value found
-            - best_solution (np.ndarray): Best solution vector of shape (dim,)
-    
-    Algorithm:
-        1. Generate num_samples random binary vectors using Bernoulli(random_prob)
-        2. Evaluate all solutions using the objective function
-        3. Return the solution with minimum cost
-    
-    Note:
-        This method provides a simple baseline for comparison with more sophisticated
-        optimization algorithms. The random_prob parameter can be tuned based on
-        problem characteristics (e.g., expected ratio of hardware vs software assignments).
-    """
-    logger = logging.getLogger(__name__)
-    
-    # Generate random binary solutions
-    all_samples = []
-    for i in range(num_samples):
-        bernoulli_samples = np.random.binomial(n=1, p=random_prob, size=dim)
-        all_samples.append(bernoulli_samples)
-    
-    # Convert to numpy array and evaluate all solutions
-    sample_array = np.array(all_samples)
-    all_costs = func_to_optimize(sample_array)
-    
-    # Find best solution
-    best_cost = np.min(all_costs)
-    min_index = np.argmin(all_costs)
-    best_solution = all_samples[min_index]
-    
-    logger.info(f'Random assignment completed. Best cost: {best_cost:.4f} from {num_samples} samples')
-    
-    return best_cost, best_solution
+    return results['best_so_far_y'], results['best_so_far_x']
 
+def simulate_CCPSO(dim, func_to_optimize, config):
+    """
+    Simulate Cooperative Coevolutionary PSO using configuration.
+    """
+    logger = logging.getLogger('__main__')
+    
+    problem = {
+        'fitness_function': func_to_optimize, 
+        'ndim_problem': dim, 
+        'lower_boundary': 0.0 * np.ones((dim,)), 
+        'upper_boundary': 1.0 * np.ones((dim,))
+    }
+    
+    options = {
+        'max_function_evaluations': config['ccpso']['max_evaluations'], 
+        'seed_rng': config.get('seed', 2022),
+        'n_individuals': max(500, config['ccpso']['n_individuals']),
+        'c': config['ccpso']['c'],
+        'group_sizes': config['ccpso']['group_sizes']
+    }
+    
+    model = CCPSO2(problem, options)
+    results = model.optimize()
 
-# Benchmark functions for testing optimization algorithms
-def banana(swarms):
-    """
-    Rosenbrock's banana function (also known as Rosenbrock function).
-    
-    This is a classic optimization benchmark function with a global minimum
-    at (1, 1) with function value 0. The function has a narrow curved valley
-    that makes it challenging for optimization algorithms.
-    
-    Args:
-        swarms (np.ndarray): Array of shape (n_particles, 2) containing 2D points
-    
-    Returns:
-        np.ndarray: Function values of shape (n_particles,)
-    
-    Mathematical form:
-        f(x, y) = (1-x)² + 100(y-x²)²
-    
-    Properties:
-        - Global minimum: f(1, 1) = 0
-        - Search domain: typically [-5, 5] × [-5, 5]
-        - Characteristics: Non-convex, narrow curved valley
-    """
-    assert swarms.shape[1] == 2, f"Banana function requires 2D input, got {swarms.shape[1]}D"
-    
-    x = swarms[:, 0]
-    y = swarms[:, 1]
-    
-    return (1 - x)**2 + 100 * (y - x*x)**2
-
-
-def beale(swarms):
-    """
-    Beale's function - a multimodal optimization benchmark.
-    
-    This function has a global minimum and is commonly used to test
-    optimization algorithms' ability to find global optima.
-    
-    Args:
-        swarms (np.ndarray): Array of shape (n_particles, 2) containing 2D points
-    
-    Returns:
-        np.ndarray: Function values of shape (n_particles,)
-    
-    Mathematical form:
-        f(x, y) = (1.5 - x + xy)² + (2.25 - x + xy²)² + (2.625 - x + xy³)²
-    
-    Properties:
-        - Global minimum: f(3, 0.5) = 0
-        - Search domain: typically [-4.5, 4.5] × [-4.5, 4.5]
-        - Characteristics: Multimodal with several local minima
-    """
-    assert swarms.shape[1] == 2, f"Beale function requires 2D input, got {swarms.shape[1]}D"
-    
-    x = swarms[:, 0]
-    y = swarms[:, 1]
-    
-    term1 = (1.5 - x + x*y)**2
-    term2 = (2.25 - x + x*y*y)**2
-    term3 = (2.625 - x + x*y*y*y)**2
-    
-    return term1 + term2 + term3
+    return results['best_so_far_y'], results['best_so_far_x']
