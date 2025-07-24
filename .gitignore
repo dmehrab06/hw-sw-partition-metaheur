@@ -2,15 +2,14 @@
 *.ipynb
 *.log
 *.png
-*.pkl
 *.out
 *.err
 *.sh
 *.sbatch
-*.pkl
 *slurm_logs/*
 *Figures/*
 *logs/*
+data/*
 *notebook*
 partitions/*
 *clr*
@@ -25,3 +24,4 @@ configs/*.yaml
 !configs/config_arato_default.yaml
 !configs/config_mkspan_default.yaml
 !*partitions/*.pkl
+!*inputs/*.pkl
