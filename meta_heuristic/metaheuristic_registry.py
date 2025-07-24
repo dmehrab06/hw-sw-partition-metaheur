@@ -2,6 +2,7 @@ from typing import Dict, Callable, Any, List
 import pandas as pd
 from dataclasses import dataclass
 from utils.logging_utils import LogManager
+import time
 
 # Set up logging
 if __name__ == "__main__":
@@ -18,6 +19,7 @@ class MethodResult:
     makespan: float
     partition_cost: float
     partition_assignment: Dict[str, Any]
+    optimization_time: float
     additional_metrics: Dict[str, Any] = None
 
 class MethodRegistry:
@@ -51,9 +53,11 @@ class MethodRegistry:
             best_cost, partition = task_graph.get_naive_solution_makespan()
             
         logger.info(f"naive assignment has a opt_cost of {best_cost}")
-        
+
+        start = time.time()
         # Run the optimization method
         opt_cost, opt_solution = func(dim, func_to_optimize, config, **kwargs)
+        opt_time = time.time()-start
 
         if opt_cost<best_cost:
             # Create partition from solution in the form of numpy array
@@ -71,7 +75,8 @@ class MethodRegistry:
             func_as_black_box = getattr(func_to_optimize, '__name__', 'Unknown'),
             makespan = makespan,
             partition_cost = partition_cost,
-            partition_assignment = partition
+            partition_assignment = partition,
+            optimization_time = opt_time
             ## later add time here
         )
         
@@ -79,7 +84,7 @@ class MethodRegistry:
         return result
     
     def add_manual_result(self, name: str, best_cost: float, best_solution: Any, 
-                         task_graph=None) -> MethodResult:
+                         task_graph=None, timing_info = 0.0) -> MethodResult:
         """Add a result from a method that doesn't follow the standard interface (like greedy)"""
         partition = task_graph.get_partitioning(best_solution, method=name)
         makespan = task_graph.evaluate_makespan(partition)['makespan']
@@ -91,7 +96,8 @@ class MethodRegistry:
             func_as_black_box = 'None',
             makespan = makespan,
             partition_cost = partition_cost,
-            partition_assignment = partition
+            partition_assignment = partition,
+            optimization_time = timing_info
             ## add timing info later maybe
         )
         
@@ -110,6 +116,7 @@ class MethodRegistry:
             results_dict[f'{name}_partition_cost'] = result.partition_cost
             results_dict[f'{name}_bb'] = result.func_as_black_box
             results_dict[f'{name}_makespan'] = result.makespan
+            results_dict[f'{name}_time'] = result.optimization_time
             
             if result.additional_metrics:
                 for metric in results.additional_metrics:
