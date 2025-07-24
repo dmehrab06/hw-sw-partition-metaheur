@@ -32,7 +32,7 @@ class MethodRegistry:
         self.methods[name] = {'func': func, 'kwargs': kwargs}
     
     def run_method(self, name: str, dim: int, func_to_optimize: Callable, 
-                   config: dict, task_graph=None) -> MethodResult:
+                   config: dict, task_graph=None, naive_opt_func_name='partition') -> MethodResult:
         """Run a registered method and store results"""
         if name not in self.methods:
             raise ValueError(f"Method {name} not registered")
@@ -45,7 +45,11 @@ class MethodRegistry:
         kwargs = method_info['kwargs']
 
         # get a naive solution first
-        best_cost, partition = task_graph.get_naive_solution()
+        if naive_opt_func_name=='partition':
+            best_cost, partition = task_graph.get_naive_solution()
+        else:
+            best_cost, partition = task_graph.get_naive_solution_makespan()
+            
         logger.info(f"naive assignment has a opt_cost of {best_cost}")
         
         # Run the optimization method

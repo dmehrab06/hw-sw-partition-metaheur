@@ -188,6 +188,36 @@ class TaskGraph:
             all_costs.append(self.evaluate_partition_cost(solution))
         
         return np.array(all_costs)
+
+    def optimize_swarm_makespan(self, swarms):
+        """
+        Evaluate costs for a batch of particle swarm solutions based on makespan
+        
+        This method is designed to work with particle swarm optimization algorithms
+        that provide solutions as matrices of continuous values.
+        
+        Args:
+            swarms (np.ndarray): Array of shape (n_particles, n_nodes) containing
+                               particle positions that will be converted to probabilities
+                               using sigmoid function
+        
+        Returns:
+            np.ndarray: Array of costs for each particle solution
+            
+        Note:
+            Uses sigmoid transformation: exp_swarms = 1.0/(1+exp(-swarms))
+        """
+        exp_swarms = 1.0 / (1 + np.exp(-swarms))
+        
+        assert exp_swarms.shape[1] == len(self.software_costs), \
+            f"Swarm dimension {exp_swarms.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+        
+        all_costs = []
+        for swarm in exp_swarms:
+            solution = {node: (0 if swarm[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
+            all_costs.append(self.evaluate_makespan(solution)['makespan'])
+        
+        return np.array(all_costs)
     
     def optimize_single_point(self, x, type='random'):
         """
@@ -216,6 +246,34 @@ class TaskGraph:
         solution = {node: x[self.node_to_num[node]] for node in self.graph.nodes()}
         
         return self.evaluate_partition_cost(solution)
+
+    def optimize_single_point_makespan(self, x, type='random'):
+        """
+        Evaluate costs for a batch of particle swarm solutions based on makespan calculation
+        
+        This method is designed to work with particle swarm optimization algorithms
+        that provide solutions as matrices of continuous values.
+        
+        Args:
+            swarms (np.ndarray): Array of shape (n_particles, n_nodes) containing
+                               particle positions that will be converted to probabilities
+                               using sigmoid function
+        
+        Returns:
+            np.ndarray: Array of costs for each particle solution
+            
+        Note:
+            Uses sigmoid transformation: exp_swarms = 1.0/(1+exp(-swarms))
+        """
+        if type=='vanilla' or type=='pso':
+            swarms = 1.0 / (1 + np.exp(-x))
+        
+        assert x.shape[0] == len(self.software_costs), \
+            f"Swarm dimension {x.shape[0]} doesn't match number of nodes {len(self.software_costs)}"
+
+        solution = {node: (0 if x[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
+        
+        return self.evaluate_makespan(solution)['makespan']
     
     def optimize_random(self,assignment_candidates):
         """
@@ -236,6 +294,28 @@ class TaskGraph:
         for assignment in assignment_candidates:
             solution = {node: assignment[self.node_to_num[node]] for node in self.graph.nodes()}
             all_costs.append(self.evaluate_partition_cost(solution))
+        
+        return np.array(all_costs)
+
+    def optimize_random_makespan(self,assignment_candidates):
+        """
+        Evaluate costs for a batch of assignment probabilities based on makespan calculation.
+        
+        This method is designed to work with assignment probabilities directly, should NOT be DIRECTLY called with PSO.
+        
+        Args:
+            assignment_candidates (np.ndarray): Array of shape (n_candidate, n_nodes) containing assignment probabilities
+        
+        Returns:
+            np.ndarray: Array of costs for each particle solution
+        """
+        assert assignment_candidates.shape[1] == len(self.software_costs), \
+            f"Swarm dimension {assignment_candidates.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+        
+        all_costs = []
+        for assignment in assignment_candidates:
+            solution = {node: (0 if assignment[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
+            all_costs.append(self.evaluate_makespan(solution)['makespan'])
         
         return np.array(all_costs)
 
@@ -320,6 +400,10 @@ class TaskGraph:
     def get_naive_solution(self):
          partition =  {node: 0 for node in self.graph.nodes()}
          return self.evaluate_partition_cost(partition),partition
+
+    def get_naive_solution_makespan(self):
+         partition =  {node: 0 for node in self.graph.nodes()}
+         return self.evaluate_makespan(partition)['makespan'],partition
 
     def evaluate_makespan(self, partition_assignment, verbose = False):
         """
@@ -544,6 +628,17 @@ class TaskGraph:
                 comm_delay = edge_comm_costs[(u, v)]
                 total_comm_delay += comm_delay
                 active_comm_edges.append((u, v, comm_delay))
+
+        area_used = 0
+
+        for node in hw_nodes:
+            area_used = area_used + self.hardware_area[node]
+        
+        if area_used / self.total_area > self.area_constraint:
+            makespan = self.violation_cost
+            hw_makespan = self.violation_cost
+            sw_makespan = self.violation_cost
+            total_comm_delay = self.violation_cost
         
         result = {
             'makespan': makespan,

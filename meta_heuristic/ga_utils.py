@@ -24,7 +24,8 @@ def simulate_GL25(dim, func_to_optimize,config):
     problem = {'fitness_function': func_to_optimize, 'ndim_problem': dim, 
                'lower_boundary': 0.0 * np.ones((dim,)), 'upper_boundary': 1.0 * np.ones((dim,))}
     
-    options = {'max_function_evaluations': config['gl25']['iter'], 'seed_rng': 2022,'n_individuals':config['gl25']['n_pop']}
+    options = {'max_function_evaluations': config['gl25']['iter'], 'seed_rng': 2022,
+               'n_individuals':config['gl25']['n_pop'], 'verbose': config['gl25']['verbose']}
     
     model = GL25(problem, options)  # initialize the optimizer class
     results = model.optimize()  # run the optimization process

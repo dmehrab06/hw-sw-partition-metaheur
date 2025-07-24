@@ -19,7 +19,30 @@ from meta_heuristic import (
     simulate_DBPSO, simulate_CLPSO, simulate_CCPSO,
     simulate_SHADE, simulate_JADE, simulate_ESA
 )
+
 from meta_heuristic.metaheuristic_registry import MethodRegistry
+
+def save_taskgraph(config, task_graph):
+    """Save TaskGraph instance to pickle file"""
+    graph_name = Path(config['graph-file']).stem
+    config_name = Path(config['config']).stem
+    
+    filename = f"taskgraph-{graph_name}-instance-config-{config_name}.pkl"
+
+    # Create directory for TaskGraph instances
+    taskgraph_dir = config.get('taskgraph-dir', 'taskgraph_instances')
+    os.makedirs(taskgraph_dir, exist_ok=True)
+    
+    filepath = os.path.join(taskgraph_dir, filename)
+    
+    try:
+        with open(filepath, "wb") as file:
+            pickle.dump(task_graph, file)
+        logger.info(f"TaskGraph instance saved to: {filepath}")
+        return filepath
+    except Exception as e:
+        logger.error(f"Failed to save TaskGraph instance: {e}")
+        return None
 
 def save_partition(args, solution, method='random'):
     """Save partition to pickle file"""
@@ -65,8 +88,8 @@ def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
     result_df = pd.DataFrame.from_dict(result_summary_data)
     
     # Create outputs directory if it doesn't exist
-    os.makedirs('outputs', exist_ok=True)
-    file_path = 'outputs/result_summary_soda_graphs_config.csv'
+    os.makedirs(config['output-dir'], exist_ok=True)
+    file_path = f'outputs/{config['result-file-prefix']}-result-summary-soda-graphs-config.csv'
     
     # Write header if file doesn't exist
     write_header = not os.path.exists(file_path)
@@ -96,6 +119,9 @@ def main():
             A_max=100,
             seed=config['seed']
         )
+
+        save_taskgraph(config,TG)
+        
         N = len(TG.graph.nodes())
         logger.info(f"Graph loaded successfully with {N} nodes")
         
@@ -139,16 +165,16 @@ def main():
             logger.info('='*50)
             
             if method_name == 'pso':
-                func_to_optimize = TG.optimize_swarm
+                func_to_optimize = (TG.optimize_swarm_makespan if config['opt-cost-type']=='makespan' else TG.optimize_swarm)
             elif method_name in ['random','dbpso']:
-                func_to_optimize = TG.optimize_random
+                func_to_optimize = (TG.optimize_random_makespan if config['opt-cost-type']=='makespan' else TG.optimize_random)
             else:
-                func_to_optimize = TG.optimize_single_point            
+                func_to_optimize = (TG.optimize_single_point_makespan if config['opt-cost-type']=='makespan' else TG.optimize_single_point)          
 
             logger.info(f"{method_name.upper()} will optimize function {getattr(func_to_optimize,'__name__','didntgetaname')} as black box")
             
             result = registry.run_method(
-                method_name, N, func_to_optimize, config, TG
+                method_name, N, func_to_optimize, config, TG, naive_opt_func_name = config['opt-cost-type']
             )
             
             logger.info(f"{method_name.upper()} Result: {result.best_optimization_cost:.4f}")

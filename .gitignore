@@ -12,7 +12,7 @@
 *Figures/*
 *logs/*
 *notebook*
-*partitions/*
+partitions/*
 *clr*
 *obsolete*/*
 configs/*.yaml
@@ -22,4 +22,6 @@ configs/*.yaml
 **.ipynb_checkpoints
 
 !meta_heuristic_playground.ipynb
-!configs/config_default.yaml
+!configs/config_arato_default.yaml
+!configs/config_mkspan_default.yaml
+!*partitions/*.pkl

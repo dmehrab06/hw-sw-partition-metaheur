@@ -1,6 +1,21 @@
 import os
 import yaml
 from pathlib import Path
+import argparse
+
+def parse_arguments():
+    """
+    Parse command line arguments with proper validation.
+    
+    """
+    parser = argparse.ArgumentParser(description='Task Graph Config generation')
+
+    # Add config file argument
+    parser.add_argument('-b', '--base-config', type=str, help='Base configuration file')
+    
+    args = parser.parse_args()
+
+    return args
 
 def load_base_config(config_file="../configs/config_default.yaml"):
     """Load base configuration from YAML file"""
@@ -13,15 +28,18 @@ def load_base_config(config_file="../configs/config_default.yaml"):
     print(f"Loaded base configuration from: {config_file}")
     return base_config
 
-def generate_config_filename(graph_dir, graph_name, area_constraint, hw_scale_variance, comm_scale_factor):
+def generate_config_filename(graph_dir, graph_name, area_constraint, hw_scale_variance, 
+                             comm_scale_factor, default_config_file = "../configs/config_default.yaml"):
     """Generate a descriptive filename for the config"""
     # Extract directory name for filename (remove trailing slash and path)
+    default_config_name = Path(default_config_file).stem
+    
     dir_name = Path(graph_dir.rstrip('/')).name
     
     # Remove .dot extension from graph name
     graph_base = Path(graph_name).stem
     
-    filename = (f"config_default_{dir_name}_{graph_base}_"
+    filename = (f"gen_{default_config_name}_{dir_name}_{graph_base}_"
                f"area-{area_constraint:.1f}_"
                f"hwvar-{hw_scale_variance:.1f}_"
                f"comm-{comm_scale_factor:.1f}.yaml")
@@ -42,26 +60,24 @@ def generate_all_configs(default_config_file="../configs/config_default.yaml"):
     # Parameter combinations from your original script
     graph_dirs = [
         'soda-benchmark-graphs/pytorch-graphs/',
-        'soda-benchmark-graphs/tflite-graphs/',
-        'test-data/'
+        'soda-benchmark-graphs/tflite-graphs/'
     ]
     
     graph_files = [
         ['mobile_net_tosa.dot', 'rez_net_tosa.dot', 'squeeze_net_tosa.dot'],
         ['anomaly_detection_tosa.dot', 'image_classification_tosa.dot',
-         'visual_wake_words_tosa.dot', 'keyword_spotting_tosa.dot'],
-        ['01_tosa.dot']
+         'visual_wake_words_tosa.dot', 'keyword_spotting_tosa.dot']
     ]
     
     area_constraints = [0.1, 0.5, 0.9]
     hw_scale_variances = [0.5, 1, 5]  # l parameter
-    comm_scale_factors = [0.5, 1, 5]  # mu parameter
+    comm_scale_factors = [0.1, 0.5, 1]  # mu parameter
     
     # Create output directory for config files
     config_dir = "../configs/"
     os.makedirs(config_dir, exist_ok=True)
 
-    graph_parent_dir = "/people/mehr668/encode_scripts/hw_sw_partition_min_cut/"
+    graph_parent_dir = "inputs/task_graph_topology/"
     
     total_configs = 0
     
@@ -84,7 +100,7 @@ def generate_all_configs(default_config_file="../configs/config_default.yaml"):
                         # Generate filename
                         filename = generate_config_filename(
                             gdir, graph_name, area_constraint, 
-                            hw_scale_variance, comm_scale_factor
+                            hw_scale_variance, comm_scale_factor, default_config_file = default_config_file
                         )
                         
                         # Full path for the config file
@@ -118,9 +134,14 @@ if __name__ == "__main__":
     # if not validate_default_config():
     #     print("Please fix the config_default.yaml file before proceeding.")
     #     exit(1)
-    
-    total = generate_all_configs()
 
-    config_files = os.listdir('../configs/')  # Show first 5 files
+    args = parse_arguments()
+    print(args.base_config)
+    total = generate_all_configs(args.base_config)
+
+    search_for_config = Path(args.base_config).stem
+
+    config_files = [f for f in os.listdir('../configs/') if f.startswith(f'gen_{search_for_config}')]
+
     for config in config_files:
         print(f"sbatch meta_heuristic_eval.sbatch  configs/{config}")
