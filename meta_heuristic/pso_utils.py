@@ -122,7 +122,7 @@ def simulate_CLPSO(dim, func_to_optimize, config):
     }
     
     options = {
-        'max_function_evaluations': config['clpso']['max_evaluations'], 
+        'max_function_evaluations': config['clpso']['iterations'], 
         'seed_rng': config.get('seed', 2022),
         'n_individuals': config['clpso']['n_individuals'],
         'c': config['clpso']['c']
@@ -147,7 +147,7 @@ def simulate_CCPSO(dim, func_to_optimize, config):
     }
     
     options = {
-        'max_function_evaluations': config['ccpso']['max_evaluations'], 
+        'max_function_evaluations': config['ccpso']['iterations'], 
         'seed_rng': config.get('seed', 2022),
         'n_individuals': max(500, config['ccpso']['n_individuals']),
         'c': config['ccpso']['c'],

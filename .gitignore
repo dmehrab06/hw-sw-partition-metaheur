@@ -15,9 +15,11 @@
 *partitions/*
 *clr*
 *obsolete*/*
+configs/*.yaml
 
 # Cache directories
 **__pycache__
 **.ipynb_checkpoints
 
 !meta_heuristic_playground.ipynb
+!configs/config_default.yaml

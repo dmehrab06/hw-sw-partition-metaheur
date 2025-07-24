@@ -15,7 +15,9 @@ logger = LogManager.get_logger(__name__)
 
 from meta_heuristic import ( 
     TaskGraph, parse_arguments, 
-    simulate_PSO, random_assignment, simulate_GL25
+    simulate_PSO, random_assignment, simulate_GL25,
+    simulate_DBPSO, simulate_CLPSO, simulate_CCPSO,
+    simulate_SHADE, simulate_JADE, simulate_ESA
 )
 from meta_heuristic.metaheuristic_registry import MethodRegistry
 
@@ -40,10 +42,13 @@ def save_partition(args, solution, method='random'):
 def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
     """Save results to CSV file."""
     formatted_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    config_base = Path(config['config']).stem
     
     # Base result data
     base_data = {
         'SimTime': formatted_time,
+        'Config': config_base,
         'GraphName': config['graph-file'],
         'N': N,
         'HW_Scale_Factor': config['hw-scale-factor'],
@@ -99,7 +104,17 @@ def main():
         
         # Register optimization methods
         registry.register_method('random', random_assignment)
+        
         registry.register_method('pso', simulate_PSO)
+        registry.register_method('dbpso',simulate_DBPSO)
+        registry.register_method('clpso',simulate_CLPSO)
+        registry.register_method('ccpso',simulate_CCPSO)
+        
+        registry.register_method('esa',simulate_ESA)
+        
+        registry.register_method('shade',simulate_SHADE)
+        registry.register_method('jade',simulate_JADE)
+        
         registry.register_method('gl25', simulate_GL25)
         
         # Calculate baseline
@@ -125,7 +140,7 @@ def main():
             
             if method_name == 'pso':
                 func_to_optimize = TG.optimize_swarm
-            elif method_name in ['random','dpso']:
+            elif method_name in ['random','dbpso']:
                 func_to_optimize = TG.optimize_random
             else:
                 func_to_optimize = TG.optimize_single_point            

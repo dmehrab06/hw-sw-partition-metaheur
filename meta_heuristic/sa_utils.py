@@ -1,6 +1,7 @@
 import numpy as np
 from pypop7.optimizers.sa.esa import ESA
 import os, sys
+import logging
 
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,7 +16,7 @@ if __name__ == "__main__":
 
 logger = LogManager.get_logger(__name__)
 
-def simulate_esa(dim, func_to_optimize, config):
+def simulate_ESA(dim, func_to_optimize, config):
     
     #logger = logging.getLogger(__name__)
     logger = logging.getLogger('__main__')

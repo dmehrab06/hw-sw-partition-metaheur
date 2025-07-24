@@ -1,6 +1,13 @@
 from typing import Dict, Callable, Any, List
 import pandas as pd
 from dataclasses import dataclass
+from utils.logging_utils import LogManager
+
+# Set up logging
+if __name__ == "__main__":
+    LogManager.initialize("logs/method_registry.log")
+
+logger = LogManager.get_logger(__name__)
 
 @dataclass
 class MethodResult:
@@ -8,7 +15,6 @@ class MethodResult:
     method_name: str
     best_optimization_cost: float
     func_as_black_box: str
-    best_solution: Any
     makespan: float
     partition_cost: float
     partition_assignment: Dict[str, Any]
@@ -30,16 +36,27 @@ class MethodRegistry:
         """Run a registered method and store results"""
         if name not in self.methods:
             raise ValueError(f"Method {name} not registered")
+
+        if task_graph is None:
+            raise ValueError(f"Cannot run without a task graph")
         
         method_info = self.methods[name]
         func = method_info['func']
         kwargs = method_info['kwargs']
+
+        # get a naive solution first
+        best_cost, partition = task_graph.get_naive_solution()
+        logger.info(f"naive assignment has a opt_cost of {best_cost}")
         
         # Run the optimization method
-        best_cost, best_solution = func(dim, func_to_optimize, config, **kwargs)
-        
-        # Create partition from solution if task_graph is provided
-        partition = task_graph.get_partitioning(best_solution, method=name)
+        opt_cost, opt_solution = func(dim, func_to_optimize, config, **kwargs)
+
+        if opt_cost<best_cost:
+            # Create partition from solution in the form of numpy array
+            logger.info(f"{name.upper()} was able to find better partition than all software partition")
+            best_cost = opt_cost
+            partition = task_graph.get_partitioning(opt_solution, method=name)
+               
         makespan = task_graph.evaluate_makespan(partition)['makespan']
         partition_cost = task_graph.evaluate_partition_cost(partition)
         
@@ -48,7 +65,6 @@ class MethodRegistry:
             method_name=name,
             best_optimization_cost = best_cost,
             func_as_black_box = getattr(func_to_optimize, '__name__', 'Unknown'),
-            best_solution=best_solution,
             makespan = makespan,
             partition_cost = partition_cost,
             partition_assignment = partition
@@ -69,7 +85,6 @@ class MethodRegistry:
             method_name=name,
             best_optimization_cost = best_cost,
             func_as_black_box = 'None',
-            best_solution=best_solution,
             makespan = makespan,
             partition_cost = partition_cost,
             partition_assignment = partition

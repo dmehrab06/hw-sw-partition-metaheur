@@ -316,6 +316,10 @@ class TaskGraph:
             solution = 1.0 / (1 + np.exp(-solution))
 
         return {node: (1 if solution[self.node_to_num[node]]>0.5 else 0) for node in self.graph.nodes()}
+    
+    def get_naive_solution(self):
+         partition =  {node: 0 for node in self.graph.nodes()}
+         return self.evaluate_partition_cost(partition),partition
 
     def evaluate_makespan(self, partition_assignment, verbose = False):
         """
