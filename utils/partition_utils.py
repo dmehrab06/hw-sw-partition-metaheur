@@ -55,101 +55,74 @@ class ScheduleConstPartitionSolver:
         self.T_sol = None  # makespan
         self.Y_sol = None  # software ordering
         
-    def create_random_dag(self, n_nodes: int, edge_probability: float = 0.3, 
-                         hw_time_range: Tuple[float, float] = (1, 10),
-                         sw_time_range: Tuple[float, float] = (2, 15),
-                         area_range: Tuple[float, float] = (1, 5),
-                         comm_range: Tuple[float, float] = (0.5, 3)) -> nx.DiGraph:
+    def load_pydot_graph(self, pydot_file, k=1.5, l=0.2, mu=0.5, A_max=100) -> nx.DiGraph:
         """
         Create a random directed acyclic graph with required attributes
         
         Args:
-            n_nodes: Number of nodes
-            edge_probability: Probability of edge between any two nodes
-            hw_time_range: Range for hardware execution times
-            sw_time_range: Range for software execution times
-            area_range: Range for hardware area costs
-            comm_range: Range for communication costs
+            
             
         Returns:
             NetworkX directed graph
         """
         # Create random DAG
-        self.graph = nx.DiGraph()
-        
-        # Add nodes with attributes
-        for i in range(n_nodes):
-            hw_time = random.uniform(*hw_time_range)
-            sw_time = random.uniform(*sw_time_range)
-            area = random.uniform(*area_range)
+        self.graph = nx.DiGraph(nx.nx_pydot.read_dot(pydot_file))
+        logger.info(f"Loaded graph from {pydot_file} with {len(self.graph.nodes())} nodes")
+
+        # Assign node attributes
+        for node in self.graph.nodes():
             
-            self.graph.add_node(i, 
-                              hardware_time=hw_time,
-                              software_time=sw_time,
-                              area_cost=area)
+            # Assign software execution time and hardware areas
+            software_time = random.uniform(1, 100)
+            hardware_area = random.uniform(1, A_max)
+            self.graph.nodes[node]['software_time'] = software_time
+            self.graph.nodes[node]['area_cost'] = hardware_area
+
+            # Assign random hardware execution time
+            mean = k * software_time
+            std_dev = l * k * software_time
+            # Ensure hardware costs are positive
+            hardware_time = max(0.1, np.random.normal(mean, std_dev))
+            self.graph.nodes[node]['hardware_time'] = hardware_time
+
+        # Calculate total area and maximum software cost
+        s_max = max([self.graph.nodes[n]['software_time'] for n in self.graph.nodes])
+        total_area = sum([self.graph.nodes[n]['area_cost'] for n in self.graph.nodes])
+
+        # # Ensure graph connectivity
+        # assert nx.is_connected(self.graph), "Graph must be connected"
         
-        # Add edges to create DAG (only forward edges to maintain acyclicity)
-        for i in range(n_nodes):
-            for j in range(i + 1, n_nodes):
-                if random.random() < edge_probability:
-                    comm_cost = random.uniform(*comm_range)
-                    self.graph.add_edge(i, j, communication_cost=comm_cost)
+        # Assign communication costs
+        for u, v in self.graph.edges():
+            comm_cost = random.uniform(0, 2 * mu * s_max)
+            self.graph[u][v]['communication_cost'] = comm_cost
+            
+        logger.info(f"Graph initialized with total hardware area requirement: {total_area}")
         
-        # Ensure graph is connected by adding a spanning tree if needed
-        if not nx.is_weakly_connected(self.graph):
-            for i in range(n_nodes - 1):
-                if not self.graph.has_edge(i, i + 1):
-                    comm_cost = random.uniform(*comm_range)
-                    self.graph.add_edge(i, i + 1, communication_cost=comm_cost)
-        
-        self.n_nodes = n_nodes
+        self.n_nodes = len(self.graph.nodes())
         self.n_edges = self.graph.number_of_edges()
         self.edge_list = list(self.graph.edges())
-        
+
+        # Create problem vectors
+        self._create_problem_matrices()
         logger.info(f"Created DAG with {self.n_nodes} nodes and {self.n_edges} edges")
         return self.graph
     
-    def save_graph(self, filename: str):
-        """Save the graph to a pickle file"""
-        if self.graph is None:
-            raise ValueError("No graph to save. Create a graph first.")
-        
-        with open(filename, 'wb') as f:
-            pickle.dump(self.graph, f)
-        logger.info(f"Graph saved to {filename}")
-    
-    def load_graph(self, filename: str) -> nx.DiGraph:
-        """
-        Load graph from file and create necessary matrices and vectors
-        
-        Args:
-            filename: Path to the pickle file
-            
-        Returns:
-            Loaded NetworkX graph
-        """
-        with open(filename, 'rb') as f:
-            self.graph = pickle.load(f)
-        
-        self.n_nodes = self.graph.number_of_nodes()
-        self.n_edges = self.graph.number_of_edges()
-        self.edge_list = list(self.graph.edges())
-        
-        # Create problem vectors
-        self._create_problem_matrices()
-        
-        logger.info(f"Loaded graph with {self.n_nodes} nodes and {self.n_edges} edges")
-        return self.graph
     
     def _create_problem_matrices(self):
         """Create matrices and vectors for optimization problem"""
         if self.graph is None:
             raise ValueError("No graph loaded")
         
-        # Create node attribute vectors
-        self.h = np.array([self.graph.nodes[i]['hardware_time'] for i in range(self.n_nodes)])
-        self.s = np.array([self.graph.nodes[i]['software_time'] for i in range(self.n_nodes)])
-        self.a = np.array([self.graph.nodes[i]['area_cost'] for i in range(self.n_nodes)])
+        # Get sorted list of node IDs for consistent ordering
+        self.node_list = sorted(list(self.graph.nodes()))
+        self.node_to_index = {node: i for i, node in enumerate(self.node_list)}
+        self.index_to_node = {i: node for i, node in enumerate(self.node_list)}
+        
+        # Create node attribute vectors (indexed by position in node_list)
+        self.h = np.array([self.graph.nodes[node]['hardware_time'] for node in self.node_list])
+        self.s = np.array([self.graph.nodes[node]['software_time'] for node in self.node_list])
+        self.a = np.array([self.graph.nodes[node]['area_cost'] for node in self.node_list])
         
         # Create communication cost vector
         self.c = np.array([self.graph.edges[edge]['communication_cost'] for edge in self.edge_list])
@@ -158,19 +131,22 @@ class ScheduleConstPartitionSolver:
         self.S_source = np.zeros((self.n_edges, self.n_nodes))
         self.S_target = np.zeros((self.n_edges, self.n_nodes))
         
-        for k, (i, j) in enumerate(self.edge_list):
-            self.S_source[k, i] = 1  # edge k starts from node i
-            self.S_target[k, j] = 1  # edge k ends at node j
+        for k, (source_node, target_node) in enumerate(self.edge_list):
+            source_idx = self.node_to_index[source_node]
+            target_idx = self.node_to_index[target_node]
+            self.S_source[k, source_idx] = 1  # edge k starts from source_node
+            self.S_target[k, target_idx] = 1  # edge k ends at target_node
         
         logger.info("Problem matrices and vectors created successfully")
     
-    def solve_optimization(self, A_max: float, big_M: float = 1000) -> Dict:
+    def solve_optimization(self, A_max: float, big_M: float = 1000, use_reduced_sw_constraints=True) -> Dict:
         """
         Solve the hardware-software partitioning optimization problem
         
         Args:
             A_max: Maximum hardware area constraint
             big_M: Big-M constant for logical constraints
+            use_reduced_sw_constraints: flag to reduce SW sequence constraints through topological ordering
             
         Returns:
             Dictionary containing solution details
@@ -186,7 +162,6 @@ class ScheduleConstPartitionSolver:
         t = cp.Variable(self.n_nodes, nonneg=True)   # start times
         f = cp.Variable(self.n_nodes, nonneg=True)   # finish times
         T = cp.Variable(nonneg=True)                 # makespan
-        Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering
         
         # Objective: minimize makespan
         objective = cp.Minimize(T)
@@ -210,13 +185,31 @@ class ScheduleConstPartitionSolver:
         constraints.append(z <= 2 - self.S_source @ x - self.S_target @ x)
         
         # 5. Sequential execution of software nodes
-        for i in range(self.n_nodes):
-            for j in range(self.n_nodes):
-                if i != j:
-                    constraints.append(f[i] <= t[j] + big_M * (1 - Y[i, j]) + big_M * (2 - x[i] - x[j]))
-                    constraints.append(f[j] <= t[i] + big_M * Y[i, j] + big_M * (2 - x[i] - x[j]))
-                    constraints.append(Y[i, j] <= x[i])
-                    constraints.append(Y[i, j] <= x[j])
+        if use_reduced_sw_constraints:
+            # Use topological ordering to reduce constraints
+            topo_order = list(nx.topological_sort(self.graph))
+            topo_indices = [self.node_to_index[node] for node in topo_order]
+            
+            logger.info(f"Topological order: {topo_order}")
+            # Only constrain consecutive nodes in topological order
+            for k in range(len(topo_indices) - 1):
+                i, j = topo_indices[k], topo_indices[k + 1]
+                
+                # If both nodes are software, node i must complete before node j starts
+                # This constraint is active only when both x[i] = 1 and x[j] = 1 (both software)
+                constraints.append(f[i] <= t[j] + big_M * (1 - x[i]) + big_M * (1 - x[j]))
+        else:
+            # Original O(n²) approach with binary ordering variables
+            Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering
+            
+            print(f"Adding {self.n_nodes*(self.n_nodes-1)} software sequencing constraints (full pairwise)")
+            for i in range(self.n_nodes):
+                for j in range(self.n_nodes):
+                    if i != j:
+                        constraints.append(f[i] <= t[j] + big_M * (1 - Y[i, j]) + big_M * (2 - x[i] - x[j]))
+                        constraints.append(f[j] <= t[i] + big_M * Y[i, j] + big_M * (2 - x[i] - x[j]))
+                        constraints.append(Y[i, j] <= x[i])
+                        constraints.append(Y[i, j] <= x[j])
         
         # 6. Makespan definition
         for i in range(self.n_nodes):
@@ -224,7 +217,7 @@ class ScheduleConstPartitionSolver:
         
         # Solve the problem
         problem = cp.Problem(objective, constraints)
-        problem.solve(solver=cp.SCIP, verbose=False)
+        problem.solve(solver=cp.SCIP, verbose=True)
         
         if problem.status != cp.OPTIMAL:
             logger.error(f"Optimization failed with status: {problem.status}")
@@ -236,15 +229,22 @@ class ScheduleConstPartitionSolver:
         self.f_sol = f.value
         self.z_sol = z.value.round().astype(int)
         self.T_sol = T.value
-        self.Y_sol = Y.value.round().astype(int)
+        if not use_reduced_sw_constraints:
+            self.Y_sol = Y.value.round().astype(int)
+        else:
+            self.Y_sol = None  # Not used in reduced formulation
         
-        # Compute execution sequence
-        hw_nodes = [i for i in range(self.n_nodes) if self.x_sol[i] == 0]
-        sw_nodes = [i for i in range(self.n_nodes) if self.x_sol[i] == 1]
+        # Convert solution back to node IDs
+        hw_nodes = [self.node_list[i] for i in range(self.n_nodes) if self.x_sol[i] == 0]
+        sw_nodes = [self.node_list[i] for i in range(self.n_nodes) if self.x_sol[i] == 1]
         
         # Sort by start times
-        hw_sequence = sorted(hw_nodes, key=lambda i: self.t_sol[i])
-        sw_sequence = sorted(sw_nodes, key=lambda i: self.t_sol[i])
+        hw_sequence = sorted(hw_nodes, key=lambda node: self.t_sol[self.node_to_index[node]])
+        sw_sequence = sorted(sw_nodes, key=lambda node: self.t_sol[self.node_to_index[node]])
+        
+        # Create start/finish time dictionaries with node IDs
+        start_times_dict = {self.node_list[i]: self.t_sol[i] for i in range(self.n_nodes)}
+        finish_times_dict = {self.node_list[i]: self.f_sol[i] for i in range(self.n_nodes)}
         
         solution = {
             'status': problem.status,
@@ -253,8 +253,8 @@ class ScheduleConstPartitionSolver:
             'software_nodes': sw_nodes,
             'hardware_sequence': hw_sequence,
             'software_sequence': sw_sequence,
-            'start_times': self.t_sol,
-            'finish_times': self.f_sol,
+            'start_times': start_times_dict,
+            'finish_times': finish_times_dict,
             'total_hardware_area': np.sum(self.a * (1 - self.x_sol)),
             'area_constraint': A_max
         }
@@ -359,11 +359,11 @@ class ScheduleConstPartitionSolver:
         
         # Add node attribute labels
         node_labels = {}
-        for i in range(self.n_nodes):
-            hw_time = self.graph.nodes[i]['hardware_time']
-            sw_time = self.graph.nodes[i]['software_time'] 
-            area = self.graph.nodes[i]['area_cost']
-            node_labels[i] = f"HW:{hw_time:.1f}\nSW:{sw_time:.1f}\nArea:{area:.1f}"
+        for node in self.graph.nodes():
+            hw_time = self.graph.nodes[node]['hardware_time']
+            sw_time = self.graph.nodes[node]['software_time'] 
+            area = self.graph.nodes[node]['area_cost']
+            node_labels[node] = f"HW:{hw_time:.1f}\nSW:{sw_time:.1f}\nArea:{area:.1f}"
         
         # Position labels below nodes
         label_pos = {node: (pos[node][0], pos[node][1] - 0.4) for node in pos}
@@ -433,8 +433,9 @@ class ScheduleConstPartitionSolver:
         
         # Draw nodes with partition colors
         node_colors = []
-        for i in range(self.n_nodes):
-            if self.x_sol[i] == 0:  # Hardware
+        for node in self.graph.nodes():
+            node_idx = self.node_to_index[node]
+            if self.x_sol[node_idx] == 0:  # Hardware
                 node_colors.append('red')
             else:  # Software
                 node_colors.append('blue')
@@ -447,11 +448,12 @@ class ScheduleConstPartitionSolver:
                                font_weight='bold', font_color='white')
         
         # Add execution time information
-        for i in range(self.n_nodes):
-            x_pos, y_pos = pos[i]
-            start_time = self.t_sol[i]
-            finish_time = self.f_sol[i]
-            partition = "HW" if self.x_sol[i] == 0 else "SW"
+        for node in self.graph.nodes():
+            node_idx = self.node_to_index[node]
+            x_pos, y_pos = pos[node]
+            start_time = self.t_sol[node_idx]
+            finish_time = self.f_sol[node_idx]
+            partition = "HW" if self.x_sol[node_idx] == 0 else "SW"
             
             label = f"{partition}\nStart: {start_time:.1f}\nEnd: {finish_time:.1f}"
             
@@ -479,10 +481,10 @@ class ScheduleConstPartitionSolver:
                   loc='upper right', bbox_to_anchor=(1.15, 1), markerscale=3, fontsize=20)
         
         # Add execution sequence information
-        hw_seq = [i for i in range(self.n_nodes) if self.x_sol[i] == 0]
-        sw_seq = [i for i in range(self.n_nodes) if self.x_sol[i] == 1]
-        hw_seq.sort(key=lambda x: self.t_sol[x])
-        sw_seq.sort(key=lambda x: self.t_sol[x])
+        hw_seq = [node for node in self.graph.nodes() if self.x_sol[self.node_to_index[node]] == 0]
+        sw_seq = [node for node in self.graph.nodes() if self.x_sol[self.node_to_index[node]] == 1]
+        hw_seq.sort(key=lambda node: self.t_sol[self.node_to_index[node]])
+        sw_seq.sort(key=lambda node: self.t_sol[self.node_to_index[node]])
         
         info_text = f"Makespan: {solution['makespan']:.2f}\n"
         info_text += f"Hardware Execution (Parallel): {hw_seq}\n"
@@ -498,29 +500,3 @@ class ScheduleConstPartitionSolver:
         # plt.show()
         fig.savefig('data/test_result.png', bbox_inches='tight')
 
-# Example usage and testing
-if __name__ == "__main__":
-    # Create solver instance
-    solver = ScheduleConstPartitionSolver()
-    
-    # Create a random DAG
-    logger.info("Creating random DAG...")
-    np.random.seed(123)
-    graph = solver.create_random_dag(n_nodes=8, edge_probability=0.4)
-    
-    # Save the graph
-    solver.save_graph("data/example_task_graph.pkl")
-
-    # Load graph and create matrices
-    solver.load_graph("data/example_task_graph.pkl")
-    
-    # Display the original graph
-    solver.display_graph("Original Task Graph")
-    
-    # Solve optimization with area constraint
-    A_max = np.sum(solver.a) * 0.6  # Allow 60% of total area for hardware
-    solution = solver.solve_optimization(A_max=A_max)
-    
-    # Display solution
-    if solution:
-        solver.display_solution(solution)

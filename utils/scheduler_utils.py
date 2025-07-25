@@ -36,12 +36,25 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
     if not nx.is_directed_acyclic_graph(graph):
         raise ValueError("Graph must be a directed acyclic graph (DAG)")
     
+    # Get all node IDs from the graph
+    graph_nodes = set(graph.nodes())
+    
     # Validate partition assignment
-    for node in graph.nodes():
+    for node in graph_nodes:
         if node not in partition_assignment:
             raise ValueError(f"Partition not specified for node {node}")
         if partition_assignment[node] not in ['hardware', 'software']:
             raise ValueError(f"Invalid partition '{partition_assignment[node]}' for node {node}")
+    
+    # Check for extra nodes in partition assignment
+    partition_nodes = set(partition_assignment.keys())
+    if partition_nodes != graph_nodes:
+        extra_nodes = partition_nodes - graph_nodes
+        missing_nodes = graph_nodes - partition_nodes
+        if extra_nodes:
+            print(f"Warning: Partition assignment contains nodes not in graph: {extra_nodes}")
+        if missing_nodes:
+            raise ValueError(f"Missing partition assignments for nodes: {missing_nodes}")
     
     # Validate required node attributes
     required_node_attrs = ['hardware_time', 'software_time', 'area_cost']
@@ -58,8 +71,8 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
     # Initialize data structures
     start_times = {}
     finish_times = {}
-    hw_nodes = [node for node, partition in partition_assignment.items() if partition == 'hardware']
-    sw_nodes = [node for node, partition in partition_assignment.items() if partition == 'software']
+    hw_nodes = [node for node in graph_nodes if partition_assignment[node] == 'hardware']
+    sw_nodes = [node for node in graph_nodes if partition_assignment[node] == 'software']
     
     # Track which nodes have completed execution
     completed_nodes = set()
