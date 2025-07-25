@@ -2,7 +2,32 @@
 *.ipynb
 *.log
 *.png
+*.out
+*.err
+*.sh
+*.sbatch
 *.pkl
+*.dot
+
+# Directories
+*slurm_logs/*
+*Figures/*
+*logs/*
+data/*
+*notebook*
+partitions/*
+*clr*
+*obsolete*/*
+configs/*.yaml
 
 # Cache directories
 **__pycache__
+**.ipynb_checkpoints
+
+!configs/config_arato_default.yaml
+!configs/config_mkspan_default.yaml
+!*partitions/*.pkl
+!inputs/task_graph_complete/*.pkl
+
+# DS_Store
+*.DS_Store
