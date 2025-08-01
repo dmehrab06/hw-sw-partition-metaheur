@@ -21,6 +21,7 @@ if __name__ == "__main__":
     sys.path.append(parent_dir)
 
 from utils.logging_utils import LogManager
+from meta_heuristic.task_graph import TaskGraph
 
 # Set up logging
 if __name__ == "__main__":
@@ -54,6 +55,38 @@ class ScheduleConstPartitionSolver:
         self.z_sol = None  # communication variables
         self.T_sol = None  # makespan
         self.Y_sol = None  # software ordering
+
+    def load_pickle_graph(self, graph_file):
+        try:
+            with open(graph_file, 'rb') as f:
+                data = pickle.load(f)
+            logger.info(f"Data loaded successfully from {graph_file}")
+            # You can now work with the loaded graph 'G'
+        except FileNotFoundError:
+            logger.error(f"Error: The pickle file '{graph_file}' was not found.")
+            raise FileNotFoundError(f"Error: The pickle file '{graph_file}' was not found.")
+        except Exception as e:
+            logger.error(f"An error occurred while loading the graph data: {e}")
+            raise
+        
+        self.populate_graph_with_attributes(data)
+        self.n_nodes = len(self.graph.nodes())
+        self.n_edges = self.graph.number_of_edges()
+        self.edge_list = list(self.graph.edges())
+
+        # Create problem vectors
+        self._create_problem_matrices()
+        logger.info(f"Created DAG with {self.n_nodes} nodes and {self.n_edges} edges")
+        return self.graph
+    
+    def populate_graph_with_attributes(self, data:TaskGraph):
+        self.graph = data.graph
+        # node/edge attributes
+        nx.set_node_attributes(self.graph, data.hardware_area, 'area_cost')
+        nx.set_node_attributes(self.graph, data.hardware_costs, 'hardware_time')
+        nx.set_node_attributes(self.graph, data.software_costs, 'software_time')
+        nx.set_edge_attributes(self.graph, data.communication_costs, 'communication_cost')
+        return
         
     def load_pydot_graph(self, pydot_file, k=1.5, l=0.2, mu=0.5, A_max=100) -> nx.DiGraph:
         """

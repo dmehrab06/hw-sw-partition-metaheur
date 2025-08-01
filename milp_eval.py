@@ -30,15 +30,16 @@ def main():
         # Initialize Task Graph
         logger.info(f"Loading graph from {config['graph-file']}")
         
-        graph = solver.load_pydot_graph(
-            pydot_file=config['graph-file'], 
-            k=config['hw-scale-factor'],
-            l=config['hw-scale-variance'],
-            mu=config['comm-scale-factor'],
-            A_max=100
-            )
+        # graph = solver.load_pydot_graph(
+        #     pydot_file=config['graph-file'], 
+        #     k=config['hw-scale-factor'],
+        #     l=config['hw-scale-variance'],
+        #     mu=config['comm-scale-factor'],
+        #     A_max=100
+        #     )
+        graph = solver.load_pickle_graph(config['graph-file'])
     except Exception as e:
-        logger.error(f"An error occurred during loading graph from pydot file: {str(e)}", exc_info=True)
+        logger.error(f"An error occurred during loading graph from input file: {str(e)}", exc_info=True)
         raise
     
     # Display the original graph
