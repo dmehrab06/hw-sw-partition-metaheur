@@ -1,6 +1,7 @@
 from typing import Dict
 import networkx as nx
 import os, sys
+import time
 
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -297,3 +298,32 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
                 print(f"  ({u} -> {v}): {delay:.2f}")
     
     return result
+
+
+if __name__ == '__main__':
+    import pickle
+    data_file = "makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-gl25.pkl"
+    with open(data_file, 'rb') as f:
+        data = pickle.load(f)
+
+    graph_file = "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
+    with open(graph_file, 'rb') as f:
+        graph_data = pickle.load(f)
+    
+    graph = graph_data.graph
+    nx.set_node_attributes(graph, graph_data.hardware_area, 'area_cost')
+    nx.set_node_attributes(graph, graph_data.hardware_costs, 'hardware_time')
+    nx.set_node_attributes(graph, graph_data.software_costs, 'software_time')
+    nx.set_edge_attributes(graph, graph_data.communication_costs, 'communication_cost')
+
+    # partition_assignment = {k: 'hardware' if data[k]==1 else 'software' for k in graph.nodes}
+
+    import random
+    random.seed(10)
+    print(graph.number_of_nodes())
+    for _ in range(10):
+        t_start = time.time()
+        partition_assignment = {k: random.choice(['hardware', 'software']) for k in graph.nodes}
+        compute_dag_execution_time(graph, partition_assignment, verbose=False)
+        t_end = time.time()
+        print(f"Execution time computed in {t_end-t_start} seconds")
