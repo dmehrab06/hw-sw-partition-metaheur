@@ -1,0 +1,6 @@
+numpy
+networkx
+cvxpy
+mosek
+pyscipopt
+matplotlib

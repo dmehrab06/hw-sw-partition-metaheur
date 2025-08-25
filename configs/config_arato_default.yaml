@@ -1,0 +1,72 @@
+# Graph and problem configuration
+graph-file: "inputs/task_graph_topology/soda-benchmark-graphs/pytorch-graphs/squeeze_net_tosa.dot"
+area-constraint: 0.5
+hw-scale-factor: 0.1
+hw-scale-variance: 0.5
+comm-scale-factor: 1.0
+seed: 42
+solution-dir: "arato-opt-partitions"
+result-file-prefix: "arato_opt"
+output-dir: "outputs"
+taskgraph-dir: "inputs/task_graph_complete"
+opt-cost-type: "partition"
+
+# Random assignment trials
+random:
+    num_samples: 500
+    p: 0.5
+
+# PSO Configuration
+pso:
+  c1: 0.575
+  c2: 0.1
+  w: 1.05
+  n_particles: 500
+  iterations: 1000
+  verbose: True
+
+# Discrete Binary PSO Configuration
+dbpso:
+  c1: 0.575
+  c2: 0.1
+  w: 1.05
+  k: 4
+  p: 2
+  n_particles: 500
+  iterations: 1000
+  verbose: True
+
+# Comprehensive Learning PSO Configuration
+clpso:
+  c: 1
+  n_individuals: 500
+  iterations: 1000
+  verbose: 500
+
+# Comprehensive Learning PSO Configuration
+ccpso:
+  c: 1
+  n_individuals: 500
+  verbose: 500
+  iterations: 1000
+  group_sizes: [5,10,20]
+
+# Genetic GL25 configuration
+gl25:
+  iter: 10000
+  n_pop: 500
+  verbose: 500
+
+shade:
+  iter: 10000
+  n_individuals: 500
+  verbose: 500
+
+jade:
+    iter: 10000
+    n_individuals: 500
+    verbose: 500
+
+esa:
+    iter: 10000
+    verbose: 500
