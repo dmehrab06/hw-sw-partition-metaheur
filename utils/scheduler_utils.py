@@ -1,5 +1,7 @@
-from typing import Dict
+from typing import Dict, List, Tuple, Optional
 import networkx as nx
+import numpy as np
+import cvxpy as cp
 import os, sys
 import time
 
@@ -299,6 +301,355 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
     
     return result
 
+def compute_dag_makespan(graph: nx.DiGraph, partition_assignment: List[int]) -> Tuple[float, Dict[int, float]]:
+    """
+    Compute optimal makespan for DAG execution with hardware/software partitioning using linear programming.
+    
+    This function formulates the scheduling problem as an LP optimization to find optimal start times
+    for each node while respecting:
+    - Dependency constraints (precedence)
+    - Hardware parallel execution
+    - Software sequential execution  
+    - Communication delays between partitions
+    
+    Variables in LP formulation:
+    - start_time[i]: Start time for node i
+    - makespan: Total execution time (objective to minimize)
+    
+    Constraints:
+    1. Precedence: start_time[j] >= finish_time[i] + comm_delay[i][j] for edge (i,j)
+    2. Software sequencing: Software nodes execute sequentially in topological order
+    3. Non-negativity: start_time[i] >= 0
+    4. Makespan definition: makespan >= finish_time[i] for all i
+    
+    Args:
+        graph (nx.DiGraph): Directed acyclic graph with node attributes:
+                           'hardware_time', 'software_time' and edge attribute 'communication_cost'
+        partition_assignment (List[int]): Binary assignment (0=hardware, 1=software)
+        
+    Returns:
+        Tuple[float, Dict[int, float]]: (optimal_makespan, start_times_dict)
+        
+    Raises:
+        ValueError: If graph attributes are missing or partition assignment is invalid
+        RuntimeError: If LP optimization fails
+    """
+    
+    # Extract timing information from graph
+    hw_times, sw_times, comm_delays, node_to_index = _extract_timing_from_graph(graph)
+    n_nodes = len(hw_times)
+    assignment = np.array(partition_assignment)
+    
+    # Validate inputs
+    if len(assignment) != n_nodes:
+        raise ValueError(f"Partition assignment length ({len(assignment)}) doesn't match number of nodes ({n_nodes})")
+    
+    logger.info(f"Computing optimal makespan for DAG with {n_nodes} nodes")
+    logger.info(f"Hardware nodes: {np.sum(assignment == 0)}, Software nodes: {np.sum(assignment == 1)}")
+    
+    # Step 1: Determine execution times and communication costs based on partition
+    exec_times, comm_costs = _compute_timing_parameters(assignment, hw_times, sw_times, comm_delays)
+    
+    # Step 2: Formulate CVXPY problem
+    start_times, makespan, problem = _formulate_cvxpy_problem(graph, assignment, exec_times, comm_costs, node_to_index)
+    
+    # Step 3: Solve the optimization problem
+    logger.info("Solving linear programming problem with CVXPY...")
+    problem.solve(solver=cp.CLARABEL, verbose=False)
+    
+    if problem.status not in ["infeasible", "unbounded"]:
+        if problem.status != "optimal":
+            logger.warning(f"Solver status: {problem.status}")
+    else:
+        logger.error(f"Optimization failed with status: {problem.status}")
+        raise RuntimeError(f"LP optimization failed with status: {problem.status}")
+    
+    # Step 4: Extract solution
+    optimal_makespan = makespan.value
+    start_times_dict = {node: start_times[node_to_index[node]].value for node in graph.nodes()}
+    
+    logger.info(f"Optimal makespan computed: {optimal_makespan:.4f}")
+    
+    # Validate solution
+    # _validate_solution(graph, start_times_dict, assignment, exec_times, comm_costs, optimal_makespan, node_to_index)
+    
+    return optimal_makespan, start_times_dict
+
+
+def _extract_timing_from_graph(graph: nx.DiGraph) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict]:
+    """
+    Extract timing matrices and vectors from graph node and edge attributes.
+    
+    Args:
+        graph (nx.DiGraph): Graph with timing attributes
+        
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray, Dict]: (hw_times, sw_times, comm_delays, node_to_index)
+    """
+    nodes = list(graph.nodes())
+    n_nodes = len(nodes)
+    node_to_index = {node: idx for idx, node in enumerate(nodes)}
+    
+    # Initialize arrays
+    hw_times = np.zeros(n_nodes)
+    sw_times = np.zeros(n_nodes)
+    comm_delays = np.zeros((n_nodes, n_nodes))
+    
+    # Extract node timing attributes
+    for idx, node in enumerate(nodes):
+        node_data = graph.nodes[node]
+        
+        if 'hardware_time' in node_data:
+            hw_times[idx] = node_data['hardware_time']
+        else:
+            logger.warning(f"Node {node} missing 'hardware_time' attribute, using 0")
+            hw_times[idx] = 0.0
+        
+        if 'software_time' in node_data:
+            sw_times[idx] = node_data['software_time']
+        else:
+            logger.warning(f"Node {node} missing 'software_time' attribute, using 0")
+            sw_times[idx] = 0.0
+    
+    # Extract edge communication costs
+    for u, v, edge_data in graph.edges(data=True):
+        u_idx = node_to_index[u]
+        v_idx = node_to_index[v]
+        
+        if 'communication_cost' in edge_data:
+            comm_delays[u_idx][v_idx] = edge_data['communication_cost']
+        else:
+            logger.warning(f"Edge ({u}, {v}) missing 'communication_cost' attribute, using 0")
+            comm_delays[u_idx][v_idx] = 0.0
+    
+    logger.debug(f"Extracted {n_nodes} node timings and {graph.number_of_edges()} edge costs")
+    logger.debug(f"Hardware times range: [{hw_times.min():.3f}, {hw_times.max():.3f}]")
+    logger.debug(f"Software times range: [{sw_times.min():.3f}, {sw_times.max():.3f}]")
+    
+    return hw_times, sw_times, comm_delays, node_to_index
+
+
+def _compute_timing_parameters(assignment: np.ndarray, hw_times: np.ndarray, 
+                              sw_times: np.ndarray, comm_delays: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute execution times and communication costs based on partition assignment.
+    
+    Args:
+        assignment (np.ndarray): Binary partition assignment
+        hw_times (np.ndarray): Hardware execution times
+        sw_times (np.ndarray): Software execution times
+        comm_delays (np.ndarray): Base communication delay matrix
+        
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: (execution_times, communication_costs)
+    """
+    n_nodes = len(assignment)
+    
+    # Determine execution times based on partition assignment
+    exec_times = np.where(assignment == 0, hw_times, sw_times)
+    
+    # Compute communication costs - only between different partitions
+    comm_costs = np.zeros((n_nodes, n_nodes))
+    
+    for i in range(n_nodes):
+        for j in range(n_nodes):
+            if assignment[i] != assignment[j]:  # Different partitions
+                comm_costs[i][j] = comm_delays[i][j]
+            # Same partition: communication cost remains 0
+    
+    logger.debug(f"Execution times range: [{exec_times.min():.3f}, {exec_times.max():.3f}]")
+    logger.debug(f"Non-zero communication costs: {np.count_nonzero(comm_costs)}")
+    
+    return exec_times, comm_costs
+
+
+def _formulate_cvxpy_problem(graph: nx.DiGraph, assignment: np.ndarray, exec_times: np.ndarray,
+                           comm_costs: np.ndarray, node_to_index: Dict) -> Tuple[cp.Variable, cp.Variable, cp.Problem]:
+    """
+    Formulate the linear programming problem using CVXPY for optimal scheduling.
+    
+    Mathematical Formulation:
+    
+    Variables:
+    - s[i]: Start time for node i, i ∈ {0, 1, ..., n-1}
+    - M: Makespan
+    
+    Objective:
+    minimize M
+    
+    Constraints:
+    1. Precedence: s[j] >= s[i] + e[i] + c[i,j] for each edge (i,j) ∈ E
+    2. Software sequencing: s[j] >= s[i] + e[i] for consecutive software nodes
+    3. Makespan: M >= s[i] + e[i] for all nodes i
+    4. Non-negativity: s[i] >= 0, M >= 0
+    
+    Args:
+        graph (nx.DiGraph): Task dependency graph
+        assignment (np.ndarray): Partition assignment
+        exec_times (np.ndarray): Execution times for each node
+        comm_costs (np.ndarray): Communication cost matrix
+        node_to_index (Dict): Mapping from node IDs to array indices
+        
+    Returns:
+        Tuple[cp.Variable, cp.Variable, cp.Problem]: (start_times_var, makespan_var, problem)
+    """
+    n_nodes = len(exec_times)
+    
+    # Define optimization variables
+    start_times = cp.Variable(n_nodes, nonneg=True, name="start_times")
+    makespan = cp.Variable(nonneg=True, name="makespan")
+    
+    # Define objective: minimize makespan
+    objective = cp.Minimize(makespan)
+    
+    # Initialize constraints list
+    constraints = []
+    
+    # Constraint 1: Precedence constraints for DAG edges
+    # For each edge (i,j): s[j] >= s[i] + e[i] + c[i,j]
+    precedence_count = 0
+    for u, v in graph.edges():
+        u_idx = node_to_index[u]
+        v_idx = node_to_index[v]
+        
+        constraint = start_times[v_idx] >= start_times[u_idx] + exec_times[u_idx] + comm_costs[u_idx][v_idx]
+        constraints.append(constraint)
+        precedence_count += 1
+    
+    # Constraint 2: Software sequential execution
+    # For consecutive software nodes: s[j] >= s[i] + e[i]
+    software_nodes = [node for node in graph.nodes() if assignment[node_to_index[node]] == 1]
+    software_count = 0
+    
+    if len(software_nodes) > 1:
+        # Create subgraph of software nodes to determine execution order
+        software_subgraph = graph.subgraph(software_nodes)
+        
+        if software_subgraph.number_of_edges() > 0:
+            # Use topological ordering for dependent software nodes
+            try:
+                sw_order = list(nx.topological_sort(software_subgraph))
+            except nx.NetworkXError:
+                # Fallback to node order if subgraph has cycles (shouldn't happen in DAG)
+                logger.error("Software subgraph has cycles")
+                sw_order = sorted(software_nodes)
+        else:
+            # No dependencies among software nodes, use arbitrary order
+            sw_order = sorted(software_nodes)
+        
+        # Add sequential constraints for consecutive software nodes
+        for i in range(len(sw_order) - 1):
+            curr_node = sw_order[i]
+            next_node = sw_order[i + 1]
+            curr_idx = node_to_index[curr_node]
+            next_idx = node_to_index[next_node]
+            
+            constraint = start_times[next_idx] >= start_times[curr_idx] + exec_times[curr_idx]
+            # constraints.append(constraint)
+            software_count += 1
+    
+    # Constraint 3: Makespan definition constraints
+    # For each node i: M >= s[i] + e[i]
+    makespan_count = 0
+    for node in graph.nodes():
+        i = node_to_index[node]
+        constraint = makespan >= start_times[i] + exec_times[i]
+        constraints.append(constraint)
+        makespan_count += 1
+    
+    # Create the optimization problem
+    problem = cp.Problem(objective, constraints)
+    
+    logger.info(f"CVXPY formulation: {n_nodes + 1} variables")
+    logger.info(f"Constraints: {precedence_count} precedence, {software_count} software sequencing, {makespan_count} makespan")
+    logger.info(f"Total constraints: {len(constraints)}")
+    
+    return start_times, makespan, problem
+
+
+def _validate_solution(graph: nx.DiGraph, start_times: Dict[int, float], assignment: np.ndarray,
+                      exec_times: np.ndarray, comm_costs: np.ndarray, makespan: float, node_to_index: Dict):
+    """
+    Validate the computed solution against all constraints.
+    
+    Args:
+        graph (nx.DiGraph): Task dependency graph
+        start_times (Dict[int, float]): Computed start times
+        assignment (np.ndarray): Partition assignment
+        exec_times (np.ndarray): Execution times
+        comm_costs (np.ndarray): Communication costs
+        makespan (float): Computed makespan
+        node_to_index (Dict): Node to index mapping
+    """
+    tolerance = 1e-6
+    
+    # Check precedence constraints
+    for u, v in graph.edges():
+        u_idx = node_to_index[u]
+        v_idx = node_to_index[v]
+        finish_u = start_times[u] + exec_times[u_idx]
+        required_start_v = finish_u + comm_costs[u_idx][v_idx]
+        if start_times[v] < required_start_v - tolerance:
+            logger.warning(f"Precedence violation: edge ({u},{v})")
+    
+    # Check software sequencing
+    software_nodes = [node for node in graph.nodes() if assignment[node_to_index[node]] == 1]
+    software_times = [(start_times[node], node) for node in software_nodes]
+    software_times.sort()
+    
+    for i in range(len(software_times) - 1):
+        curr_node = software_times[i][1]
+        next_node = software_times[i + 1][1]
+        curr_idx = node_to_index[curr_node]
+        curr_finish = software_times[i][0] + exec_times[curr_idx]
+        next_start = software_times[i + 1][0]
+        if next_start < curr_finish - tolerance:
+            logger.warning(f"Software sequencing violation between nodes {curr_node} and {next_node}")
+    
+    # Check makespan constraint
+    max_finish = max(start_times[node] + exec_times[node_to_index[node]] for node in graph.nodes())
+    if makespan < max_finish - tolerance:
+        logger.warning(f"Makespan constraint violation: computed={makespan:.4f}, required={max_finish:.4f}")
+    
+    logger.info("Solution validation completed")
+
+
+def get_execution_schedule(graph: nx.DiGraph, start_times: Dict[int, float], 
+                          assignment: List[int]) -> Dict[str, List[Tuple[int, float, float]]]:
+    """
+    Generate a detailed execution schedule from the optimal solution.
+    
+    Args:
+        graph (nx.DiGraph): Task dependency graph
+        start_times (Dict[int, float]): Optimal start times
+        assignment (List[int]): Partition assignment
+        
+    Returns:
+        Dict with 'hardware' and 'software' keys containing lists of 
+        (node_id, start_time, finish_time) tuples
+    """
+    _, _, _, node_to_index = _extract_timing_from_graph(graph)
+    hw_times, sw_times, _, _ = _extract_timing_from_graph(graph)
+    exec_times = np.where(np.array(assignment) == 0, hw_times, sw_times)
+    
+    schedule = {'hardware': [], 'software': []}
+    
+    for node in graph.nodes():
+        idx = node_to_index[node]
+        start_time = start_times[node]
+        finish_time = start_time + exec_times[idx]
+        
+        if assignment[idx] == 0:  # Hardware
+            schedule['hardware'].append((node, start_time, finish_time))
+        else:  # Software
+            schedule['software'].append((node, start_time, finish_time))
+    
+    # Sort by start time
+    schedule['hardware'].sort(key=lambda x: x[1])
+    schedule['software'].sort(key=lambda x: x[1])
+    
+    return schedule
+
 
 if __name__ == '__main__':
     import pickle
@@ -316,14 +667,16 @@ if __name__ == '__main__':
     nx.set_node_attributes(graph, graph_data.software_costs, 'software_time')
     nx.set_edge_attributes(graph, graph_data.communication_costs, 'communication_cost')
 
-    # partition_assignment = {k: 'hardware' if data[k]==1 else 'software' for k in graph.nodes}
+    partition_assignment = {k: 'hardware' if data[k]==1 else 'software' for k in graph.nodes}
+    t_start = time.time()
+    sol = compute_dag_execution_time(graph, partition_assignment, verbose=False)
+    print(f"Solution: {sol['makespan']}")
+    t_end = time.time()
+    print(f"Execution time computed in {t_end-t_start} seconds")
 
-    import random
-    random.seed(10)
-    print(graph.number_of_nodes())
-    for _ in range(10):
-        t_start = time.time()
-        partition_assignment = {k: random.choice(['hardware', 'software']) for k in graph.nodes}
-        compute_dag_execution_time(graph, partition_assignment, verbose=False)
-        t_end = time.time()
-        print(f"Execution time computed in {t_end-t_start} seconds")
+    t_start = time.time()
+    # the method has been written with software assignment denoted with 1
+    assignment = [1-data[k] for k in graph.nodes]
+    compute_dag_makespan(graph, assignment)
+    t_end = time.time()
+    print(f"Execution time computed in {t_end-t_start} seconds")

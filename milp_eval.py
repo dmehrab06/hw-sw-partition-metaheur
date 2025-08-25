@@ -60,7 +60,7 @@ def main():
         partition_assignment[n] = 'software'
     
     # Compute execution time
-    result = compute_dag_execution_time(graph, partition_assignment, verbose=True)
+    result = compute_dag_execution_time(graph, partition_assignment, verbose=False)
 
     print(f"Execution time: {result['makespan']}")
 
