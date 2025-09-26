@@ -650,12 +650,452 @@ def get_execution_schedule(graph: nx.DiGraph, start_times: Dict[int, float],
     
     return schedule
 
+"""
+Heuristic algorithms for DAG scheduling with mixed hardware/software partitioning.
+"""
 
-if __name__ == '__main__':
+import networkx as nx
+import heapq
+from typing import Dict, List, Tuple, Set
+from collections import defaultdict, deque
+import numpy as np
+
+
+def compute_critical_path_priorities(graph: nx.DiGraph) -> Dict[int, float]:
+    """
+    Compute critical path priorities (bottom-level) for each node.
+    
+    Args:
+        graph: NetworkX DiGraph with 'hardware_time', 'software_time' attributes
+        
+    Returns:
+        Dictionary mapping node_id -> priority (bottom-level critical path length)
+    """
+    priorities = {}
+    
+    # Compute bottom-level for each node (longest path to exit)
+    def compute_bottom_level(node):
+        if node in priorities:
+            return priorities[node]
+        
+        # Get execution time (use maximum of hardware/software for priority calculation)
+        node_data = graph.nodes[node]
+        exec_time = max(node_data.get('hardware_time', 0), node_data.get('software_time', 0))
+        
+        # Base case: no successors
+        successors = list(graph.successors(node))
+        if not successors:
+            priorities[node] = exec_time
+            return exec_time
+        
+        # Recursive case: max path through successors
+        max_successor_path = 0
+        for successor in successors:
+            edge_data = graph[node][successor]
+            comm_cost = edge_data.get('communication_cost', 0)
+            successor_path = compute_bottom_level(successor) + comm_cost
+            max_successor_path = max(max_successor_path, successor_path)
+        
+        priorities[node] = exec_time + max_successor_path
+        return priorities[node]
+    
+    # Compute for all nodes
+    for node in graph.nodes():
+        compute_bottom_level(node)
+    
+    return priorities
+
+
+def get_ready_nodes(graph: nx.DiGraph, completed_nodes: Set[int]) -> List[int]:
+    """
+    Get nodes that are ready to execute (all predecessors completed).
+    
+    Args:
+        graph: NetworkX DiGraph
+        completed_nodes: Set of already completed nodes
+        
+    Returns:
+        List of ready node IDs
+    """
+    ready = []
+    for node in graph.nodes():
+        if node not in completed_nodes:
+            predecessors = set(graph.predecessors(node))
+            if predecessors.issubset(completed_nodes):
+                ready.append(node)
+    return ready
+
+
+def get_execution_time(node: int, partition: Dict[int, int], graph: nx.DiGraph) -> float:
+    """
+    Get execution time for a node based on its partition assignment.
+    
+    Args:
+        node: Node ID
+        partition: Dictionary mapping node_id -> partition (0=software, 1=hardware)
+        graph: NetworkX DiGraph with timing attributes
+        
+    Returns:
+        Execution time for the node
+    """
+    node_data = graph.nodes[node]
+    if partition[node] == 1:  # Hardware
+        return node_data.get('hardware_time', 0)
+    else:  # Software
+        return node_data.get('software_time', 0)
+
+
+def get_communication_cost(src: int, dst: int, partition: Dict[int, int], graph: nx.DiGraph) -> float:
+    """
+    Get communication cost between two nodes based on partition assignment.
+    
+    Args:
+        src: Source node ID
+        dst: Destination node ID  
+        partition: Partition assignment dictionary
+        graph: NetworkX DiGraph
+        
+    Returns:
+        Communication cost (0 if same partition, edge cost if different)
+    """
+    if partition[src] == partition[dst]:  # Same partition
+        return 0.0
+    else:  # Different partitions
+        if graph.has_edge(src, dst):
+            return graph[src][dst].get('communication_cost', 0)
+        return 0.0
+
+
+def event_driven_heuristic(graph: nx.DiGraph, partition: Dict[int, int]) -> Tuple[float, Dict[int, float]]:
+    """
+    Event-driven simulation heuristic with critical path priorities.
+    
+    Args:
+        graph: NetworkX DiGraph with node attributes 'hardware_time', 'software_time'
+               and edge attribute 'communication_cost'
+        partition: Dictionary mapping node_id -> partition (0=software, 1=hardware)
+        
+    Returns:
+        Tuple of (makespan, start_times_dict)
+    """
+    # Compute priorities
+    priorities = compute_critical_path_priorities(graph)
+    
+    # Initialize data structures
+    event_queue = []  # (time, event_type, node_id)
+    completed_nodes = set()
+    start_times = {}
+    finish_times = {}
+    software_queue = []  # (priority, node_id)
+    software_busy_until = 0.0
+    current_time = 0.0
+    
+    # Add initially ready nodes
+    ready_nodes = get_ready_nodes(graph, completed_nodes)
+    for node in ready_nodes:
+        if partition[node] == 1:  # Hardware
+            # Hardware nodes can start immediately
+            start_times[node] = current_time
+            exec_time = get_execution_time(node, partition, graph)
+            finish_time = current_time + exec_time
+            finish_times[node] = finish_time
+            heapq.heappush(event_queue, (finish_time, 'complete', node))
+        else:  # Software
+            heapq.heappush(software_queue, (-priorities[node], node))  # Negative for max-heap
+    
+    # Process software queue initially
+    if software_queue and current_time >= software_busy_until:
+        _, next_software = heapq.heappop(software_queue)
+        start_times[next_software] = current_time
+        exec_time = get_execution_time(next_software, partition, graph)
+        finish_time = current_time + exec_time
+        finish_times[next_software] = finish_time
+        software_busy_until = finish_time
+        heapq.heappush(event_queue, (finish_time, 'complete', next_software))
+    
+    # Main event loop
+    while event_queue:
+        current_time, event_type, node = heapq.heappop(event_queue)
+        
+        if event_type == 'complete':
+            completed_nodes.add(node)
+            
+            # Check for newly ready nodes
+            for successor in graph.successors(node):
+                if successor not in completed_nodes and successor not in start_times:
+                    # Check if all predecessors are completed
+                    predecessors = set(graph.predecessors(successor))
+                    if predecessors.issubset(completed_nodes):
+                        # Node is ready - compute earliest start time
+                        earliest_start = current_time
+                        for pred in predecessors:
+                            comm_cost = get_communication_cost(pred, successor, partition, graph)
+                            pred_finish = finish_times[pred]
+                            earliest_start = max(earliest_start, pred_finish + comm_cost)
+                        
+                        if partition[successor] == 1:  # Hardware
+                            # Start hardware node immediately
+                            start_times[successor] = earliest_start
+                            exec_time = get_execution_time(successor, partition, graph)
+                            finish_time = earliest_start + exec_time
+                            finish_times[successor] = finish_time
+                            heapq.heappush(event_queue, (finish_time, 'complete', successor))
+                        else:  # Software
+                            # Add to software queue with earliest start constraint
+                            heapq.heappush(software_queue, (-priorities[successor], successor, earliest_start))
+        
+        # Process software queue when software becomes available
+        while software_queue and current_time >= software_busy_until:
+            if len(software_queue[0]) == 2:  # Old format without earliest_start
+                _, next_software = heapq.heappop(software_queue)
+                earliest_start = current_time
+            else:  # New format with earliest_start
+                _, next_software, earliest_start = heapq.heappop(software_queue)
+            
+            actual_start = max(current_time, earliest_start)
+            start_times[next_software] = actual_start
+            exec_time = get_execution_time(next_software, partition, graph)
+            finish_time = actual_start + exec_time
+            finish_times[next_software] = finish_time
+            software_busy_until = finish_time
+            heapq.heappush(event_queue, (finish_time, 'complete', next_software))
+            break  # Process one software node at a time
+    
+    # Compute makespan
+    makespan = max(finish_times.values()) if finish_times else 0.0
+    
+    return makespan, start_times
+
+
+def critical_path_list_scheduling(graph: nx.DiGraph, partition: Dict[int, int]) -> Tuple[float, Dict[int, float]]:
+    """
+    List scheduling heuristic using critical path priorities.
+    
+    Args:
+        graph: NetworkX DiGraph with timing attributes
+        partition: Partition assignment dictionary
+        
+    Returns:
+        Tuple of (makespan, start_times_dict)
+    """
+    priorities = compute_critical_path_priorities(graph)
+    
+    # Sort all nodes by priority (highest first)
+    sorted_nodes = sorted(graph.nodes(), key=lambda x: priorities[x], reverse=True)
+    
+    start_times = {}
+    finish_times = {}
+    software_busy_until = 0.0
+    
+    for node in sorted_nodes:
+        # Compute earliest start time based on predecessors
+        earliest_start = 0.0
+        for pred in graph.predecessors(node):
+            if pred in finish_times:
+                comm_cost = get_communication_cost(pred, node, partition, graph)
+                pred_finish = finish_times[pred]
+                earliest_start = max(earliest_start, pred_finish + comm_cost)
+        
+        # Schedule the node
+        if partition[node] == 1:  # Hardware
+            start_times[node] = earliest_start
+        else:  # Software
+            start_times[node] = max(earliest_start, software_busy_until)
+            software_busy_until = start_times[node] + get_execution_time(node, partition, graph)
+        
+        # Update finish time
+        exec_time = get_execution_time(node, partition, graph)
+        finish_times[node] = start_times[node] + exec_time
+    
+    makespan = max(finish_times.values()) if finish_times else 0.0
+    return makespan, start_times
+
+
+def shortest_processing_time_heuristic(graph: nx.DiGraph, partition: Dict[int, int]) -> Tuple[float, Dict[int, float]]:
+    """
+    Heuristic that orders software nodes by shortest processing time first.
+    
+    Args:
+        graph: NetworkX DiGraph with timing attributes
+        partition: Partition assignment dictionary
+        
+    Returns:
+        Tuple of (makespan, start_times_dict)
+    """
+    # Get software nodes and sort by execution time
+    software_nodes = [node for node in graph.nodes() if partition[node] == 0]
+    software_nodes.sort(key=lambda x: get_execution_time(x, partition, graph))
+    
+    # Create a software execution order
+    software_order = {node: idx for idx, node in enumerate(software_nodes)}
+    
+    start_times = {}
+    finish_times = {}
+    software_schedule = [None] * len(software_nodes)  # Track software execution slots
+    
+    # Topologically sort all nodes to respect dependencies
+    topo_order = list(nx.topological_sort(graph))
+    
+    for node in topo_order:
+        # Compute earliest start based on predecessors
+        earliest_start = 0.0
+        for pred in graph.predecessors(node):
+            if pred in finish_times:
+                comm_cost = get_communication_cost(pred, node, partition, graph)
+                pred_finish = finish_times[pred]
+                earliest_start = max(earliest_start, pred_finish + comm_cost)
+        
+        exec_time = get_execution_time(node, partition, graph)
+        
+        if partition[node] == 1:  # Hardware
+            start_times[node] = earliest_start
+            finish_times[node] = earliest_start + exec_time
+        else:  # Software
+            # Find the earliest slot in software schedule
+            position = software_order[node]
+            
+            # Compute when this software node can actually start
+            software_start = earliest_start
+            
+            # Check previous software nodes in the sequence
+            for i in range(position):
+                prev_node = software_nodes[i]
+                if prev_node in finish_times:
+                    software_start = max(software_start, finish_times[prev_node])
+            
+            start_times[node] = software_start
+            finish_times[node] = software_start + exec_time
+    
+    makespan = max(finish_times.values()) if finish_times else 0.0
+    return makespan, start_times
+
+
+def communication_aware_heuristic(graph: nx.DiGraph, partition: Dict[int, int]) -> Tuple[float, Dict[int, float]]:
+    """
+    Heuristic that considers communication costs when ordering software nodes.
+    
+    Args:
+        graph: NetworkX DiGraph with timing attributes  
+        partition: Partition assignment dictionary
+        
+    Returns:
+        Tuple of (makespan, start_times_dict)
+    """
+    # Compute communication-aware priorities for software nodes
+    def compute_comm_weight(node):
+        exec_time = get_execution_time(node, partition, graph)
+        comm_weight = 0.0
+        
+        for successor in graph.successors(node):
+            if partition[successor] != partition[node]:  # Cross-partition communication
+                comm_cost = get_communication_cost(node, successor, partition, graph)
+                comm_weight += comm_cost
+        
+        return exec_time + comm_weight
+    
+    # Sort software nodes by communication-aware weight
+    software_nodes = [node for node in graph.nodes() if partition[node] == 0]
+    software_nodes.sort(key=compute_comm_weight, reverse=True)  # Highest weight first
+    
+    # Use event-driven approach with custom software ordering
+    start_times = {}
+    finish_times = {}
+    completed_nodes = set()
+    software_queue = deque(software_nodes)  # Pre-ordered queue
+    software_busy_until = 0.0
+    current_time = 0.0
+    
+    # Process nodes in topological order but respect software queue ordering
+    pending_nodes = set(graph.nodes())
+    
+    while pending_nodes:
+        # Find ready nodes
+        ready_nodes = []
+        for node in pending_nodes:
+            predecessors = set(graph.predecessors(node))
+            if predecessors.issubset(completed_nodes):
+                ready_nodes.append(node)
+        
+        if not ready_nodes:
+            break
+        
+        # Process ready hardware nodes immediately
+        hardware_ready = [node for node in ready_nodes if partition[node] == 1]
+        for node in hardware_ready:
+            earliest_start = current_time
+            for pred in graph.predecessors(node):
+                comm_cost = get_communication_cost(pred, node, partition, graph)
+                pred_finish = finish_times[pred]
+                earliest_start = max(earliest_start, pred_finish + comm_cost)
+            
+            start_times[node] = earliest_start
+            exec_time = get_execution_time(node, partition, graph)
+            finish_times[node] = earliest_start + exec_time
+            completed_nodes.add(node)
+            pending_nodes.remove(node)
+            current_time = max(current_time, finish_times[node])
+        
+        # Process software nodes in pre-determined order
+        software_ready = [node for node in ready_nodes if partition[node] == 0]
+        if software_ready and software_queue:
+            # Find the first ready software node in the queue order
+            next_software = None
+            for node in software_queue:
+                if node in software_ready:
+                    next_software = node
+                    software_queue.remove(node)
+                    break
+            
+            if next_software:
+                earliest_start = current_time
+                for pred in graph.predecessors(next_software):
+                    comm_cost = get_communication_cost(pred, next_software, partition, graph)
+                    pred_finish = finish_times[pred]
+                    earliest_start = max(earliest_start, pred_finish + comm_cost)
+                
+                actual_start = max(earliest_start, software_busy_until)
+                start_times[next_software] = actual_start
+                exec_time = get_execution_time(next_software, partition, graph)
+                finish_times[next_software] = actual_start + exec_time
+                software_busy_until = finish_times[next_software]
+                completed_nodes.add(next_software)
+                pending_nodes.remove(next_software)
+                current_time = max(current_time, finish_times[next_software])
+    
+    makespan = max(finish_times.values()) if finish_times else 0.0
+    return makespan, start_times
+
+
+# Example usage and comparison
+if __name__ == "__main__":
+    # # Create test graph
+    # graph = nx.DiGraph()
+    # graph.add_edges_from([(0, 1), (0, 2), (1, 3), (2, 3), (3, 4)])
+    
+    # # Add node attributes
+    # node_attrs = {
+    #     0: {'hardware_time': 2.0, 'software_time': 5.0},
+    #     1: {'hardware_time': 3.0, 'software_time': 4.0},
+    #     2: {'hardware_time': 1.5, 'software_time': 6.0},
+    #     3: {'hardware_time': 2.5, 'software_time': 3.0},
+    #     4: {'hardware_time': 1.0, 'software_time': 2.0}
+    # }
+    # nx.set_node_attributes(graph, node_attrs)
+    
+    # # Add edge attributes
+    # edge_attrs = {
+    #     (0, 1): {'communication_cost': 1.0},
+    #     (0, 2): {'communication_cost': 0.5},
+    #     (1, 3): {'communication_cost': 1.5},
+    #     (2, 3): {'communication_cost': 1.0},
+    #     (3, 4): {'communication_cost': 0.8}
+    # }
+    # nx.set_edge_attributes(graph, edge_attrs)
+    
+    # # Test partition: 0=software, 1=hardware
+    # partition_assignment = {0: 1, 1: 0, 2: 1, 3: 0, 4: 1}
+
     import pickle
-    data_file = "makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-gl25.pkl"
-    with open(data_file, 'rb') as f:
-        data = pickle.load(f)
 
     graph_file = "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
     with open(graph_file, 'rb') as f:
@@ -667,16 +1107,60 @@ if __name__ == '__main__':
     nx.set_node_attributes(graph, graph_data.software_costs, 'software_time')
     nx.set_edge_attributes(graph, graph_data.communication_costs, 'communication_cost')
 
-    partition_assignment = {k: 'hardware' if data[k]==1 else 'software' for k in graph.nodes}
-    t_start = time.time()
-    sol = compute_dag_execution_time(graph, partition_assignment, verbose=False)
-    print(f"Solution: {sol['makespan']}")
-    t_end = time.time()
-    print(f"Execution time computed in {t_end-t_start} seconds")
+    data_file = "makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-gl25.pkl"
+    with open(data_file, 'rb') as f:
+        data = pickle.load(f)
+    partition_assignment = {k: data[k] for k in graph.nodes}
+    
+    print("Comparing Heuristic Algorithms:")
+    print("=" * 40)
+    
+    # Test all heuristics
+    heuristics = [
+        ("Event-Driven", event_driven_heuristic),
+        ("Critical Path List", critical_path_list_scheduling),
+        ("Shortest Processing Time", shortest_processing_time_heuristic),
+        ("Communication-Aware", communication_aware_heuristic)
+    ]
+    
+    for name, heuristic_func in heuristics:
+        try:
+            ts = time.time()
+            makespan, start_times = heuristic_func(graph, partition_assignment)
+            print(f"\n{name}:")
+            print(f"  Makespan: {makespan:.3f}")
+            # print(f"  Start times: {start_times}")
+            print(f"Solved in {time.time() - ts} seconds")
+        except Exception as e:
+            print(f"\n{name}: Error - {e}")
 
-    t_start = time.time()
-    # the method has been written with software assignment denoted with 1
-    assignment = [1-data[k] for k in graph.nodes]
-    compute_dag_makespan(graph, assignment)
-    t_end = time.time()
-    print(f"Execution time computed in {t_end-t_start} seconds")
+
+# if __name__ == '__main__':
+#     import pickle
+#     data_file = "makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-gl25.pkl"
+#     with open(data_file, 'rb') as f:
+#         data = pickle.load(f)
+
+#     graph_file = "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
+#     with open(graph_file, 'rb') as f:
+#         graph_data = pickle.load(f)
+    
+#     graph = graph_data.graph
+#     nx.set_node_attributes(graph, graph_data.hardware_area, 'area_cost')
+#     nx.set_node_attributes(graph, graph_data.hardware_costs, 'hardware_time')
+#     nx.set_node_attributes(graph, graph_data.software_costs, 'software_time')
+#     nx.set_edge_attributes(graph, graph_data.communication_costs, 'communication_cost')
+
+#     partition_assignment = {k: 'hardware' if data[k]==1 else 'software' for k in graph.nodes}
+#     t_start = time.time()
+#     sol = compute_dag_execution_time(graph, partition_assignment, verbose=False)
+#     print(f"Solution: {sol['makespan']}")
+#     t_end = time.time()
+#     print(f"Execution time computed in {t_end-t_start} seconds")
+
+#     t_start = time.time()
+#     # the method has been written with software assignment denoted with 1
+#     assignment = [1-data[k] for k in graph.nodes]
+#     compute_dag_makespan(graph, assignment)
+#     t_end = time.time()
+#     print(f"Execution time computed in {t_end-t_start} seconds")
