@@ -8,9 +8,11 @@ from pathlib import Path
 import pickle
 
 from utils.logging_utils import LogManager
+print(f"After LogManager - report.log exists: {os.path.exists('report.log')}")
 warnings.filterwarnings('ignore')
 
 LogManager.initialize("logs/run_meta_heuristic.log")
+print(f"After LogManager.initialize - report.log exists: {os.path.exists('report.log')}")
 logger = LogManager.get_logger(__name__)
 
 from meta_heuristic import ( 
@@ -89,7 +91,7 @@ def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
     
     # Create outputs directory if it doesn't exist
     os.makedirs(config['output-dir'], exist_ok=True)
-    file_path = f'outputs/{config['result-file-prefix']}-result-summary-soda-graphs-config.csv'
+    file_path = f"outputs/{config['result-file-prefix']}-result-summary-soda-graphs-config.csv"
     
     # Write header if file doesn't exist
     write_header = not os.path.exists(file_path)
@@ -165,11 +167,14 @@ def main():
             logger.info('='*50)
             
             if method_name == 'pso':
-                func_to_optimize = (TG.optimize_swarm_makespan if config['opt-cost-type']=='makespan' else TG.optimize_swarm)
+                func_to_optimize = (TG.optimize_swarm_makespan if config['opt-cost-type']=='makespan' 
+                                    else (TG.optimize_swarm_makespan_mip if config['opt-cost-type']=='mip' else TG.optimize_swarm))
             elif method_name in ['random','dbpso']:
-                func_to_optimize = (TG.optimize_random_makespan if config['opt-cost-type']=='makespan' else TG.optimize_random)
+                func_to_optimize = (TG.optimize_random_makespan if config['opt-cost-type']=='makespan' 
+                                   else (TG.optimize_random_makespan_mip if config['opt-cost-type']=='mip' else TG.optimize_random))
             else:
-                func_to_optimize = (TG.optimize_single_point_makespan if config['opt-cost-type']=='makespan' else TG.optimize_single_point)          
+                func_to_optimize = (TG.optimize_single_point_makespan if config['opt-cost-type']=='makespan' 
+                                    else (TG.optimize_single_point_makespan_mip if config['opt-cost-type']=='mip' else TG.optimize_single_point))
 
             logger.info(f"{method_name.upper()} will optimize function {getattr(func_to_optimize,'__name__','didntgetaname')} as black box")
             

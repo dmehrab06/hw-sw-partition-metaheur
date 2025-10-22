@@ -9,6 +9,7 @@ if __name__ == "__main__":
     sys.path.append(parent_dir)
 
 from utils.logging_utils import LogManager
+from utils.scheduler_utils import compute_dag_makespan
 
 # Set up logging
 if __name__ == "__main__":
@@ -45,6 +46,7 @@ class TaskGraph:
                 Must be between 0 and 1.
         """
         self.graph = None
+        self.rounak_graph = None
         self.software_costs = {}
         self.hardware_costs = {}
         self.hardware_area = {}
@@ -82,7 +84,14 @@ class TaskGraph:
             - Communication costs are uniformly distributed between 0 and 2*mu*s_max
         """
         # Load graph structure
-        self.graph = nx.DiGraph(nx.nx_pydot.read_dot(pydot_file))
+        try:
+            # Try the original approach
+            self.graph = nx.DiGraph(nx.nx_pydot.read_dot(pydot_file))
+        except TypeError:
+            # Fallback to pygraphviz
+            self.graph = nx.DiGraph(nx.nx_agraph.read_dot(pydot_file))
+            
+        #self.graph = nx.DiGraph(nx.nx_pydot.read_dot(pydot_file))
         logger.info(f"Loaded graph from {pydot_file} with {len(self.graph.nodes())} nodes")
 
         if reproduce:
@@ -116,9 +125,20 @@ class TaskGraph:
         for u, v in self.graph.edges():
             comm_cost = random.uniform(0, 2 * mu * s_max)
             self.communication_costs[(u, v)] = comm_cost
-            
-        logger.info(f"Graph initialized with total area: {self.total_area}")
 
+        ## Initializing nx Graph for Rounak's function
+        self.rounak_graph = self.graph
+        nx.set_node_attributes(self.rounak_graph, self.hardware_area, 'area_cost')
+        nx.set_node_attributes(self.rounak_graph, self.hardware_costs, 'hardware_time')
+        nx.set_node_attributes(self.rounak_graph, self.software_costs, 'software_time')
+        nx.set_edge_attributes(self.rounak_graph, self.communication_costs, 'communication_cost')
+        logger.info(f"Graph initialized with total area: {self.total_area} with seed {seed}")
+
+    def violates(self, solution):
+        # Calculate execution costs and area usage
+        area_consumption = [(self.hardware_area[node] if placement>0.5 else 0) for node,placement in solution.items()]
+        return (1 if (sum(area_consumption)/self.total_area) > self.area_constraint else 0)
+    
     def evaluate_partition_cost(self, solution):
         """
         Evaluate the total cost of a given hardware-software partition.
@@ -218,10 +238,10 @@ class TaskGraph:
             all_costs.append(self.evaluate_makespan(solution)['makespan'])
         
         return np.array(all_costs)
-    
-    def optimize_single_point(self, x, type='random'):
+
+    def optimize_swarm_makespan_mip(self, swarms):
         """
-        Evaluate costs for a batch of particle swarm solutions.
+        Evaluate costs for a batch of particle swarm solutions based on mip makespan
         
         This method is designed to work with particle swarm optimization algorithms
         that provide solutions as matrices of continuous values.
@@ -233,6 +253,40 @@ class TaskGraph:
         
         Returns:
             np.ndarray: Array of costs for each particle solution
+            
+        Note:
+            Uses sigmoid transformation: exp_swarms = 1.0/(1+exp(-swarms))
+        """
+        exp_swarms = 1.0 / (1 + np.exp(-swarms))
+        
+        assert exp_swarms.shape[1] == len(self.software_costs), \
+            f"Swarm dimension {exp_swarms.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+        
+        all_costs = []
+        
+        for swarm in exp_swarms:
+            solution = {node: (0 if swarm[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
+            violation = self.violates(solution)
+            if violation:
+                all_costs.append(self.violation_cost)
+            else:
+                mip_assignment = [1-solution[k] for k in self.rounak_graph]
+                makespan,_ = compute_dag_makespan(self.rounak_graph,mip_assignment)
+                all_costs.append(makespan)
+        
+        return np.array(all_costs)
+    
+    def optimize_single_point(self, x, type='random'):
+        """
+        Evaluate costs for a single candidate solution.
+        
+        This method is designed to work with most pypop algorithms
+        
+        Args:
+            x (np.ndarray): Array of shape (n_nodes)
+        
+        Returns:
+            Scaler: Cost for the particular solution
             
         Note:
             Uses sigmoid transformation: exp_swarms = 1.0/(1+exp(-swarms))
@@ -249,7 +303,7 @@ class TaskGraph:
 
     def optimize_single_point_makespan(self, x, type='random'):
         """
-        Evaluate costs for a batch of particle swarm solutions based on makespan calculation
+        Evaluate costs for a single solution based on makespan calculation
         
         This method is designed to work with particle swarm optimization algorithms
         that provide solutions as matrices of continuous values.
@@ -274,6 +328,38 @@ class TaskGraph:
         solution = {node: (0 if x[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
         
         return self.evaluate_makespan(solution)['makespan']
+
+    def optimize_single_point_makespan_mip(self, x, type='random'):
+        """
+        Evaluate costs for a single solution based on mip makespan calculation
+        
+        This method is designed to work with particle swarm optimization algorithms
+        that provide solutions as matrices of continuous values.
+        
+        Args:
+            swarms (np.ndarray): Array of shape (n_particles, n_nodes) containing
+                               particle positions that will be converted to probabilities
+                               using sigmoid function
+        
+        Returns:
+            np.ndarray: Array of costs for each particle solution
+            
+        Note:
+            Uses sigmoid transformation: exp_swarms = 1.0/(1+exp(-swarms))
+        """
+        if type=='vanilla' or type=='pso':
+            x = 1.0 / (1 + np.exp(-x))
+        
+        assert x.shape[0] == len(self.software_costs), \
+            f"Swarm dimension {x.shape[0]} doesn't match number of nodes {len(self.software_costs)}"
+
+        solution = {node: (0 if x[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
+        violation = self.violates(solution)
+        if violation:
+            return self.violation_cost
+        mip_assignment = [1-solution[k] for k in self.rounak_graph]
+        makespan,_ = compute_dag_makespan(self.rounak_graph,mip_assignment)
+        return makespan
     
     def optimize_random(self,assignment_candidates):
         """
@@ -301,7 +387,7 @@ class TaskGraph:
         """
         Evaluate costs for a batch of assignment probabilities based on makespan calculation.
         
-        This method is designed to work with assignment probabilities directly, should NOT be DIRECTLY called with PSO.
+        This method is designed to work with assignment probabilities directly; should NOT be DIRECTLY called with PSO.
         
         Args:
             assignment_candidates (np.ndarray): Array of shape (n_candidate, n_nodes) containing assignment probabilities
@@ -316,6 +402,34 @@ class TaskGraph:
         for assignment in assignment_candidates:
             solution = {node: (0 if assignment[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
             all_costs.append(self.evaluate_makespan(solution)['makespan'])
+        
+        return np.array(all_costs)
+
+    def optimize_random_makespan_mip(self,assignment_candidates):
+        """
+        Evaluate costs for a batch of assignment probabilities based on mip makespan.
+        
+        This method is designed to work with assignment probabilities directly; should NOT be DIRECTLY called with PSO.
+        
+        Args:
+            assignment_candidates (np.ndarray): Array of shape (n_candidate, n_nodes) containing assignment probabilities
+        
+        Returns:
+            np.ndarray: Array of costs for each particle solution
+        """
+        assert assignment_candidates.shape[1] == len(self.software_costs), \
+            f"Swarm dimension {assignment_candidates.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+        
+        all_costs = []
+        for assignment in assignment_candidates:
+            solution = {node: (0 if assignment[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
+            violation = self.violates(solution)
+            if violation:
+                all_costs.append(self.violation_cost)
+            else:
+                mip_assignment = [1-solution[k] for k in self.rounak_graph]
+                makespan,_ = compute_dag_makespan(self.rounak_graph,mip_assignment)
+                all_costs.append(makespan)
         
         return np.array(all_costs)
 

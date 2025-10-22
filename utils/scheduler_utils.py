@@ -344,8 +344,8 @@ def compute_dag_makespan(graph: nx.DiGraph, partition_assignment: List[int]) -> 
     if len(assignment) != n_nodes:
         raise ValueError(f"Partition assignment length ({len(assignment)}) doesn't match number of nodes ({n_nodes})")
     
-    logger.info(f"Computing optimal makespan for DAG with {n_nodes} nodes")
-    logger.info(f"Hardware nodes: {np.sum(assignment == 0)}, Software nodes: {np.sum(assignment == 1)}")
+    logger.debug(f"Computing optimal makespan for DAG with {n_nodes} nodes")
+    logger.debug(f"Hardware nodes: {np.sum(assignment == 0)}, Software nodes: {np.sum(assignment == 1)}")
     
     # Step 1: Determine execution times and communication costs based on partition
     exec_times, comm_costs = _compute_timing_parameters(assignment, hw_times, sw_times, comm_delays)
@@ -354,7 +354,7 @@ def compute_dag_makespan(graph: nx.DiGraph, partition_assignment: List[int]) -> 
     start_times, makespan, problem = _formulate_cvxpy_problem(graph, assignment, exec_times, comm_costs, node_to_index)
     
     # Step 3: Solve the optimization problem
-    logger.info("Solving linear programming problem with CVXPY...")
+    logger.debug("Solving linear programming problem with CVXPY...")
     problem.solve(solver=cp.CLARABEL, verbose=False)
     
     if problem.status not in ["infeasible", "unbounded"]:
@@ -368,7 +368,7 @@ def compute_dag_makespan(graph: nx.DiGraph, partition_assignment: List[int]) -> 
     optimal_makespan = makespan.value
     start_times_dict = {node: start_times[node_to_index[node]].value for node in graph.nodes()}
     
-    logger.info(f"Optimal makespan computed: {optimal_makespan:.4f}")
+    logger.debug(f"Optimal makespan computed: {optimal_makespan:.4f}")
     
     # Validate solution
     # _validate_solution(graph, start_times_dict, assignment, exec_times, comm_costs, optimal_makespan, node_to_index)
@@ -560,9 +560,9 @@ def _formulate_cvxpy_problem(graph: nx.DiGraph, assignment: np.ndarray, exec_tim
     # Create the optimization problem
     problem = cp.Problem(objective, constraints)
     
-    logger.info(f"CVXPY formulation: {n_nodes + 1} variables")
-    logger.info(f"Constraints: {precedence_count} precedence, {software_count} software sequencing, {makespan_count} makespan")
-    logger.info(f"Total constraints: {len(constraints)}")
+    logger.debug(f"CVXPY formulation: {n_nodes + 1} variables")
+    logger.debug(f"Constraints: {precedence_count} precedence, {software_count} software sequencing, {makespan_count} makespan")
+    logger.debug(f"Total constraints: {len(constraints)}")
     
     return start_times, makespan, problem
 
@@ -677,6 +677,7 @@ if __name__ == '__main__':
     t_start = time.time()
     # the method has been written with software assignment denoted with 1
     assignment = [1-data[k] for k in graph.nodes]
-    compute_dag_makespan(graph, assignment)
+    makespan,_ = compute_dag_makespan(graph, assignment)
+    print(f"Solution: {makespan.value}")
     t_end = time.time()
     print(f"Execution time computed in {t_end-t_start} seconds")

@@ -1,7 +1,6 @@
 import numpy as np
 import pyswarms as ps
 from pyswarms.backend.topology import Star
-
 from .task_graph import TaskGraph
 from .parser_utils import parse_arguments
 from .pso_utils import simulate_PSO, simulate_DBPSO, simulate_CLPSO, simulate_CCPSO
