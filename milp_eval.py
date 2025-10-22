@@ -3,6 +3,7 @@ Hardware-Software Partitioning Optimization Solver
 Implements the incidence matrix formulation for DAG partitioning
 """
 
+import os
 import random
 import numpy as np
 import warnings
@@ -28,16 +29,19 @@ def main():
 
     try:
         # Initialize Task Graph
-        logger.info(f"Loading graph from {config['graph-file']}")
         
-        # graph = solver.load_pydot_graph(
-        #     pydot_file=config['graph-file'], 
-        #     k=config['hw-scale-factor'],
-        #     l=config['hw-scale-variance'],
-        #     mu=config['comm-scale-factor'],
-        #     A_max=100
-        #     )
-        graph = solver.load_pickle_graph(config['graph-file'])
+        if os.path.exists(config.get('taskgraph-pickle', "")):
+            logger.info(f"Loading graph from {config['taskgraph-pickle']}")
+            graph = solver.load_pickle_graph(config['taskgraph-pickle'])
+        else:
+            logger.info(f"Loading graph from {config['graph-file']}")
+            graph = solver.load_pydot_graph(
+                pydot_file=config['graph-file'], 
+                k=config['hw-scale-factor'],
+                l=config['hw-scale-variance'],
+                mu=config['comm-scale-factor'],
+                A_max=100
+                )
     except Exception as e:
         logger.error(f"An error occurred during loading graph from input file: {str(e)}", exc_info=True)
         raise
@@ -63,6 +67,15 @@ def main():
     result = compute_dag_execution_time(graph, partition_assignment, verbose=False)
 
     print(f"Execution time: {result['makespan']}")
+
+    partition_assignment_dump = {}
+    for n in solution['hardware_nodes']:
+        partition_assignment_dump[n] = 1
+    for n in solution['software_nodes']:
+        partition_assignment_dump[n] = 0
+    import pickle
+    with open("makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-mip.pkl",'wb') as f:
+        pickle.dump(partition_assignment_dump,f)
 
 
 if __name__ == "__main__":
