@@ -9,6 +9,7 @@ solution-dir: "makespan-opt-partitions"
 result-file-prefix: "makespan_opt"
 output-dir: "outputs"
 taskgraph-dir: "inputs/task_graph_complete"
+taskgraph-pickle: "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
 opt-cost-type: "makespan"
 
 # Random assignment trials
