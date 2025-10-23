@@ -18,7 +18,7 @@ if __name__ == "__main__":
 
 logger = LogManager.get_logger(__name__)
 
-def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int, str], 
+def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int, int], 
                               verbose: bool = False) -> Dict:
     """
     Compute overall execution time for a DAG with given hardware/software partitions
@@ -26,7 +26,7 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
     Args:
         graph: NetworkX directed graph with node attributes (hardware_time, software_time, area_cost)
                and edge attributes (communication_cost)
-        partition_assignment: Dict mapping node_id -> 'hardware' or 'software'
+        partition_assignment: Dict mapping node_id -> 1/0 for 'hardware' or 'software'
         verbose: If True, print detailed execution schedule
         
     Returns:
@@ -46,7 +46,7 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
     for node in graph_nodes:
         if node not in partition_assignment:
             raise ValueError(f"Partition not specified for node {node}")
-        if partition_assignment[node] not in ['hardware', 'software']:
+        if partition_assignment[node] not in [1, 0]:
             raise ValueError(f"Invalid partition '{partition_assignment[node]}' for node {node}")
     
     # Check for extra nodes in partition assignment
@@ -60,7 +60,7 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
             raise ValueError(f"Missing partition assignments for nodes: {missing_nodes}")
     
     # Validate required node attributes
-    required_node_attrs = ['hardware_time', 'software_time', 'area_cost']
+    required_node_attrs = ['hardware_time', 'software_time']
     for node in graph.nodes():
         for attr in required_node_attrs:
             if attr not in graph.nodes[node]:
@@ -74,8 +74,8 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
     # Initialize data structures
     start_times = {}
     finish_times = {}
-    hw_nodes = [node for node in graph_nodes if partition_assignment[node] == 'hardware']
-    sw_nodes = [node for node in graph_nodes if partition_assignment[node] == 'software']
+    hw_nodes = [node for node in graph_nodes if partition_assignment[node] == 1]
+    sw_nodes = [node for node in graph_nodes if partition_assignment[node] == 0]
     
     # Track which nodes have completed execution
     completed_nodes = set()
@@ -87,7 +87,7 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
     
     def get_execution_time(node):
         """Get execution time for a node based on its partition"""
-        if partition_assignment[node] == 'hardware':
+        if partition_assignment[node] == 1:
             return node_hw_times[node]
         else:
             return node_sw_times[node]
@@ -151,7 +151,7 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
         for node in ready_nodes:
             earliest_start = get_earliest_start_time(node)
             if earliest_start is not None:
-                if partition_assignment[node] == 'hardware':
+                if partition_assignment[node] == 1:
                     new_hw_ready.append((node, earliest_start))
                 else:
                     new_sw_ready.append((node, earliest_start))
@@ -299,7 +299,7 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
             for u, v, delay in active_comm_edges:
                 print(f"  ({u} -> {v}): {delay:.2f}")
     
-    return result
+    return result['makespan'], result['start_times']
 
 def compute_dag_makespan(graph: nx.DiGraph, partition_assignment: List[int]) -> Tuple[float, Dict[int, float]]:
     """
@@ -651,11 +651,6 @@ def get_execution_schedule(graph: nx.DiGraph, start_times: Dict[int, float],
     return schedule
 
 
-if __name__ == '__main__':
-    import pickle
-    data_file = "makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-gl25.pkl"
-    with open(data_file, 'rb') as f:
-        data = pickle.load(f)
 """
 Heuristic algorithms for DAG scheduling with mixed hardware/software partitioning.
 """
@@ -937,7 +932,6 @@ def shortest_processing_time_heuristic(graph: nx.DiGraph, partition: Dict[int, i
     
     start_times = {}
     finish_times = {}
-    software_schedule = [None] * len(software_nodes)  # Track software execution slots
     
     # Topologically sort all nodes to respect dependencies
     topo_order = list(nx.topological_sort(graph))
@@ -1028,7 +1022,7 @@ def communication_aware_heuristic(graph: nx.DiGraph, partition: Dict[int, int]) 
         # Process ready hardware nodes immediately
         hardware_ready = [node for node in ready_nodes if partition[node] == 1]
         for node in hardware_ready:
-            earliest_start = current_time
+            earliest_start = 0.0
             for pred in graph.predecessors(node):
                 comm_cost = get_communication_cost(pred, node, partition, graph)
                 pred_finish = finish_times[pred]
@@ -1074,35 +1068,8 @@ def communication_aware_heuristic(graph: nx.DiGraph, partition: Dict[int, int]) 
 
 # Example usage and comparison
 if __name__ == "__main__":
-    # # Create test graph
-    # graph = nx.DiGraph()
-    # graph.add_edges_from([(0, 1), (0, 2), (1, 3), (2, 3), (3, 4)])
-    
-    # # Add node attributes
-    # node_attrs = {
-    #     0: {'hardware_time': 2.0, 'software_time': 5.0},
-    #     1: {'hardware_time': 3.0, 'software_time': 4.0},
-    #     2: {'hardware_time': 1.5, 'software_time': 6.0},
-    #     3: {'hardware_time': 2.5, 'software_time': 3.0},
-    #     4: {'hardware_time': 1.0, 'software_time': 2.0}
-    # }
-    # nx.set_node_attributes(graph, node_attrs)
-    
-    # # Add edge attributes
-    # edge_attrs = {
-    #     (0, 1): {'communication_cost': 1.0},
-    #     (0, 2): {'communication_cost': 0.5},
-    #     (1, 3): {'communication_cost': 1.5},
-    #     (2, 3): {'communication_cost': 1.0},
-    #     (3, 4): {'communication_cost': 0.8}
-    # }
-    # nx.set_edge_attributes(graph, edge_attrs)
-    
-    # # Test partition: 0=software, 1=hardware
-    # partition_assignment = {0: 1, 1: 0, 2: 1, 3: 0, 4: 1}
 
     import pickle
-
     graph_file = "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
     with open(graph_file, 'rb') as f:
         graph_data = pickle.load(f)
@@ -1113,30 +1080,20 @@ if __name__ == "__main__":
     nx.set_node_attributes(graph, graph_data.software_costs, 'software_time')
     nx.set_edge_attributes(graph, graph_data.communication_costs, 'communication_cost')
 
-    partition_assignment = {k: 'hardware' if data[k]==1 else 'software' for k in graph.nodes}
-    t_start = time.time()
-    sol = compute_dag_execution_time(graph, partition_assignment, verbose=False)
-    print(f"Solution: {sol['makespan']}")
-    t_end = time.time()
-    print(f"Execution time computed in {t_end-t_start} seconds")
-
-    t_start = time.time()
-    # the method has been written with software assignment denoted with 1
-    assignment = [1-data[k] for k in graph.nodes]
-    makespan,_ = compute_dag_makespan(graph, assignment)
-    print(f"Solution: {makespan.value}")
-    t_end = time.time()
-    print(f"Execution time computed in {t_end-t_start} seconds")
+    
     data_file = "makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-gl25.pkl"
     with open(data_file, 'rb') as f:
         data = pickle.load(f)
     partition_assignment = {k: data[k] for k in graph.nodes}
+    # partition_assignment = {k: 0 for k in graph.nodes}
+    # print(sum([graph.nodes[n]['software_time'] for n in graph]))
     
     print("Comparing Heuristic Algorithms:")
     print("=" * 40)
     
     # Test all heuristics
     heuristics = [
+        ("Compute DAG Execution", compute_dag_execution_time),
         ("Event-Driven", event_driven_heuristic),
         ("Critical Path List", critical_path_list_scheduling),
         ("Shortest Processing Time", shortest_processing_time_heuristic),
@@ -1153,34 +1110,3 @@ if __name__ == "__main__":
             print(f"Solved in {time.time() - ts} seconds")
         except Exception as e:
             print(f"\n{name}: Error - {e}")
-
-
-# if __name__ == '__main__':
-#     import pickle
-#     data_file = "makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-gl25.pkl"
-#     with open(data_file, 'rb') as f:
-#         data = pickle.load(f)
-
-#     graph_file = "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
-#     with open(graph_file, 'rb') as f:
-#         graph_data = pickle.load(f)
-    
-#     graph = graph_data.graph
-#     nx.set_node_attributes(graph, graph_data.hardware_area, 'area_cost')
-#     nx.set_node_attributes(graph, graph_data.hardware_costs, 'hardware_time')
-#     nx.set_node_attributes(graph, graph_data.software_costs, 'software_time')
-#     nx.set_edge_attributes(graph, graph_data.communication_costs, 'communication_cost')
-
-#     partition_assignment = {k: 'hardware' if data[k]==1 else 'software' for k in graph.nodes}
-#     t_start = time.time()
-#     sol = compute_dag_execution_time(graph, partition_assignment, verbose=False)
-#     print(f"Solution: {sol['makespan']}")
-#     t_end = time.time()
-#     print(f"Execution time computed in {t_end-t_start} seconds")
-
-#     t_start = time.time()
-#     # the method has been written with software assignment denoted with 1
-#     assignment = [1-data[k] for k in graph.nodes]
-#     compute_dag_makespan(graph, assignment)
-#     t_end = time.time()
-#     print(f"Execution time computed in {t_end-t_start} seconds")
