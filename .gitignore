@@ -8,7 +8,7 @@
 *.sbatch
 *.pkl
 *.dot
-
+token.txt
 # Directories
 *slurm_logs/*
 *Figures/*
@@ -30,7 +30,7 @@ configs/*.yaml
 !configs/config_mkspan_default.yaml
 !configs/*.yaml
 #!*partitions/*.pkl
-#!inputs/task_graph_complete/*.pkl
+!inputs/task_graph_complete/*.pkl
 
 # DS_Store
 *.DS_Store
