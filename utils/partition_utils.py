@@ -235,7 +235,7 @@ class ScheduleConstPartitionSolver:
             # Original O(n²) approach with binary ordering variables
             Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering
             
-            print(f"Adding {self.n_nodes*(self.n_nodes-1)} software sequencing constraints (full pairwise)")
+            logger.info(f"Adding {self.n_nodes*(self.n_nodes-1)} software sequencing constraints (full pairwise)")
             for i in range(self.n_nodes):
                 for j in range(self.n_nodes):
                     if i != j:
