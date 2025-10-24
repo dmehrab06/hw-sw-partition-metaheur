@@ -42,8 +42,12 @@ def parse_arguments() -> DictConfig:
                        help='Hardware scale variance (should be positive)')
     parser.add_argument('--comm-scale-factor', type=float,
                        help='Communication scale factor (should be positive)')
-    parser.add_argument('--seed', type=int, default=42,
+    parser.add_argument('--seed', type=int,
                        help='Random seed for reproducibility')
+    
+    # Add solver tool argument
+    parser.add_argument('-t', '--solver-tool', type=str, choices=['cvxpy', 'cuopt'], default='cvxpy',
+                       help='Solver tool to use for optimization')
     
     args = parser.parse_args()
 
