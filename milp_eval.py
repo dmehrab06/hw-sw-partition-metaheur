@@ -67,16 +67,24 @@ def main():
         partition_assignment[n] = 0
     
     # Compute execution time
-    result = compute_dag_execution_time(graph, partition_assignment, verbose=False)
-    logger.info(f"Execution time: {result['makespan']}")
+    makespan,_ = compute_dag_execution_time(graph, partition_assignment, verbose=False)
+    logger.info(f"Execution time: {makespan}")
     
+    from pathlib import Path
     import pickle
     area_constraint_str = f"{config['area-constraint']:.2f}"
     hwscale_str = f"{config['hw-scale-factor']:.1f}"
     hwvar_str = f"{config['hw-scale-variance']:.2f}"
-    comm_str = f"{config['comm-scale-factor']:.2f}"
     seed_str = f"{config['seed']}"
-    with open(f"makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-{area_constraint_str}_hwscale-{hwscale_str}_hwvar-{hwvar_str}_comm-{comm_str}_seed-{seed_str}_assignment-mip.pkl",'wb') as f:
+    output_dir = f"{config['solution-dir']}"
+    
+    dir = Path(output_dir)
+    if not dir.exists():
+        dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(dir, 0o777)
+
+    logger.info(f"Saving partitions as pickle file in {output_dir}")
+    with open(f"{output_dir}/taskgraph-squeeze_net_tosa_area-{area_constraint_str}_hwscale-{hwscale_str}_hwvar-{hwvar_str}_seed-{seed_str}_assignment-mip.pkl",'wb') as f:
         pickle.dump(partition_assignment,f)
 
 

@@ -21,6 +21,7 @@ partitions/*
 *clr*
 *obsolete*/*
 configs/*.yaml
+configs/mip_config
 
 # Cache directories
 **__pycache__
