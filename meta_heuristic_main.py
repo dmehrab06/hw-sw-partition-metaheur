@@ -165,21 +165,20 @@ def main():
             logger.info('='*50)
             logger.info(f'STARTING {method_name.upper()} OPTIMIZATION')
             logger.info('='*50)
-            
+            TG.set_opt_heuristic('nope')
             if method_name == 'pso':
-                func_to_optimize = (TG.optimize_swarm_makespan if config['opt-cost-type']=='makespan' 
-                                    else (TG.optimize_swarm_makespan_mip if config['opt-cost-type']=='mip' else TG.optimize_swarm))
+                func_to_optimize = (TG.optimize_swarm if config['opt-cost-type']=='arato' else TG.optimize_swarm_heur)
             elif method_name in ['random','dbpso']:
-                func_to_optimize = (TG.optimize_random_makespan if config['opt-cost-type']=='makespan' 
-                                   else (TG.optimize_random_makespan_mip if config['opt-cost-type']=='mip' else TG.optimize_random))
+                func_to_optimize = (TG.optimize_random if config['opt-cost-type']=='arato' else TG.optimize_random_heur)
             else:
-                func_to_optimize = (TG.optimize_single_point_makespan if config['opt-cost-type']=='makespan' 
-                                    else (TG.optimize_single_point_makespan_mip if config['opt-cost-type']=='mip' else TG.optimize_single_point))
-
+                func_to_optimize = (TG.optimize_single_point if config['opt-cost-type']=='arato' else TG.optimize_single_point_heur) 
+            
             logger.info(f"{method_name.upper()} will optimize function {getattr(func_to_optimize,'__name__','didntgetaname')} as black box")
             
+            heur_flag = None if config['opt-cost-type']=='arato' else config['opt-cost-type']
+            
             result = registry.run_method(
-                method_name, N, func_to_optimize, config, TG, naive_opt_func_name = config['opt-cost-type']
+                method_name, N, func_to_optimize, config, TG, naive_opt_func_name = config['opt-cost-type'], set_task_graph_heuristic=heur_flag
             )
             
             logger.info(f"{method_name.upper()} Result: {result.best_optimization_cost:.4f}")

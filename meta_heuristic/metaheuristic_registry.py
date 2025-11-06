@@ -34,23 +34,23 @@ class MethodRegistry:
         self.methods[name] = {'func': func, 'kwargs': kwargs}
     
     def run_method(self, name: str, dim: int, func_to_optimize: Callable, 
-                   config: dict, task_graph=None, naive_opt_func_name='partition') -> MethodResult:
+                   config: dict, task_graph=None, naive_opt_func_name='partition', set_task_graph_heuristic = None) -> MethodResult:
         """Run a registered method and store results"""
         if name not in self.methods:
             raise ValueError(f"Method {name} not registered")
 
         if task_graph is None:
             raise ValueError(f"Cannot run without a task graph")
+
+        if set_task_graph_heuristic is not None:
+            task_graph.set_opt_heuristic(set_task_graph_heuristic)
         
         method_info = self.methods[name]
         func = method_info['func']
         kwargs = method_info['kwargs']
 
         # get a naive solution first
-        if naive_opt_func_name=='partition':
-            best_cost, partition = task_graph.get_naive_solution()
-        else:
-            best_cost, partition = task_graph.get_naive_solution_makespan()
+        best_cost, partition = task_graph.get_naive_solution()
             
         logger.info(f"naive assignment has a opt_cost of {best_cost}")
 
@@ -65,7 +65,7 @@ class MethodRegistry:
             best_cost = opt_cost
             partition = task_graph.get_partitioning(opt_solution, method=name)
                
-        makespan = task_graph.evaluate_makespan(partition)['makespan']
+        makespan = task_graph.evaluate_makespan(partition)
         partition_cost = task_graph.evaluate_partition_cost(partition)
         
         # Store result
@@ -87,7 +87,7 @@ class MethodRegistry:
                          task_graph=None, timing_info = 0.0) -> MethodResult:
         """Add a result from a method that doesn't follow the standard interface (like greedy)"""
         partition = task_graph.get_partitioning(best_solution, method=name)
-        makespan = task_graph.evaluate_makespan(partition)['makespan']
+        makespan = task_graph.evaluate_makespan(partition)
         partition_cost = task_graph.evaluate_partition_cost(partition)
         
         result = MethodResult(

@@ -9,7 +9,7 @@ solution-dir: "arato-opt-partitions"
 result-file-prefix: "arato_opt"
 output-dir: "outputs"
 taskgraph-dir: "inputs/task_graph_complete"
-opt-cost-type: "partition"
+opt-cost-type: "arato"
 
 # Random assignment trials
 random:

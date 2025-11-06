@@ -37,7 +37,7 @@ jade:
   iter: 10000
   n_individuals: 500
   verbose: 500
-opt-cost-type: partition
+opt-cost-type: arato
 output-dir: outputs
 pso:
   c1: 0.575
@@ -49,7 +49,7 @@ pso:
 random:
   num_samples: 500
   p: 0.5
-result-file-prefix: arato_opt
+result-file-prefix: arato-opt
 seed: 2
 shade:
   iter: 10000

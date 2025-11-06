@@ -1,0 +1,59 @@
+area-constraint: 0.5
+ccpso:
+  c: 1
+  group_sizes:
+  - 5
+  - 10
+  - 20
+  iterations: 200
+  n_individuals: 500
+  verbose: 500
+clpso:
+  c: 1
+  iterations: 200
+  n_individuals: 500
+  verbose: 500
+comm-scale-factor: 1.0
+dbpso:
+  c1: 0.575
+  c2: 0.1
+  iterations: 10
+  k: 4
+  n_particles: 500
+  p: 2
+  verbose: true
+  w: 1.05
+esa:
+  iter: 1000
+  verbose: 500
+gl25:
+  iter: 2000
+  n_pop: 500
+  verbose: 500
+graph-file: inputs/task_graph_topology/soda-benchmark-graphs/pytorch-graphs/squeeze_net_tosa.dot
+hw-scale-factor: 0.9
+hw-scale-variance: 0.5
+jade:
+  iter: 2000
+  n_individuals: 500
+  verbose: 500
+opt-cost-type: makespan
+output-dir: outputs
+pso:
+  c1: 0.575
+  c2: 0.1
+  iterations: 10
+  n_particles: 500
+  verbose: true
+  w: 1.05
+random:
+  num_samples: 500
+  p: 0.5
+result-file-prefix: makespan-opt
+seed: 3
+shade:
+  iter: 2000
+  n_individuals: 500
+  verbose: 500
+solution-dir: makespan-opt-partitions
+taskgraph-dir: inputs/task_graph_complete

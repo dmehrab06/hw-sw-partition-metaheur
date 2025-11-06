@@ -21,8 +21,12 @@ partitions/*
 *clr*
 *obsolete*/*
 configs/*.yaml
+<<<<<<< HEAD
 configs/mip_config
 
+=======
+report.log*
+>>>>>>> 8db5171 (added other heuristic objective functions, result generated, TaskGraph Class modified, registry updated)
 # Cache directories
 **__pycache__
 **.ipynb_checkpoints

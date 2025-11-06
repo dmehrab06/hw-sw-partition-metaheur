@@ -4,7 +4,7 @@ import numpy as np
 import cvxpy as cp
 import os, sys
 import time
-
+print_flag = False
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(current_dir)
@@ -32,6 +32,7 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
     Returns:
         Dict containing execution details including makespan, start times, finish times
     """
+    #print('calling dag_execution_time')
     if not isinstance(graph, nx.DiGraph):
         raise ValueError("Graph must be a NetworkX DiGraph")
     
