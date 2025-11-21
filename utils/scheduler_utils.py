@@ -11,6 +11,7 @@ if __name__ == "__main__":
     sys.path.append(parent_dir)
 
 from utils.logging_utils import LogManager
+from utils.partition_utils import ScheduleConstPartitionSolver
 
 # Set up logging
 if __name__ == "__main__":
@@ -301,7 +302,7 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
     
     return result['makespan'], result['start_times']
 
-def compute_dag_makespan(graph: nx.DiGraph, partition_assignment: List[int]) -> Tuple[float, Dict[int, float]]:
+def compute_dag_makespan(graph: nx.DiGraph, partition_assignment: Dict[int,int]) -> Tuple[float, Dict[int, float]]:
     """
     Compute optimal makespan for DAG execution with hardware/software partitioning using linear programming.
     
@@ -335,43 +336,20 @@ def compute_dag_makespan(graph: nx.DiGraph, partition_assignment: List[int]) -> 
         RuntimeError: If LP optimization fails
     """
     
-    # Extract timing information from graph
-    hw_times, sw_times, comm_delays, node_to_index = _extract_timing_from_graph(graph)
-    n_nodes = len(hw_times)
-    assignment = np.array(partition_assignment)
+    solver = ScheduleConstPartitionSolver(graph=graph)
+    solution = solver.solve_optimization(
+        A_max=np.sum(solver.a), 
+        partition_assignment=partition_assignment, 
+        use_reduced_sw_constraints=False
+        )
     
-    # Validate inputs
-    if len(assignment) != n_nodes:
-        raise ValueError(f"Partition assignment length ({len(assignment)}) doesn't match number of nodes ({n_nodes})")
-    
-    logger.debug(f"Computing optimal makespan for DAG with {n_nodes} nodes")
-    logger.debug(f"Hardware nodes: {np.sum(assignment == 0)}, Software nodes: {np.sum(assignment == 1)}")
-    
-    # Step 1: Determine execution times and communication costs based on partition
-    exec_times, comm_costs = _compute_timing_parameters(assignment, hw_times, sw_times, comm_delays)
-    
-    # Step 2: Formulate CVXPY problem
-    start_times, makespan, problem = _formulate_cvxpy_problem(graph, assignment, exec_times, comm_costs, node_to_index)
-    
-    # Step 3: Solve the optimization problem
-    logger.debug("Solving linear programming problem with CVXPY...")
-    problem.solve(solver=cp.CLARABEL, verbose=False)
-    
-    if problem.status not in ["infeasible", "unbounded"]:
-        if problem.status != "optimal":
-            logger.warning(f"Solver status: {problem.status}")
-    else:
-        logger.error(f"Optimization failed with status: {problem.status}")
-        raise RuntimeError(f"LP optimization failed with status: {problem.status}")
-    
-    # Step 4: Extract solution
-    optimal_makespan = makespan.value
-    start_times_dict = {node: start_times[node_to_index[node]].value for node in graph.nodes()}
-    
-    logger.debug(f"Optimal makespan computed: {optimal_makespan:.4f}")
-    
-    # Validate solution
-    # _validate_solution(graph, start_times_dict, assignment, exec_times, comm_costs, optimal_makespan, node_to_index)
+    optimal_makespan = solution['makespan']
+    start_times_dict = solution['start_times']
+
+    hw_nodes = sorted(solution['hardware_nodes'])
+    hw_nodes_set = sorted([n for n in partition_assignment if partition_assignment[n]==1])
+    print(hw_nodes)
+    print(hw_nodes_set)
     
     return optimal_makespan, start_times_dict
 
@@ -1094,10 +1072,11 @@ if __name__ == "__main__":
     # Test all heuristics
     heuristics = [
         ("Compute DAG Execution", compute_dag_execution_time),
-        ("Event-Driven", event_driven_heuristic),
-        ("Critical Path List", critical_path_list_scheduling),
-        ("Shortest Processing Time", shortest_processing_time_heuristic),
-        ("Communication-Aware", communication_aware_heuristic)
+        ("Optimal DAG Execution", compute_dag_makespan),
+        # ("Event-Driven", event_driven_heuristic),
+        # ("Critical Path List", critical_path_list_scheduling),
+        # ("Shortest Processing Time", shortest_processing_time_heuristic),
+        # ("Communication-Aware", communication_aware_heuristic)
     ]
     
     for name, heuristic_func in heuristics:
