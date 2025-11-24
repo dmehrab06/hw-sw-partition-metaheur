@@ -1,0 +1,11 @@
+graph-file: inputs/task_graph_topology/soda-benchmark-graphs/pytorch-graphs/squeeze_net_tosa.dot
+taskgraph-pickle: inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_arato_area_0.7_hw_0.1_seed_3.pkl
+
+area-constraint: 0.7
+hw-scale-factor: 0.1
+seed: 3
+
+hw-scale-variance: 0.5
+comm-scale-factor: 1.0
+
+solution-dir: mip-opt-partitions
