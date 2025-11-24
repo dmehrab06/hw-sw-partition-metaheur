@@ -387,7 +387,6 @@ def load_and_process_results(hw, area, seeds, config_type, solution_dir,
     # Dictionary to store results: {method_name: [makespan1, makespan2, ...]}
     results_by_method = defaultdict(list)
     naive_makespans = []
-    
     # Process each seed
     for seed in seeds:
         print(f"\n=== Processing seed {seed} ===")
@@ -419,6 +418,16 @@ def load_and_process_results(hw, area, seeds, config_type, solution_dir,
         solution_prefix = (f'taskgraph-squeeze_net_tosa_area-{area:.2f}_hwscale-{hw:.1f}_'
                           f'hwvar-0.50_comm-1.00_seed-{seed}_assignment')
         
+        
+        # Code added for MIP method
+        mip_solution_file = f'mip-opt-partitions/taskgraph-squeeze_net_tosa_area-{area:.2f}_hwscale-{hw:.1f}_hwvar-0.50_seed-{seed}_assignment-mip.pkl'
+        with open(mip_solution_file, 'rb') as file:
+            print(f"  Processing mip solution: {mip_solution_file}")
+            partition = pickle.load(file)
+            #assignment = {k : 1 - partition[k] for k in graph.nodes}
+            makespan = task_graph.evaluate_makespan(partition)['makespan']
+            results_by_method['MIP'].append(makespan)
+        
         for sol in os.listdir(solution_dir):
             if sol.startswith(solution_prefix):
                 print(f"  Processing: {sol}")
@@ -434,6 +443,8 @@ def load_and_process_results(hw, area, seeds, config_type, solution_dir,
                     makespan = task_graph.evaluate_makespan(partition)['makespan']
                     # Store result
                     results_by_method[method_name].append(makespan)
+
+        
     
     # Compute statistics
     methods = []
@@ -454,7 +465,7 @@ def load_and_process_results(hw, area, seeds, config_type, solution_dir,
     print(f"\nAll SW Assignment:")
     print(f"  Makespans: {naive_makespans}")
     print(f"  Mean: {naive_mean:.2f}, Std: {naive_std:.2f}")
-    
+
     # Find best method
     if mean_makespans:
         best_mean_makespan = min(mean_makespans)
