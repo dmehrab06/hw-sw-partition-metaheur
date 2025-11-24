@@ -2,7 +2,7 @@
 for area in 0.1 0.3 0.5 0.7 0.9; do
     for hw in 0.1 0.3 0.5 0.7 0.9; do
         for seed in 0 1 2 3; do
-            config=configs/config_mip_area_${area}_hw_${hw}_seed_${seed}.yaml
+            config=configs/mip_config/config_mip_area_${area}_hw_${hw}_seed_${seed}.yaml
 
             echo "#!/bin/bash">>run_cvxpy.sbatch
             echo "#SBATCH --output='slurm_outputs/cp_%j.out'">>run_cvxpy.sbatch
