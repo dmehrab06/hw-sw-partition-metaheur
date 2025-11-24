@@ -21,7 +21,6 @@ if __name__ == "__main__":
     sys.path.append(parent_dir)
 
 from utils.logging_utils import LogManager
-from meta_heuristic.task_graph import TaskGraph
 
 # Set up logging
 if __name__ == "__main__":
@@ -34,19 +33,27 @@ class ScheduleConstPartitionSolver:
     Schedule Constrained Hardware-Software Partitioning Solver using MILP formulation
     """
     
-    def __init__(self):
-        self.graph = None
-        self.n_nodes = 0
-        self.n_edges = 0
-        self.edge_list = []
+    def __init__(self, graph:nx.DiGraph=None):
+        if not graph:
+            self.graph = None
+            self.n_nodes = 0
+            self.n_edges = 0
+            self.edge_list = []
+            
+            # Problem matrices and vectors
+            self.h = None  # hardware execution times
+            self.s = None  # software execution times  
+            self.a = None  # hardware area costs
+            self.c = None  # communication costs
+            self.S_source = None  # source selection matrix
+            self.S_target = None  # target selection matrix
         
-        # Problem matrices and vectors
-        self.h = None  # hardware execution times
-        self.s = None  # software execution times  
-        self.a = None  # hardware area costs
-        self.c = None  # communication costs
-        self.S_source = None  # source selection matrix
-        self.S_target = None  # target selection matrix
+        else:
+            self.graph = graph
+            self.n_nodes = len(self.graph.nodes())
+            self.n_edges = self.graph.number_of_edges()
+            self.edge_list = list(self.graph.edges())
+            self._create_problem_matrices()
         
         # Solution
         self.x_sol = None  # partition assignment
@@ -79,7 +86,7 @@ class ScheduleConstPartitionSolver:
         logger.info(f"Created DAG with {self.n_nodes} nodes and {self.n_edges} edges")
         return self.graph
     
-    def populate_graph_with_attributes(self, data:TaskGraph):
+    def populate_graph_with_attributes(self, data):
         self.graph = data.graph
         # node/edge attributes
         nx.set_node_attributes(self.graph, data.hardware_area, 'area_cost')
@@ -172,7 +179,7 @@ class ScheduleConstPartitionSolver:
         
         logger.info("Problem matrices and vectors created successfully")
     
-    def solve_optimization(self, A_max: float, big_M: float = 1000, use_reduced_sw_constraints=True) -> Dict:
+    def solve_optimization(self, A_max: float, big_M: float = 1000, use_reduced_sw_constraints=True, partition_assignment:dict=None) -> Dict:
         """
         Solve the hardware-software partitioning optimization problem
         
@@ -180,6 +187,9 @@ class ScheduleConstPartitionSolver:
             A_max: Maximum hardware area constraint
             big_M: Big-M constant for logical constraints
             use_reduced_sw_constraints: flag to reduce SW sequence constraints through topological ordering
+            partition_assignment (dict): dictionary of partition assignments, if only solving scheduling problem. Default is None 
+            
+            !!!IMPORTANT: Note that the convention used in partition assignment dictionary is opposite. HW is 1, SW is 0
             
         Returns:
             Dictionary containing solution details
@@ -247,6 +257,18 @@ class ScheduleConstPartitionSolver:
         # 6. Makespan definition
         for i in range(self.n_nodes):
             constraints.append(T >= f[i])
+
+        # Special constraints for known partitions
+        if partition_assignment:
+            logger.info("Adding additional constraints to set binary variables.")
+            for i,n in enumerate(self.node_list):
+                constraints.append(x[i] == 1 - partition_assignment[n])
+            for k,e in enumerate(self.edge_list):
+                src_node, dst_node = e
+                if partition_assignment[src_node] == partition_assignment[dst_node]:
+                    constraints.append(z[k] == 0)
+                else:
+                    constraints.append(z[k] == 1)
         
         # Solve the problem
         problem = cp.Problem(objective, constraints)
