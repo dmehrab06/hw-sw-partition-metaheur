@@ -1,0 +1,77 @@
+name: combopt
+channels:
+  - pyg
+  - gurobi
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10.14
+  - pip=24.2
+
+  # Core GPU stack (CUDA 11.8 + PyTorch)
+  - pytorch=2.2.2=py3.10_cuda11.8_cudnn8.7.0_0
+  - pytorch-cuda=11.8
+  - torchvision=0.17.2
+  - torchaudio=2.2.2
+  - torchdata=0.7.1
+  - pyg=2.5.2=py310_torch_2.2.0_cu118
+  - pytorch-cluster=1.6.3=py310_torch_2.2.0_cu118
+  - pytorch-scatter=2.1.2=py310_torch_2.2.0_cu118
+  - pytorch-sparse=0.6.18=py310_torch_2.2.0_cu118
+
+  # Optimization / solver
+  - gurobi=11.0.3
+
+  # Numerics / Sci stack
+  - numpy=1.26.4
+  - scipy=1.13.1
+  - scikit-learn=1.5.1
+  - pandas=2.2.2
+  - mkl
+
+  # Plotting / Notebooks
+  - matplotlib=3.9.2
+  - ipykernel
+  - ipython
+  - notebook
+
+  # PyTorch Lightning
+  - lightning=2.4.0
+  - lightning-utilities=0.11.6
+
+  # Misc dependencies often required
+  - packaging=24.1
+  - typing_extensions=4.11.0
+  - tqdm=4.66.4
+
+  - pip:
+      # Graph / ML extras
+      # - dgl==2.4.0          # install from CUDA wheel below
+      - ogb==1.3.6
+      - hydra-core==1.1.0
+      - hydra-submitit-launcher==1.2.0
+      - performer-pytorch==1.1.4
+      - local-attention==1.9.14
+      - axial-positional-embedding==0.2.1
+      - einops==0.8.0
+      - yacs==0.1.8
+
+      # Optimization / quantum extras
+      - dimod==0.12.16
+      - dwave-networkx==0.8.15
+
+      # Utilities
+      - wandb==0.17.7
+      - visdom==0.2.4
+      - loguru==0.7.2
+      - gputil==1.4.0
+      - submitit==1.5.2
+      - psutil==5.9.0
+      - requests==2.32.3
+      - protobuf==5.27.3
+      - PyYAML==6.0.1
+      - setuptools==72.1.0
+      - wheel==0.43.0

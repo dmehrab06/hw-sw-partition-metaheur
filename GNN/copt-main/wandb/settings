@@ -1,0 +1,5 @@
+[default]
+entity = siddhartha047-purdue-university
+project = hw-sw-partitioning
+base_url = https://api.wandb.ai
+

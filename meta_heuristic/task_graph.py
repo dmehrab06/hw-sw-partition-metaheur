@@ -178,7 +178,84 @@ class TaskGraph:
             return self.violation_cost
         else:
             return cost
+    
+    #--------------------
+    #Side note: The following methods are designed to work with various optimization algorithms
+    def optimize_gcomopt(self, assignment_candidates):
+        """
+        Evaluate costs for a batch of GNN-produced assignment scores.
+        Converts scores to binary placement using threshold 0.5 and returns
+        partition cost via evaluate_partition_cost.
+        """
+        assert assignment_candidates.shape[1] == len(self.software_costs), \
+            f"Dimension {assignment_candidates.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
 
+        # If inputs look like logits or are outside [0,1], convert with sigmoid
+        if np.any(assignment_candidates < 0) or np.any(assignment_candidates > 1):
+            probs = 1.0 / (1 + np.exp(-assignment_candidates))
+        else:
+            probs = assignment_candidates
+
+        all_costs = []
+        for assignment in probs:
+            solution = {node: (0 if assignment[self.node_to_num[node]] < 0.5 else 1)
+                        for node in self.graph.nodes()}
+            all_costs.append(self.evaluate_partition_cost(solution))
+
+        return np.array(all_costs)
+
+    def optimize_gcomopt_makespan(self, assignment_candidates):
+        """
+        Evaluate makespan for GNN-produced assignment scores.
+        Converts scores to binary placement using threshold 0.5 and returns makespan.
+        """
+        assert assignment_candidates.shape[1] == len(self.software_costs), \
+            f"Dimension {assignment_candidates.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+
+        if np.any(assignment_candidates < 0) or np.any(assignment_candidates > 1):
+            probs = 1.0 / (1 + np.exp(-assignment_candidates))
+        else:
+            probs = assignment_candidates
+
+        all_costs = []
+        for assignment in probs:
+            solution = {node: (0 if assignment[self.node_to_num[node]] < 0.5 else 1)
+                        for node in self.graph.nodes()}
+            all_costs.append(self.evaluate_makespan(solution)['makespan'])
+
+        return np.array(all_costs)
+
+    def optimize_gcomopt_makespan_mip(self, assignment_candidates):
+        """
+        Evaluate makespan via MIP path for GNN-produced scores.
+        Converts scores to binary placement using threshold 0.5. If area constraint
+        is violated returns violation_cost, otherwise computes makespan via compute_dag_makespan.
+        """
+        assert assignment_candidates.shape[1] == len(self.software_costs), \
+            f"Dimension {assignment_candidates.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+
+        if np.any(assignment_candidates < 0) or np.any(assignment_candidates > 1):
+            probs = 1.0 / (1 + np.exp(-assignment_candidates))
+        else:
+            probs = assignment_candidates
+
+        all_costs = []
+        for assignment in probs:
+            solution = {node: (0 if assignment[self.node_to_num[node]] < 0.5 else 1)
+                        for node in self.graph.nodes()}
+            violation = self.violates(solution)
+            if violation:
+                all_costs.append(self.violation_cost)
+            else:
+                mip_assignment = [1 - solution[k] for k in self.rounak_graph]
+                makespan, _ = compute_dag_makespan(self.rounak_graph, mip_assignment)
+                all_costs.append(makespan)
+
+        return np.array(all_costs)
+
+    #--------------------
+
+    
     def optimize_swarm(self, swarms):
         """
         Evaluate costs for a batch of particle swarm solutions.
