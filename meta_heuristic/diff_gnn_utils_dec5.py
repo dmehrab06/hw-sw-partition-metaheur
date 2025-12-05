@@ -199,7 +199,7 @@ def _differentiable_makespan_loss(
         total_area = 1.0
 
     exec_time = probs_tensor * hw_times + (1.0 - probs_tensor) * sw_times  # (N,)
-    print(probs_tensor)
+    # print(probs_tensor)
 
     # prepare predecessors list according to TG.graph topological order
     G = TG.graph
