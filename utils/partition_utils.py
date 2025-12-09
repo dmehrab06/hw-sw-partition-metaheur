@@ -380,7 +380,7 @@ class ScheduleConstPartitionSolver:
     
     def _get_software_constraint_pairs_with_levels(self):
         """
-        Alternative approach: Find constraint pairs by analyzing nodes at the same DAG level.
+        Find constraint pairs by analyzing nodes at the same DAG level.
         
         Nodes at the same level (same distance from sources) have no dependencies between
         them and could execute simultaneously. We need constraints between all such pairs.
