@@ -41,47 +41,34 @@ class DiffGNN(nn.Module):
         h = F.relu(self.conv1(x, edge_index))
         h = F.relu(self.conv2(h, edge_index))
         logits = self.lin(h).squeeze(-1)  # (N,)
-        # produce two-class logits for gumbel_softmax (class0=software, class1=hardware)
+        # produce two-class logits (class0=software, class1=hardware)
         logits2 = torch.stack([-logits, logits], dim=1)  # (N,2)
         return logits2
 
 
-def _gumbel_soft_assignment(logits2, temperature, hard):
-    """
-    Map continuous logits to a relaxed one-hot assignment using the Gumbel-Softmax trick.
-    Returns both the two-class probabilities and the hardware probability column.
-    """
-    relaxed = F.gumbel_softmax(logits2, tau=temperature, hard=hard, dim=1)
-    return relaxed, relaxed[:, 1]
-
-
-def _relaxed_binary_assignment(logits2, temperature, hard, sampler="sigmoid", logit_scale=1.0, center_logits=False):
+def _relaxed_binary_assignment(logits2, temperature, hard, sampler="soft", logit_scale=1.0, center_logits=False):
     """
     Flexible relaxed binary sampler:
-      - sampler='sigmoid': independent Bernoulli via sigmoid (allows multiple entries near 1)
-      - sampler='gumbel':  two-class gumbel-softmax (one-hot)
-      - sampler='hard_ste': deterministic hard 0/1 with straight-through gradients
+      - sampler='soft' or 'sigmoid': independent Bernoulli via sigmoid (probabilities in (0,1))
+      - sampler='hard': deterministic 0/1 with straight-through gradients
     logit_scale rescales logits before sampling; center_logits subtracts mean (per-batch).
     """
-    sampler = (sampler or "sigmoid").lower()
-    force_hard = sampler == "hard_ste"
-    if force_hard:
-        sampler = "sigmoid"  # reuse sigmoid path but enforce hard straight-through output
+    sampler_in = (sampler or "soft").lower()
+    if sampler_in not in ("soft", "sigmoid", "hard"):
+        raise ValueError(f"Unsupported sampler '{sampler_in}'. Use 'soft' or 'hard'.")
 
-    if sampler == "sigmoid":
-        logit_hw = logits2[:, 1]
-        if center_logits:
-            logit_hw = logit_hw - logit_hw.mean()
-        logit_hw = logit_hw * float(logit_scale)
-        prob_hw = torch.sigmoid(logit_hw / max(temperature, 1e-6))
-        if hard or force_hard:
-            # Straight-through estimator: forward pass is hard 0/1, gradients flow through sigmoid
-            hard_mask = (prob_hw > 0.5).float()
-            prob_hw = hard_mask.detach() + prob_hw - prob_hw.detach()  # straight-through
-        probs2 = torch.stack([1.0 - prob_hw, prob_hw], dim=1)
-        return probs2, prob_hw
-    else:
-        return _gumbel_soft_assignment(logits2, temperature, hard)
+    use_hard = bool(hard) or sampler_in == "hard"
+    logit_hw = logits2[:, 1]
+    if center_logits:
+        logit_hw = logit_hw - logit_hw.mean()
+    logit_hw = logit_hw * float(logit_scale)
+    prob_hw = torch.sigmoid(logit_hw / max(temperature, 1e-6))
+    if use_hard:
+        # Straight-through: forward is 0/1, gradients follow the sigmoid
+        hard_mask = (prob_hw > 0.5).float()
+        prob_hw = hard_mask.detach() + prob_hw - prob_hw.detach()
+    probs2 = torch.stack([1.0 - prob_hw, prob_hw], dim=1)
+    return probs2, prob_hw
 
 
 def _build_torchgeo_data(TG):
@@ -275,11 +262,11 @@ def _differentiable_makespan_loss(
     }
 
 
-def _train_with_gumbel_softmax(TG, model, data, node_list, config, device):
+def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     """
     Differentiable training loop:
         - GNN produces continuous logits
-        - Relaxed sampler produces differentiable assignment (sigmoid by default, gumbel optional)
+        - Relaxed sampler produces differentiable assignment (sigmoid by default, straight-through optional)
         - Surrogate loss penalizes area, communication and makespan
         - Adam optimizer updates the model
     """
@@ -298,10 +285,11 @@ def _train_with_gumbel_softmax(TG, model, data, node_list, config, device):
     partition_cost_coeff = float(config.get("partition_cost_coeff", 1e-2))
     seed = int(config.get("seed", 42))
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 10)))
-    sampler = (config.get("sampling") or config.get("sampler") or "sigmoid").lower()
+    sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
     logit_scale = float(config.get("logit_scale", 8.0))
     center_logits = bool(config.get("center_logits", True))
-    hard_train_outputs = bool(config.get("hard_train_outputs", True))
+    # choose whether to make training assignments hard 0/1 (straight-through) or soft (sigmoid)
+    hard_train_outputs = bool(config.get("hard_train_outputs", sampler == "hard"))
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -310,7 +298,7 @@ def _train_with_gumbel_softmax(TG, model, data, node_list, config, device):
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     logger.info(
-        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s",
+        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s, hard_train_outputs=%s",
         sampler,
         epochs,
         lr,
@@ -321,6 +309,7 @@ def _train_with_gumbel_softmax(TG, model, data, node_list, config, device):
         partition_cost_coeff,
         logit_scale,
         str(center_logits),
+        str(hard_train_outputs),
     )
 
     best_mip_cost = float('inf')
@@ -358,7 +347,7 @@ def _train_with_gumbel_softmax(TG, model, data, node_list, config, device):
         # anneal tau linearly
         tau = max(tau_final, tau_start - (ep / max(1, epochs)) * (tau_start - tau_final))
 
-        # occasional hard evaluation (straight-through gumbel to get discrete assignment)
+        # occasional hard evaluation to get discrete assignment
         if (ep % hard_eval_every == 0) or (ep == epochs):
             model.eval()
             with torch.no_grad():
@@ -440,7 +429,7 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
     Public entry-point for differentiable GNN optimization.
 
     Implements the requested pipeline:
-        - GNN produces continuous values in [0,1] (via relaxed sigmoid by default; set config['sampling']='gumbel' to use gumbel-softmax)
+        - GNN produces continuous values in [0,1] (via relaxed sigmoid by default; set config['sampling']='hard' for straight-through 0/1)
         - Loss is fully differentiable, combining makespan surrogate, area, and entropy penalties
         - Adam performs gradient-based updates
         - Hard assignments are produced only for evaluation; training uses relaxed values
@@ -459,7 +448,7 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
       - partition_cost_coeff: 0.0 (set >0 to penalize expected partition cost directly)
       - seed: 42
       - hard_eval_every: epochs//10
-      - sampling: 'sigmoid' (default) or 'gumbel'
+      - sampling: 'soft' (default) or 'hard'
       - logit_scale: 1.0 (increase to sharpen sigmoid probabilities)
       - center_logits: False (set True to subtract batch mean before sigmoid)
     """
@@ -470,7 +459,7 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
     data, node_list = _build_torchgeo_data(TG)
     data = data.to(device)
     model = DiffGNN(in_channels=data.num_node_features, hidden_dim=int(config.get("hidden_dim", 256)))
-    return _train_with_gumbel_softmax(TG, model, data, node_list, config, device)
+    return _train_with_relaxed_binary(TG, model, data, node_list, config, device)
 
 def get_device(config):
     """
