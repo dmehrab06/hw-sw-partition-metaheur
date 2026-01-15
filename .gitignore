@@ -37,103 +37,114 @@
 # *.DS_Store
 
 
-
-############################################
-# OS / editor / python cruft
-############################################
+################################################################################
+# OS / Editor
+################################################################################
 .DS_Store
-**/__pycache__/
-**/*.pyc
-**/.ipynb_checkpoints/
+*.swp
+*.swo
+.vscode/
+.idea/
 
+################################################################################
+# Python / Jupyter
+################################################################################
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+*.ipynb
 
-############################################
+################################################################################
 # Logs / job outputs
-############################################
+################################################################################
 *.log
 *.out
 *.err
-slurm_outputs/
-*slurm_logs/
-**/slurm_logs/
-**/slurm_outputs/
 report.log
 logs/
-*logs/
+**/logs/
+slurm_logs/
+**/slurm_logs/
+slurm_outputs/
+**/slurm_outputs/
 
-
-############################################
-# Notebooks (optional: you currently ignore)
-############################################
-*.ipynb
-*notebook*
-
-
-############################################
-# Figures / plots / binaries
-############################################
+################################################################################
+# Figures / plots / generated artifacts
+################################################################################
+Figs/
+Figures/
+figures/__pycache__/   # (code cache under your figures package)
 *.png
 *.jpg
 *.jpeg
-*.gif
-*.svg
 *.pdf
-Figs/
-Figures/
-*Figures/
-figures/_build/
 
-
-############################################
-# Experiment tracking / cache
-############################################
+################################################################################
+# Experiment trackers / caches
+################################################################################
 wandb/
 **/wandb/
 pyswarms/
+tmp/
+**/tmp/
+.cache/
+**/.cache/
 
-
-############################################
-# Data + generated results
-############################################
-data/
+################################################################################
+# Data / generated results
+################################################################################
 outputs/
-outputs/**
+data/
+**/data/
 
-
-############################################
-# Partition outputs (large PKLs)
-############################################
+# Your partition outputs (big .pkl collections)
 arato-opt-partitions/
 makespan-opt-partitions/
 partitions/
-partitions/**
+**/partitions/
 
+# Any "obsolete"/scratch dirs
+obsolete/
+**/obsolete/
+notebook*/
+*notebook*
 
-############################################
-# Pickles: ignore by default, but KEEP the input PKLs
-############################################
+################################################################################
+# Large binary formats (common in this repo)
+################################################################################
 *.pkl
-!inputs/task_graph_complete/*.pkl
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npz
 
-
-############################################
-# Graph files (optional)
-############################################
+# Graph / intermediate formats you don't want in git
 *.dot
 
-
-############################################
 # Secrets
-############################################
 token.txt
 
+################################################################################
+# Keep rules (exceptions) — MUST come after the ignores they override
+################################################################################
 
-############################################
-# Configs
-# Keep configs tracked (your repo has lots of YAMLs)
-############################################
+# You explicitly want to keep these PKLs
+!inputs/task_graph_complete/
+!inputs/task_graph_complete/*.pkl
+
+# Keep your configs (track yaml configs)
+!configs/
 !configs/*.yaml
 !configs/config_arato_default.yaml
 !configs/config_mkspan_default.yaml
 !configs/config_mkspan_default_gnn.yaml
-!configs/logging_config.ini
+!configs/config_mkspan_mip_default.yaml
+
+################################################################################
+# Optional: ignore PyTorch Geometric / processed datasets specifically
+# (these are what triggered your GitHub >100MB error)
+################################################################################
+GNN/copt-main/datasets/
+**/datasets/**/processed/
+**/datasets/**/raw/
