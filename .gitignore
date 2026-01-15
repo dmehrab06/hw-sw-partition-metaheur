@@ -1,38 +1,139 @@
-# Common file formats
-*.ipynb
+# # Common file formats
+# *.ipynb
+# *.log
+# *.png
+# *.out
+# *.err
+# *.sh
+# *.sbatch
+# *.pkl
+# *.dot
+# token.txt
+# # Directories
+# *slurm_logs/*
+# *Figures/*
+# slurm_outputs/
+# pyswarms/
+# *logs/*
+# data/*
+# *notebook*
+# partitions/*
+# *clr*
+# *obsolete*/*
+# configs/*.yaml
+# configs/mip_config
+
+# # Cache directories
+# **__pycache__
+# **.ipynb_checkpoints
+
+# !configs/config_arato_default.yaml
+# !configs/config_mkspan_default.yaml
+# !configs/*.yaml
+# #!*partitions/*.pkl
+# !inputs/task_graph_complete/*.pkl
+
+# # DS_Store
+# *.DS_Store
+
+
+
+############################################
+# OS / editor / python cruft
+############################################
+.DS_Store
+**/__pycache__/
+**/*.pyc
+**/.ipynb_checkpoints/
+
+
+############################################
+# Logs / job outputs
+############################################
 *.log
-*.png
 *.out
 *.err
-*.sh
-*.sbatch
-*.pkl
-*.dot
-token.txt
-# Directories
-*slurm_logs/*
-*Figures/*
 slurm_outputs/
-pyswarms/
-*logs/*
-data/*
+*slurm_logs/
+**/slurm_logs/
+**/slurm_outputs/
+report.log
+logs/
+*logs/
+
+
+############################################
+# Notebooks (optional: you currently ignore)
+############################################
+*.ipynb
 *notebook*
-partitions/*
-*clr*
-*obsolete*/*
-configs/*.yaml
-configs/mip_config
 
-# Cache directories
-**__pycache__
-**.ipynb_checkpoints
 
-!configs/config_arato_default.yaml
-!configs/config_mkspan_default.yaml
-!configs/*.yaml
-#!*partitions/*.pkl
+############################################
+# Figures / plots / binaries
+############################################
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+Figs/
+Figures/
+*Figures/
+figures/_build/
+
+
+############################################
+# Experiment tracking / cache
+############################################
+wandb/
+**/wandb/
+pyswarms/
+
+
+############################################
+# Data + generated results
+############################################
+data/
+outputs/
+outputs/**
+
+
+############################################
+# Partition outputs (large PKLs)
+############################################
+arato-opt-partitions/
+makespan-opt-partitions/
+partitions/
+partitions/**
+
+
+############################################
+# Pickles: ignore by default, but KEEP the input PKLs
+############################################
+*.pkl
 !inputs/task_graph_complete/*.pkl
 
-# DS_Store
-*.DS_Store
 
+############################################
+# Graph files (optional)
+############################################
+*.dot
+
+
+############################################
+# Secrets
+############################################
+token.txt
+
+
+############################################
+# Configs
+# Keep configs tracked (your repo has lots of YAMLs)
+############################################
+!configs/*.yaml
+!configs/config_arato_default.yaml
+!configs/config_mkspan_default.yaml
+!configs/config_mkspan_default_gnn.yaml
+!configs/logging_config.ini
