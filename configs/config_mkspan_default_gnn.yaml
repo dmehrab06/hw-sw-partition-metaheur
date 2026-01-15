@@ -10,7 +10,7 @@ result-file-prefix: "makespan_opt_gnn"
 output-dir: "outputs"
 taskgraph-dir: "inputs/task_graph_complete"
 taskgraph-pickle: "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
-opt-cost-type: "makespan"
+opt-cost-type: "mip"
 # opt-cost-type: "mip"
 # opt-cost-type: "default"
 

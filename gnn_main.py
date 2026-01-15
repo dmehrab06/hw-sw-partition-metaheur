@@ -217,7 +217,7 @@ def main():
             logger.info(f"{method_name.upper()} will optimize function {getattr(func_to_optimize,'__name__','didntgetaname')} as black box")
             
             result = registry.run_method(
-                method_name, N, func_to_optimize, config, TG, naive_opt_func_name = config['opt-cost-type']
+                method_name, N, func_to_optimize, config, TG, naivae_opt_func_name = config['opt-cost-type']
             )
             
             logger.info(f"{method_name.upper()} Result: {result.best_optimization_cost:.4f}")
