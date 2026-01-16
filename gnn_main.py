@@ -6,6 +6,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 import pickle
+from pprint import pprint
 
 from utils.logging_utils import LogManager
 print(f"After LogManager - report.log exists: {os.path.exists('report.log')}")
@@ -91,6 +92,8 @@ def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
     result_df = pd.DataFrame.from_dict(result_summary_data)
 
     print(result_df)
+    pprint(result_summary_data)
+    # print(result_summary_data)
     
     # Create outputs directory if it doesn't exist
     os.makedirs(config['output-dir'], exist_ok=True)
@@ -217,7 +220,7 @@ def main():
             logger.info(f"{method_name.upper()} will optimize function {getattr(func_to_optimize,'__name__','didntgetaname')} as black box")
             
             result = registry.run_method(
-                method_name, N, func_to_optimize, config, TG, naivae_opt_func_name = config['opt-cost-type']
+                method_name, N, func_to_optimize, config, TG, naive_opt_func_name = config['opt-cost-type']
             )
             
             logger.info(f"{method_name.upper()} Result: {result.best_optimization_cost:.4f}")

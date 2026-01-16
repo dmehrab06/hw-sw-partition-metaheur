@@ -82,6 +82,9 @@ diffgnn:
     iter: 500
     verbose: 500
     device: "gpu"
+    hidden_dim: 256
+    num_layers: 3
+    dropout: 0.5
 
 gcon:
     iter: 500

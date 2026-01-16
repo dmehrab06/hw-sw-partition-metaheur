@@ -8,7 +8,9 @@ from .ga_utils import simulate_GL25
 from .sa_utils import simulate_ESA
 from .de_utils import simulate_SHADE, simulate_JADE
 from .nondiff_gnn_utils import simulate_nondiff_GNN
-from .diff_gnn_utils import simulate_diff_GNN
+# from .diff_gnn_utils import simulate_diff_GNN
+from .diff_gnn_utils_schedule import simulate_diff_GNN
+
 
 
 def random_assignment(dim, func_to_optimize, config):

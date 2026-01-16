@@ -28,22 +28,78 @@ if __name__ == "__main__":
 logger = LogManager.get_logger(__name__)
 
 
-# Lightweight differentiable GNN for binary partitioning (hardware/software)
+# # Lightweight differentiable GNN for binary partitioning (hardware/software)
+# class DiffGNN(nn.Module):
+#     def __init__(self, in_channels=4, hidden_dim=64):
+#         super().__init__()
+#         self.conv1 = GCNConv(in_channels, hidden_dim)
+#         self.conv2 = GCNConv(hidden_dim, hidden_dim // 2)
+#         self.lin = nn.Linear(hidden_dim // 2, 1)
+
+#     def forward(self, x, edge_index):
+#         """Standard two-layer GCN encoder followed by a single logit per node."""
+#         h = F.relu(self.conv1(x, edge_index))
+#         h = F.relu(self.conv2(h, edge_index))
+#         logits = self.lin(h).squeeze(-1)  # (N,)
+#         # produce two-class logits (class0=software, class1=hardware)
+#         logits2 = torch.stack([-logits, logits], dim=1)  # (N,2)
+#         return logits2
+
 class DiffGNN(nn.Module):
-    def __init__(self, in_channels=4, hidden_dim=64):
+    """
+    Lightweight differentiable GNN for binary partitioning (software vs hardware).
+
+    - num_layers controls how many GCNConv layers are used before the final linear head.
+    - Output is (N, 2) logits: [software_logit, hardware_logit] per node.
+    """
+    def __init__(
+        self,
+        in_channels: int = 4,
+        hidden_dim: int = 64,
+        num_layers: int = 2,
+        dropout: float = 0.0,
+    ):
         super().__init__()
-        self.conv1 = GCNConv(in_channels, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, hidden_dim // 2)
-        self.lin = nn.Linear(hidden_dim // 2, 1)
+        if num_layers < 1:
+            raise ValueError("num_layers must be >= 1")
+
+        self.num_layers = num_layers
+        self.dropout = dropout
+
+        # Build GCN stack
+        convs = []
+        if num_layers == 1:
+            # Single GCN layer directly into a smaller embedding size (like your original conv2 output)
+            convs.append(GCNConv(in_channels, hidden_dim // 2))
+            last_dim = hidden_dim // 2
+        else:
+            # First layer: in -> hidden_dim
+            convs.append(GCNConv(in_channels, hidden_dim))
+            # Middle/last GCN layers: keep same dim until final one reduces to hidden_dim//2
+            for _ in range(num_layers - 2):
+                convs.append(GCNConv(hidden_dim, hidden_dim))
+            convs.append(GCNConv(hidden_dim, hidden_dim // 2))
+            last_dim = hidden_dim // 2
+
+        self.convs = nn.ModuleList(convs)
+        self.lin = nn.Linear(last_dim, 1)
 
     def forward(self, x, edge_index):
-        """Standard two-layer GCN encoder followed by a single logit per node."""
-        h = F.relu(self.conv1(x, edge_index))
-        h = F.relu(self.conv2(h, edge_index))
-        logits = self.lin(h).squeeze(-1)  # (N,)
-        # produce two-class logits (class0=software, class1=hardware)
-        logits2 = torch.stack([-logits, logits], dim=1)  # (N,2)
+        """
+        Returns:
+            logits2: (N, 2) where [:,0]=software logit, [:,1]=hardware logit
+        """
+        h = x
+        for conv in self.convs:
+            h = conv(h, edge_index)
+            h = F.relu(h)
+            if self.dropout > 0:
+                h = F.dropout(h, p=self.dropout, training=self.training)
+
+        logits = self.lin(h).squeeze(-1)              # (N,)
+        logits2 = torch.stack([-logits, logits], 1)   # (N,2)
         return logits2
+
 
 
 def _relaxed_binary_assignment(logits2, temperature, hard, sampler="soft", logit_scale=1.0, center_logits=False):
@@ -186,7 +242,7 @@ def _differentiable_makespan_loss(
         total_area = 1.0
 
     exec_time = probs_tensor * hw_times + (1.0 - probs_tensor) * sw_times  # (N,)
-    print(probs_tensor)
+    # print(probs_tensor)
 
     # prepare predecessors list according to TG.graph topological order
     G = TG.graph
@@ -347,6 +403,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         # anneal tau linearly
         tau = max(tau_final, tau_start - (ep / max(1, epochs)) * (tau_start - tau_final))
 
+        # hard_eval_every = 1 # sid: remove this later
         # occasional hard evaluation to get discrete assignment
         if (ep % hard_eval_every == 0) or (ep == epochs):
             model.eval()
@@ -355,6 +412,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                 _, hard_probs_t = _relaxed_binary_assignment(
                     logits2_eval, temperature=max(tau, 1e-6), hard=True, sampler=sampler, logit_scale=logit_scale, center_logits=center_logits
                 )
+
                 hard_probs = hard_probs_t.cpu().numpy().astype(float)  # 0/1
                 hard_probs_repaired = _repair_candidate(TG, hard_probs, node_list, prefer_by_score=hard_probs)
                 solution = {node_list[i]: int(1 if hard_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
@@ -457,8 +515,21 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
 
     device = torch.device(device)
     data, node_list = _build_torchgeo_data(TG)
+
     data = data.to(device)
-    model = DiffGNN(in_channels=data.num_node_features, hidden_dim=int(config.get("hidden_dim", 256)))
+    num_layers = int(config.get("num_layers", 2))
+    dropout = float(config.get("dropout", 0.5))
+    hidden_dim = int(config.get("hidden_dim", 64))
+
+    model = DiffGNN(
+        in_channels=data.num_node_features,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        dropout=dropout,
+    )
+
+    print(model)
+
     return _train_with_relaxed_binary(TG, model, data, node_list, config, device)
 
 def get_device(config):
