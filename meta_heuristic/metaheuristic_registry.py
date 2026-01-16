@@ -10,6 +10,31 @@ if __name__ == "__main__":
 
 logger = LogManager.get_logger(__name__)
 
+def _normalize_partition(partition: dict):
+    """
+    Accepts:
+      - 0/1
+      - "hardware"/"software" (and "hw"/"sw")
+    Returns a dict node -> 0/1 in the format expected by TaskGraph.evaluate_makespan().
+    Convention used by TaskGraph: 1 = hardware, 0 = software. :contentReference[oaicite:1]{index=1}
+    """
+    out = {}
+    for node, a in partition.items():
+        if a in (0, 1):
+            out[node] = int(a)
+            continue
+        if isinstance(a, str):
+            aa = a.strip().lower()
+            if aa in ("hardware", "hw"):
+                out[node] = 1
+                continue
+            if aa in ("software", "sw"):
+                out[node] = 0
+                continue
+        raise ValueError(f"Invalid partition value for node={node}: {a!r}")
+    return out
+
+
 @dataclass
 class MethodResult:
     """Container for method optimization results"""
@@ -64,7 +89,10 @@ class MethodRegistry:
             logger.info(f"{name.upper()} was able to find better partition than all software partition")
             best_cost = opt_cost
             partition = task_graph.get_partitioning(opt_solution, method=name)
-               
+        
+        print(partition)
+        partition = _normalize_partition(partition)
+        print(partition)
         makespan = task_graph.evaluate_makespan(partition)['makespan']
         partition_cost = task_graph.evaluate_partition_cost(partition)
         
@@ -87,6 +115,9 @@ class MethodRegistry:
                          task_graph=None, timing_info = 0.0) -> MethodResult:
         """Add a result from a method that doesn't follow the standard interface (like greedy)"""
         partition = task_graph.get_partitioning(best_solution, method=name)
+        print(partition)
+        partition = _normalize_partition(partition)
+        print(partition)
         makespan = task_graph.evaluate_makespan(partition)['makespan']
         partition_cost = task_graph.evaluate_partition_cost(partition)
         
