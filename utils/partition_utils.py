@@ -54,6 +54,7 @@ class ScheduleConstPartitionSolver:
             self.n_edges = self.graph.number_of_edges()
             self.edge_list = list(self.graph.edges())
             self._create_problem_matrices()
+            logger.info("Loaded graph and created problem matrices successfully")
         
         # Solution
         self.x_sol = None  # partition assignment
@@ -86,14 +87,43 @@ class ScheduleConstPartitionSolver:
         logger.info(f"Created DAG with {self.n_nodes} nodes and {self.n_edges} edges")
         return self.graph
     
-    def populate_graph_with_attributes(self, data):
-        self.graph = data.graph
+    # def populate_graph_with_attributes(self, data):
+    #     self.graph = data.graph
+    #     # node/edge attributes
+    #     nx.set_node_attributes(self.graph, data.hardware_area, 'area_cost')
+    #     nx.set_node_attributes(self.graph, data.hardware_costs, 'hardware_time')
+    #     nx.set_node_attributes(self.graph, data.software_costs, 'software_time')
+    #     nx.set_edge_attributes(self.graph, data.communication_costs, 'communication_cost')
+    #     return
+
+    def populate_graph_with_attributes(self, graph, hardware_area, hardware_costs, software_costs, communication_costs):
+
+        self.graph = graph
         # node/edge attributes
-        nx.set_node_attributes(self.graph, data.hardware_area, 'area_cost')
-        nx.set_node_attributes(self.graph, data.hardware_costs, 'hardware_time')
-        nx.set_node_attributes(self.graph, data.software_costs, 'software_time')
-        nx.set_edge_attributes(self.graph, data.communication_costs, 'communication_cost')
+        nx.set_node_attributes(self.graph, hardware_area, 'area_cost')
+        nx.set_node_attributes(self.graph, hardware_costs, 'hardware_time')
+        nx.set_node_attributes(self.graph, software_costs, 'software_time')
+        nx.set_edge_attributes(self.graph, communication_costs, 'communication_cost')
         return
+    
+    def load_networkx_graph_with_torch_feats(self, graph, hardware_areas, hardware_costs, software_costs, communication_costs):
+
+        hardware_areas_dict = {i: hwa for i, hwa in enumerate(hardware_areas.tolist())}
+        hardware_costs_dict = {i: hwc for i, hwc in enumerate(hardware_costs.tolist())}
+        software_costs_dict = {i: swc for i, swc in enumerate(software_costs.tolist())}
+        communication_costs_dict = {e: cc for (e, cc) in zip(list(graph.edges),communication_costs.tolist())}
+
+        self.populate_graph_with_attributes(graph, hardware_areas_dict, hardware_costs_dict, software_costs_dict, communication_costs_dict)
+
+        # The above function assigns global class var self.graph
+        self.n_nodes = len(self.graph.nodes())
+        self.n_edges = self.graph.number_of_edges()
+        self.edge_list = list(self.graph.edges())
+
+        # Create problem vectors
+        self._create_problem_matrices()
+        logger.info(f"Created DAG with {self.n_nodes} nodes and {self.n_edges} edges")
+        return self.graph
         
     def load_pydot_graph(self, pydot_file, k=1.5, l=0.2, mu=0.5, A_max=100) -> nx.DiGraph:
         """
