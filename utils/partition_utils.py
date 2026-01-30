@@ -322,8 +322,6 @@ class ScheduleConstPartitionSolver:
         
         # Convert solution back to node IDs
         hw_nodes = [self.node_list[i] for i in range(self.n_nodes) if self.x_sol[i] == 0]
-        print(hw_nodes)
-        print("HERE")
         sw_nodes = [self.node_list[i] for i in range(self.n_nodes) if self.x_sol[i] == 1]
         
         # Sort by start times

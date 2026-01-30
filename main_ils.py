@@ -252,10 +252,10 @@ def solve_dataset_instance_ils(dataset: TaskGraphDataset, idx: int = 0,
     n = len(node_list)
     
     # Extract costs
-    software_costs = node_features[0, :]
-    hardware_areas = node_features[1, :]
-    hardware_costs = node_features[2, :]
-    communication_costs = edge_features[0, :] if edge_features is not None else torch.zeros(len(graph.edges()))
+    software_costs = node_features[0,:]
+    hardware_areas = node_features[1,:]                  #  node_features = torch.cat([sw_computation_cost, hw_area_cost], dim=0)
+    hardware_costs = software_costs*0.5
+    communication_costs = edge_features[0,:]             # only one edge feature
     
     # Create dictionaries
     hardware_areas_dict = {i: hwa for i, hwa in enumerate(hardware_areas.tolist())}

@@ -6,10 +6,22 @@ import matplotlib.pyplot as plt
 import random
 import copy
 from dataclasses import dataclass
+import os
 from typing import Tuple, List, Dict, Optional, Union
 
+if __name__ == "__main__":
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sys.path.append(parent_dir)
+
+from utils.logging_utils import LogManager
 from utils.task_graph_generation import TaskGraphDataset
 
+# Set up logging
+if __name__ == "__main__":
+    LogManager.initialize("logs/csched_test.log")
+
+logger = LogManager.get_logger(__name__)
 
 # Task status constants
 NOT_READY = 0    # Task has predecessors that are not complete
@@ -886,15 +898,15 @@ class CSchedEnv(gym.Env):
         num_ops = self.N_op_batch[batch_idx].item()
 
         # Create a NetworkX DiGraph from the adjacency matrix
-        G = nx.DiGraph()
-        G.add_nodes_from(range(num_ops))
+        G = self.graphs[batch_idx]
+        # G.add_nodes_from(range(num_ops))
 
         # Add edges from the adjacency matrix
-        adj_matrix = self.adj_matrices_batch[batch_idx, :num_ops, :num_ops].cpu().numpy()
-        for i in range(num_ops):
-            for j in range(num_ops):
-                if adj_matrix[i, j] > 0:
-                    G.add_edge(i, j)
+        # adj_matrix = self.adj_matrices_batch[batch_idx, :num_ops, :num_ops].cpu().numpy()
+        # for i in range(num_ops):
+        #     for j in range(num_ops):
+        #         if adj_matrix[i, j] > 0:
+        #             G.add_edge(i, j)
 
         # Create a figure with three subplots: DAG, state info, and Gantt chart
         fig = plt.figure(figsize=(20, 14))
@@ -955,6 +967,7 @@ class CSchedEnv(gym.Env):
 
         # Create node labels with features and status
         labels = {}
+        hw_usage = 0
         for i in range(num_ops):
             sw_cost = self.sw_cost_vec_batch[batch_idx, i].item()
             hw_area = self.hw_area_vec_batch[batch_idx, i].item()
@@ -964,7 +977,14 @@ class CSchedEnv(gym.Env):
 
             # Add resource assignment to label
             resource = self.op_resource_batch[batch_idx, i].item()
-            resource_str = "Not Assigned" if resource == -1 else "SW" if resource == 0 else "HW"
+            if resource == -1:
+                resource_str = "Not Assigned"
+            elif resource == 0:
+                resource_str = "SW"
+                hw_usage += 0
+            else:
+                resource_str = "HW"
+                hw_usage += hw_area
 
             labels[i] = f"{i}\nSW: {sw_cost:.2f}\nHW: {hw_area:.2f}\n{status_str}\nStart: {start_time:.2f}\nResource: {resource_str}"
 
@@ -972,8 +992,8 @@ class CSchedEnv(gym.Env):
 
         # Draw edge labels with communication costs
         edge_labels = {}
-        for i, j in G.edges():
-            comm_cost = self.comm_cost_mat_batch[batch_idx, i, j].item()
+        for i, j, attributes in G.edges(data=True):
+            comm_cost = attributes.get('communication_cost', 0.0)
             edge_labels[(i, j)] = f"{comm_cost:.2f}"
 
         nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, ax=ax1, font_size=8)
@@ -1008,7 +1028,7 @@ class CSchedEnv(gym.Env):
 
         # Create text for state information
         hw_area_limit = self.hw_area_limits_batch[batch_idx].item()
-        hw_usage = self.hw_usage_batch[batch_idx].item()
+        # hw_usage = self.hw_usage_batch[batch_idx].item()
         current_time = self.current_time_batch[batch_idx].item()
         makespan = self.makespan_batch[batch_idx].item()
         sw_busy = self.sw_busy_batch[batch_idx].item()
