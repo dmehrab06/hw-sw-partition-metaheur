@@ -705,18 +705,20 @@ class TaskGraph:
             # Process ready nodes and categorize them
             new_hw_ready = []
             new_sw_ready = []
-            
+
+            # print(partition_assignment)
+
             for node in ready_nodes:
                 earliest_start = get_earliest_start_time(node)
                 
-                print("->",partition_assignment[node])# test logic sid
+                # print("->",partition_assignment[node])# test logic sid
                 
                 if earliest_start is not None:
                     if partition_assignment[node] == 1: # Hardware
-                        print("hw")
+                        # print("hw")
                         new_hw_ready.append((node, earliest_start))
                     else:
-                        print("sw")
+                        # print("sw")
                         new_sw_ready.append((node, earliest_start))
             
             ready_nodes = []

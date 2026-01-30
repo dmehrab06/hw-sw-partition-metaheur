@@ -517,9 +517,9 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
     data, node_list = _build_torchgeo_data(TG)
 
     data = data.to(device)
-    num_layers = int(config.get("num_layers", 2))
+    num_layers = int(config.get("num_layers", 3))
     dropout = float(config.get("dropout", 0.5))
-    hidden_dim = int(config.get("hidden_dim", 64))
+    hidden_dim = int(config.get("hidden_dim", 256))
 
     model = DiffGNN(
         in_channels=data.num_node_features,

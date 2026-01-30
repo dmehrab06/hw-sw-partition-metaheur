@@ -173,7 +173,7 @@ def main():
         # registry.register_method('shade',simulate_SHADE)
         # registry.register_method('jade',simulate_JADE)
         
-        # registry.register_method('gl25', simulate_GL25)
+        registry.register_method('gl25', simulate_GL25)
         
         # Calculate baseline
         very_naive_lower_bound = sum(min(TG.software_costs[node], TG.hardware_costs[node]) 
