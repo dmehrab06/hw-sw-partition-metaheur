@@ -209,7 +209,7 @@ class ScheduleConstPartitionSolver:
         
         logger.info("Problem matrices and vectors created successfully")
     
-    def solve_optimization(self, A_max: float, big_M: float = 1000, use_reduced_sw_constraints=True, partition_assignment:dict=None) -> Dict:
+    def solve_optimization(self, A_max: float, big_M: float = 1000, partition_assignment:dict=None) -> Dict:
         """
         Solve the hardware-software partitioning optimization problem
         
@@ -258,32 +258,16 @@ class ScheduleConstPartitionSolver:
         constraints.append(z <= 2 - self.S_source @ x - self.S_target @ x)
         
         # 5. Sequential execution of software nodes
-        if use_reduced_sw_constraints:
-            # Smart reduction: only constrain node pairs that can potentially execute in parallel
-            sw_constraint_pairs = self._get_software_constraint_pairs_with_levels()
-            
-            print(f"Smart reduction: {len(sw_constraint_pairs)} software constraint pairs (vs {self.n_nodes*(self.n_nodes-1)//2} full pairwise)")
-            # sys.exit(0)
-            
-            for i, j in sw_constraint_pairs:
-                # Use binary variable to enforce ordering between potentially parallel software nodes
-                y_ij = cp.Variable(boolean=True)
-                
-                # Either i finishes before j starts, or j finishes before i starts
-                constraints.append(f[i] <= t[j] + big_M * y_ij + big_M * (2 - x[i] - x[j]))
-                constraints.append(f[j] <= t[i] + big_M * (1 - y_ij) + big_M * (2 - x[i] - x[j]))
-        else:
-            # Original O(n²) approach with binary ordering variables
-            Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering
-            
-            logger.info(f"Adding {self.n_nodes*(self.n_nodes-1)} software sequencing constraints (full pairwise)")
-            for i in range(self.n_nodes):
-                for j in range(self.n_nodes):
-                    if i != j:
-                        constraints.append(f[i] <= t[j] + big_M * (1 - Y[i, j]) + big_M * (2 - x[i] - x[j]))
-                        constraints.append(f[j] <= t[i] + big_M * Y[i, j] + big_M * (2 - x[i] - x[j]))
-                        constraints.append(Y[i, j] <= x[i])
-                        constraints.append(Y[i, j] <= x[j])
+        Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering
+        
+        logger.info(f"Adding {self.n_nodes*(self.n_nodes-1)} software sequencing constraints (full pairwise)")
+        for i in range(self.n_nodes):
+            for j in range(self.n_nodes):
+                if i < j:
+                    constraints.append(f[i] <= t[j] + big_M * (1 - Y[i, j]) + big_M * (2 - x[i] - x[j]))
+                    constraints.append(f[j] <= t[i] + big_M * Y[i, j] + big_M * (2 - x[i] - x[j]))
+                    constraints.append(Y[i, j] <= x[i])
+                    constraints.append(Y[i, j] <= x[j])
         
         # 6. Makespan definition
         for i in range(self.n_nodes):
@@ -315,10 +299,7 @@ class ScheduleConstPartitionSolver:
         self.f_sol = f.value
         self.z_sol = z.value.round().astype(int)
         self.T_sol = T.value
-        if not use_reduced_sw_constraints:
-            self.Y_sol = Y.value.round().astype(int)
-        else:
-            self.Y_sol = None  # Not used in reduced formulation
+        self.Y_sol = Y.value.round().astype(int)
         
         # Convert solution back to node IDs
         hw_nodes = [self.node_list[i] for i in range(self.n_nodes) if self.x_sol[i] == 0]

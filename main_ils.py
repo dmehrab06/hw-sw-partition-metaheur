@@ -31,6 +31,7 @@ from utils.local_search import (
 )
 from utils.perturb_utils import PerturbationManager
 from utils.acceptance_criteria import accept_better
+from utils.csched_env import CSchedEnv, COMPLETE
 
 # Set up logging
 LogManager.initialize("logs/main_ils.log")
@@ -403,7 +404,6 @@ def solve_dataset_instance_milp(dataset: TaskGraphDataset, idx: int = 0):
     solver.load_networkx_graph_with_torch_feats(graph, hardware_areas, hardware_costs, software_costs, communication_costs)
     solution = solver.solve_optimization(
         A_max=hw_area_limit, 
-        use_reduced_sw_constraints=False
         )
     partition = {}
     for n in solution['hardware_nodes']:
@@ -475,35 +475,70 @@ def main():
     dataset = TaskGraphDataset(graphs, adj_matrices, node_features_list, 
                                edge_features_list, hw_area_limits)
     
-    logger.info("="*70)
-    logger.info("ILS FOR HW/SW PARTITIONING WITH SCHEDULING")
-    logger.info("="*70)
+    # logger.info("="*70)
+    # logger.info("ILS FOR HW/SW PARTITIONING WITH SCHEDULING")
+    # logger.info("="*70)
 
-    # Use the new solve_dataset_instance_ils method
-    opt_sols_batch = solve_dataset_instance_ils(
-        dataset=dataset,
-        idx=0,
-        max_iterations=500,
-        perturbation_type='random_flips',
-        perturbation_strength=3,
-        local_search_max_iter=100,
-        initial_solution_type='random',
-        acceptance_criterion='better',
-        verbose=True
-    )
+    # # Use the new solve_dataset_instance_ils method
+    # opt_sols_batch = solve_dataset_instance_ils(
+    #     dataset=dataset,
+    #     idx=0,
+    #     max_iterations=500,
+    #     perturbation_type='random_flips',
+    #     perturbation_strength=3,
+    #     local_search_max_iter=100,
+    #     initial_solution_type='random',
+    #     acceptance_criterion='better',
+    #     verbose=True
+    # )
 
-    logger.info("ILS process completed successfully.")
+    # logger.info("ILS process completed successfully.")
 
-    logger.info("="*70)
-    logger.info("MILP FOR HW/SW PARTITIONING WITH SCHEDULING")
-    logger.info("="*70)
+    # logger.info("="*70)
+    # logger.info("MILP FOR HW/SW PARTITIONING WITH SCHEDULING")
+    # logger.info("="*70)
 
     # Now solve using MILP for comparison
     opt_sols_batch_milp = solve_dataset_instance_milp(dataset=dataset, idx=0)
     logger.info("MILP process completed successfully.")
 
-    return opt_sols_batch, dataset
+    return opt_sols_batch_milp, dataset
 
+def update_env_presolve(env, opt_sols_batch):
+
+    partition_batch   = opt_sols_batch["partitions"]
+    start_times_batch = opt_sols_batch["start_times"]
+    end_times_batch   = opt_sols_batch["end_times"]
+    makespan_batch    = opt_sols_batch["makespans"]
+
+    batch_size = len(partition_batch)
+    n = partition_batch.shape[1]   # TODO: this maybe should vary per the bsatch sample
+
+    env.op_status_batch   = COMPLETE*torch.ones((batch_size, n),dtype=torch.int32) # COMPLETE
+    env.op_resource_batch = partition_batch.type(torch.int32)
+    
+    env.current_time_batch = makespan_batch
+    env.makespan_batch     = makespan_batch
+    
+    env.op_start_time_batch = start_times_batch
+    env.op_end_time_batch   = end_times_batch
 
 if __name__ == "__main__":
+    
     opt_sols_batch, dataset = main()
+    # Setup gym environment
+    env_paras = {
+        "batch_size": 1,
+        "device": "cpu",
+        "timestep_mode": "next_complete",
+        "timestep_trigger": "every",
+        "prevent_all_HW": False
+    }
+    env = CSchedEnv(dataset, env_paras)
+
+    # Update solutions in the environment's batch of instances
+    update_env_presolve(env, opt_sols_batch)
+
+    # Argument to render is the instance's index
+    fig = env.render(0)
+    fig.savefig("outputs/local_search_example_gantt_chart.png", dpi=300, bbox_inches='tight')

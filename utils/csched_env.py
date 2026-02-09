@@ -1018,7 +1018,7 @@ class CSchedEnv(gym.Env):
                                              markerfacecolor=resource_status_colors.get((1, status), 'white'),
                                              label=f"HW - {label}", markersize=10))
 
-        ax1.legend(handles=legend_elements, loc='upper left', fontsize=8)
+        ax1.legend(handles=legend_elements, loc='best', fontsize=8)
 
         ax1.axis('off')
 
