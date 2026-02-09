@@ -402,9 +402,7 @@ def solve_dataset_instance_milp(dataset: TaskGraphDataset, idx: int = 0):
 
     solver = ScheduleConstPartitionSolver()
     solver.load_networkx_graph_with_torch_feats(graph, hardware_areas, hardware_costs, software_costs, communication_costs)
-    solution = solver.solve_optimization(
-        A_max=hw_area_limit, 
-        )
+    solution = solver.solve_optimization(A_max=hw_area_limit)
     partition = {}
     for n in solution['hardware_nodes']:
         partition[n] = 1

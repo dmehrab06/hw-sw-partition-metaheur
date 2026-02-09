@@ -4,6 +4,8 @@ import numpy as np
 import cvxpy as cp
 import os, sys
 import time
+import torch
+import random
 
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -11,6 +13,8 @@ if __name__ == "__main__":
     sys.path.append(parent_dir)
 
 from utils.logging_utils import LogManager
+from utils.partition_utils import ScheduleConstPartitionSolver
+from utils.task_graph_generation import TaskGraphDataset, create_data_lists
 
 # Set up logging
 if __name__ == "__main__":
@@ -304,6 +308,22 @@ def compute_dag_execution_time(graph: nx.DiGraph, partition_assignment: Dict[int
         return result   # JK optional full dict return
     else:
         return result['makespan'], result['start_times']  # original/default return
+    
+def compute_execution_time_milp(graph: nx.DiGraph, partition_assignment: List[int]) -> Tuple[float, Dict[int, float]]:
+    """
+    Wrapper function to compute optimal makespan using MILP formulation.
+
+    Args:
+        graph (nx.DiGraph): Directed acyclic graph with node and edge attributes
+        partition_assignment (List[int]): Binary assignment (0=hardware, 1=software)
+
+    Returns:
+        Tuple[float, Dict[int, float]]: (optimal_makespan, start_times_dict)
+    """
+    solver = ScheduleConstPartitionSolver(graph=graph)
+    area_max = sum([graph.nodes[n]['area_cost'] for n in graph.nodes])
+    sol = solver.solve_optimization(A_max=area_max, partition_assignment=partition_assignment)
+    return sol['makespan'], sol['start_times']
 
 def compute_dag_makespan(graph: nx.DiGraph, partition_assignment: List[int]) -> Tuple[float, Dict[int, float]]:
     """
@@ -1069,48 +1089,92 @@ def communication_aware_heuristic(graph: nx.DiGraph, partition: Dict[int, int]) 
     makespan = max(finish_times.values()) if finish_times else 0.0
     return makespan, start_times
 
+def main():
+    # Set random seeds for reproducibility
+    random.seed(42)
+    np.random.seed(42)
+    torch.manual_seed(42)
+    
+    # Generate test instance
+    logger.info("Generating test instance...")
+    graphs, adj_matrices, node_features_list, edge_features_list, hw_area_limits = create_data_lists(
+        num_samples=1,
+        min_nodes=10,
+        max_nodes=10,
+        edge_probability=0.3
+    )
+    dataset = TaskGraphDataset(graphs, adj_matrices, node_features_list, 
+                               edge_features_list, hw_area_limits)
+    
+    # Now solve using MILP for comparison
+    idx = 0
+    graph, adj_matrices, node_features, edge_features, hw_area_limit = dataset[idx]
+
+    software_costs = node_features[0,:]
+    hardware_areas = node_features[1,:]                  #  node_features = torch.cat([sw_computation_cost, hw_area_cost], dim=0)
+    hardware_costs = software_costs*0.5
+    communication_costs = edge_features[0,:]             # only one edge feature
+
+    solver = ScheduleConstPartitionSolver()
+    solver.load_networkx_graph_with_torch_feats(graph, hardware_areas, hardware_costs, software_costs, communication_costs)
+    solution = solver.solve_optimization(A_max=hw_area_limit)
+    logger.info("MILP process completed successfully.")
+    logger.info(f"MILP solution: makepan={solution['makespan']}")
+
+    partition = {}
+    for n in solution['hardware_nodes']:
+        partition[n] = 1
+    for n in solution['software_nodes']:
+        partition[n] = 0
+
+    # Compute makespan
+    makespan, start_times = compute_execution_time_milp(graph, partition)
+    logger.info(f"MILP solution for makespan computed in scheduler utils: makepan={makespan}")
+    return
+    
 
 # Example usage and comparison
 if __name__ == "__main__":
+    main()
 
-    import pickle
-    graph_file = "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
-    with open(graph_file, 'rb') as f:
-        graph_data = pickle.load(f)
+    # import pickle
+    # graph_file = "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
+    # with open(graph_file, 'rb') as f:
+    #     graph_data = pickle.load(f)
 
-    graph = graph_data.graph
-    nx.set_node_attributes(graph, graph_data.hardware_area, 'area_cost')
-    nx.set_node_attributes(graph, graph_data.hardware_costs, 'hardware_time')
-    nx.set_node_attributes(graph, graph_data.software_costs, 'software_time')
-    nx.set_edge_attributes(graph, graph_data.communication_costs, 'communication_cost')
+    # graph = graph_data.graph
+    # nx.set_node_attributes(graph, graph_data.hardware_area, 'area_cost')
+    # nx.set_node_attributes(graph, graph_data.hardware_costs, 'hardware_time')
+    # nx.set_node_attributes(graph, graph_data.software_costs, 'software_time')
+    # nx.set_edge_attributes(graph, graph_data.communication_costs, 'communication_cost')
 
 
-    data_file = "makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-gl25.pkl"
-    with open(data_file, 'rb') as f:
-        data = pickle.load(f)
-    partition_assignment = {k: data[k] for k in graph.nodes}
-    # partition_assignment = {k: 0 for k in graph.nodes}
-    # logger.info(sum([graph.nodes[n]['software_time'] for n in graph]))
+    # data_file = "makespan-opt-partitions/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.1_hwvar-0.50_comm-1.00_seed-42_assignment-gl25.pkl"
+    # with open(data_file, 'rb') as f:
+    #     data = pickle.load(f)
+    # partition_assignment = {k: data[k] for k in graph.nodes}
+    # # partition_assignment = {k: 0 for k in graph.nodes}
+    # # logger.info(sum([graph.nodes[n]['software_time'] for n in graph]))
 
-    logger.info("Comparing Heuristic Algorithms:")
-    logger.info("=" * 40)
+    # logger.info("Comparing Heuristic Algorithms:")
+    # logger.info("=" * 40)
 
-    # Test all heuristics
-    heuristics = [
-        ("Compute DAG Execution", compute_dag_execution_time),
-        ("Event-Driven", event_driven_heuristic),
-        ("Critical Path List", critical_path_list_scheduling),
-        ("Shortest Processing Time", shortest_processing_time_heuristic),
-        ("Communication-Aware", communication_aware_heuristic)
-    ]
+    # # Test all heuristics
+    # heuristics = [
+    #     ("Compute DAG Execution", compute_dag_execution_time),
+    #     ("Event-Driven", event_driven_heuristic),
+    #     ("Critical Path List", critical_path_list_scheduling),
+    #     ("Shortest Processing Time", shortest_processing_time_heuristic),
+    #     ("Communication-Aware", communication_aware_heuristic)
+    # ]
 
-    for name, heuristic_func in heuristics:
-        try:
-            ts = time.time()
-            makespan, start_times = heuristic_func(graph, partition_assignment)
-            logger.info(f"\n{name}:")
-            logger.info(f"  Makespan: {makespan:.3f}")
-            # logger.info(f"  Start times: {start_times}")
-            logger.info(f"Solved in {time.time() - ts} seconds")
-        except Exception as e:
-            logger.info(f"\n{name}: Error - {e}")
+    # for name, heuristic_func in heuristics:
+    #     try:
+    #         ts = time.time()
+    #         makespan, start_times = heuristic_func(graph, partition_assignment)
+    #         logger.info(f"\n{name}:")
+    #         logger.info(f"  Makespan: {makespan:.3f}")
+    #         # logger.info(f"  Start times: {start_times}")
+    #         logger.info(f"Solved in {time.time() - ts} seconds")
+    #     except Exception as e:
+    #         logger.info(f"\n{name}: Error - {e}")
