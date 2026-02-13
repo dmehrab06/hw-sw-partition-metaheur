@@ -106,19 +106,24 @@ class ScheduleConstPartitionSolver:
         pgraph = pydot_graphs[0]
 
         g = nx.DiGraph()
-        # Add nodes, skip pydot defaults ('node', 'graph', 'edge')
-        for node in pgraph.get_nodes():
-            name = node.get_name().strip('"')
-            if name in {"node", "graph", "edge"}:
-                continue
-            g.add_node(name)
 
-        # Add edges
-        for edge in pgraph.get_edges():
-            src = edge.get_source().strip('"')
-            dst = edge.get_destination().strip('"')
-            g.add_edge(src, dst)
+        def _collect_nodes_edges(pg):
+            # Add nodes, skip pydot defaults ('node', 'graph', 'edge')
+            for node in pg.get_nodes():
+                name = node.get_name().strip('"')
+                if name in {"node", "graph", "edge"}:
+                    continue
+                g.add_node(name)
+            # Add edges
+            for edge in pg.get_edges():
+                src = edge.get_source().strip('"')
+                dst = edge.get_destination().strip('"')
+                g.add_edge(src, dst)
+            # Recurse into subgraphs (DOT clusters)
+            for sg in pg.get_subgraphs():
+                _collect_nodes_edges(sg)
 
+        _collect_nodes_edges(pgraph)
         self.graph = g
         logger.info(f"Loaded graph from {pydot_file} with {len(self.graph.nodes())} nodes")
 

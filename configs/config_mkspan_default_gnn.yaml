@@ -9,7 +9,7 @@ solution-dir: "makespan-opt-partitions"
 result-file-prefix: "makespan_opt_gnn"
 output-dir: "outputs"
 taskgraph-dir: "inputs/task_graph_complete"
-taskgraph-pickle: "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
+taskgraph-pickle: "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default_gnn.pkl"
 opt-cost-type: "mip"
 # opt-cost-type: "mip"
 # opt-cost-type: "default"
@@ -79,8 +79,8 @@ non_diffgnn:
     verbose: 500
 
 diffgnn:
-    iter: 500
-    verbose: 500
+    iter: 1000
+    verbose: 1000
     device: "gpu"
     hidden_dim: 256
     num_layers: 3

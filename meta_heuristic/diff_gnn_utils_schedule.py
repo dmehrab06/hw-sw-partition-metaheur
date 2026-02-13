@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import os
+import random
 import math
 import sys
 
@@ -26,6 +27,25 @@ if __name__ == "__main__":
     LogManager.initialize("logs/diff_gnn_utils.log")
 
 logger = LogManager.get_logger(__name__)
+
+def _set_global_seeds(seed: int) -> None:
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+def _enable_determinism(seed: int) -> None:
+    _set_global_seeds(seed)
+    # cuBLAS determinism (only takes effect for CUDA ops)
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    # Torch deterministic algorithms (warn_only avoids hard failures on unsupported ops)
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    # Avoid TF32 variability on Ampere/Hopper
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
 
 
 # # Lightweight differentiable GNN for binary partitioning (hardware/software)
@@ -513,6 +533,14 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
     if config is None:
         config = {}
 
+    seed = int(config.get("seed", 42))
+    deterministic = bool(config.get("deterministic", True))
+    if deterministic:
+        _enable_determinism(seed)
+        logger.info("Determinism enabled (seed=%d).", seed)
+    else:
+        _set_global_seeds(seed)
+
     device = torch.device(device)
     data, node_list = _build_torchgeo_data(TG)
 
@@ -580,16 +608,32 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
 
     # pull diff GNN specific config (fallback to top-level keys for convenience)
     diff_cfg = dict(config.get("diffgnn", {}))
+    # default diffgnn settings
+    if "iter" not in diff_cfg and "epochs" not in diff_cfg:
+        diff_cfg["iter"] = 750
+    if "verbose" not in diff_cfg:
+        diff_cfg["verbose"] = 500
+    if "hidden_dim" not in diff_cfg:
+        diff_cfg["hidden_dim"] = 256
+    if "num_layers" not in diff_cfg:
+        diff_cfg["num_layers"] = 3
+    if "dropout" not in diff_cfg:
+        diff_cfg["dropout"] = 0.5
     # map common aliases
     if "iter" in diff_cfg and "epochs" not in diff_cfg:
         diff_cfg["epochs"] = diff_cfg["iter"]
     # ensure seed/device pass-through
     if "seed" not in diff_cfg and "seed" in config:
         diff_cfg["seed"] = config.get("seed")
+    if "device" in diff_cfg:
+        config["device"] = diff_cfg.get("device")
+    elif "device" not in config:
+        config["device"] = "gpu"
 
     # device = config.get("device", "cpu")
     device = get_device(config)
     logger.info("Using device: %s", device)
+    print(f"[diff_gnn] device={device}")
 
     # Train differentiable GNN and retrieve best assignment
     result = optimize_diff_gnn(TG, config=diff_cfg, device=device)

@@ -2,6 +2,7 @@ from typing import Dict, Callable, Any, List
 import pandas as pd
 from dataclasses import dataclass
 from utils.logging_utils import LogManager
+from utils.scheduler_utils import compute_dag_makespan
 import time
 
 # Set up logging
@@ -33,6 +34,14 @@ def _normalize_partition(partition: dict):
                 continue
         raise ValueError(f"Invalid partition value for node={node}: {a!r}")
     return out
+
+def _compute_lp_makespan(task_graph, partition: dict) -> float:
+    """Compute LP makespan using compute_dag_makespan with area-constraint penalty."""
+    if task_graph.violates(partition):
+        return task_graph.violation_cost
+    assignment = [1 - partition[n] for n in task_graph.rounak_graph]
+    makespan, _ = compute_dag_makespan(task_graph.rounak_graph, assignment)
+    return makespan
 
 
 @dataclass
@@ -93,7 +102,10 @@ class MethodRegistry:
         print(partition)
         partition = _normalize_partition(partition)
         print(partition)
-        makespan = task_graph.evaluate_makespan(partition)['makespan']
+        if naive_opt_func_name == 'mip':
+            makespan = _compute_lp_makespan(task_graph, partition)
+        else:
+            makespan = task_graph.evaluate_makespan(partition)['makespan']
         partition_cost = task_graph.evaluate_partition_cost(partition)
         
         # Store result
@@ -112,13 +124,16 @@ class MethodRegistry:
         return result
     
     def add_manual_result(self, name: str, best_cost: float, best_solution: Any, 
-                         task_graph=None, timing_info = 0.0) -> MethodResult:
+                         task_graph=None, timing_info = 0.0, naive_opt_func_name='partition') -> MethodResult:
         """Add a result from a method that doesn't follow the standard interface (like greedy)"""
         partition = task_graph.get_partitioning(best_solution, method=name)
         print(partition)
         partition = _normalize_partition(partition)
         print(partition)
-        makespan = task_graph.evaluate_makespan(partition)['makespan']
+        if naive_opt_func_name == 'mip':
+            makespan = _compute_lp_makespan(task_graph, partition)
+        else:
+            makespan = task_graph.evaluate_makespan(partition)['makespan']
         partition_cost = task_graph.evaluate_partition_cost(partition)
         
         result = MethodResult(
@@ -162,4 +177,3 @@ class MethodRegistry:
     def get_registered_method_names(self) -> List[str]:
         """Get list of registered method names only"""
         return list(self.methods.keys())
-

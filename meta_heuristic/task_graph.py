@@ -3,6 +3,7 @@ import networkx as nx
 import random
 import numpy as np
 import os, sys
+import pydot
 
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -84,15 +85,29 @@ class TaskGraph:
             - Hardware areas are uniformly distributed between 1 and A_max
             - Communication costs are uniformly distributed between 0 and 2*mu*s_max
         """
-        # Load graph structure
-        try:
-            # Try the original approach
-            self.graph = nx.DiGraph(nx.nx_pydot.read_dot(pydot_file))
-        except TypeError:
-            # Fallback to pygraphviz
-            self.graph = nx.DiGraph(nx.nx_agraph.read_dot(pydot_file))
-            
-        #self.graph = nx.DiGraph(nx.nx_pydot.read_dot(pydot_file))
+        # Load graph structure (robust pydot parser with subgraph support)
+        pydot_graphs = pydot.graph_from_dot_file(pydot_file)
+        if not pydot_graphs:
+            raise ValueError(f"Could not load DOT file: {pydot_file}")
+        pgraph = pydot_graphs[0]
+
+        g = nx.DiGraph()
+
+        def _collect_nodes_edges(pg):
+            for node in pg.get_nodes():
+                name = node.get_name().strip('\"')
+                if name in {"node", "graph", "edge"}:
+                    continue
+                g.add_node(name)
+            for edge in pg.get_edges():
+                src = edge.get_source().strip('\"')
+                dst = edge.get_destination().strip('\"')
+                g.add_edge(src, dst)
+            for sg in pg.get_subgraphs():
+                _collect_nodes_edges(sg)
+
+        _collect_nodes_edges(pgraph)
+        self.graph = g
         logger.info(f"Loaded graph from {pydot_file} with {len(self.graph.nodes())} nodes")
 
         if reproduce:

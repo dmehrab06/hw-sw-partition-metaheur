@@ -26,27 +26,107 @@ from meta_heuristic import (
 
 from meta_heuristic.metaheuristic_registry import MethodRegistry
 
+def _greedy_adapter(dim, func_to_optimize, config, task_graph=None, **kwargs):
+    if task_graph is None:
+        raise ValueError("Greedy adapter requires task_graph")
+    best_cost, solution = task_graph.greedy_heur()
+    return best_cost, solution
+
+AVAILABLE_METHODS = {
+    'random': random_assignment,
+    'greedy': _greedy_adapter,
+    # 'non_diffgnn': simulate_nondiff_GNN,
+    'diff_gnn': simulate_diff_GNN,
+    'pso': simulate_PSO,
+    'dbpso': simulate_DBPSO,
+    'clpso': simulate_CLPSO,
+    'ccpso': simulate_CCPSO,
+    'esa': simulate_ESA,
+    'shade': simulate_SHADE,
+    'jade': simulate_JADE,
+    'gl25': simulate_GL25,
+}
+
+#DEFAULT_METHODS = list(AVAILABLE_METHODS.keys())
+DEFAULT_METHODS = ['random', 'greedy', 'diff_gnn', 'gl25']
+
+def _parse_methods(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        if raw.lower() in ("all", "auto"):
+            return ["all"]
+        return [v.strip() for v in raw.split(",") if v.strip()]
+    return None
+
+def _get_selected_methods(config):
+    env_methods = os.getenv("HWSW_METHODS") or os.getenv("METHODS")
+    selected = _parse_methods(env_methods)
+    if selected is None:
+        selected = _parse_methods(config.get("methods", None) or config.get("method-list", None))
+    if not selected:
+        return DEFAULT_METHODS
+    if len(selected) == 1 and selected[0].lower() == "all":
+        return list(AVAILABLE_METHODS.keys())
+    return selected
+
+def _print_partition_assignment(method_name, partition):
+    """Print compact HW/SW node lists for a partition assignment."""
+    if not isinstance(partition, dict):
+        print(f"[{method_name}] partition is not a dict; got {type(partition).__name__}")
+        return
+    hw_nodes = sorted([n for n, v in partition.items() if v == 1])
+    sw_nodes = sorted([n for n, v in partition.items() if v == 0])
+    print(f"[{method_name}] hardware nodes ({len(hw_nodes)}): {', '.join(hw_nodes)}")
+    print(f"[{method_name}] software nodes ({len(sw_nodes)}): {', '.join(sw_nodes)}")
+
 def save_taskgraph(config, task_graph):
     """Save TaskGraph instance to pickle file"""
-    graph_name = Path(config['graph-file']).stem
-    config_name = Path(config['config']).stem
-    
-    filename = f"taskgraph-{graph_name}-instance-config-{config_name}.pkl"
-
-    # Create directory for TaskGraph instances
-    taskgraph_dir = config.get('taskgraph-dir', 'taskgraph_instances')
-    os.makedirs(taskgraph_dir, exist_ok=True)
-    
-    filepath = os.path.join(taskgraph_dir, filename)
+    # If config specifies an explicit pickle path, honor it for consistency across runs
+    explicit_path = config.get('taskgraph-pickle', None)
+    if explicit_path:
+        filepath = explicit_path
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    else:
+        graph_name = Path(config['graph-file']).stem
+        config_name = Path(config['config']).stem
+        filename = f"taskgraph-{graph_name}-instance-config-{config_name}.pkl"
+        taskgraph_dir = config.get('taskgraph-dir', 'taskgraph_instances')
+        os.makedirs(taskgraph_dir, exist_ok=True)
+        filepath = os.path.join(taskgraph_dir, filename)
     
     try:
         with open(filepath, "wb") as file:
             pickle.dump(task_graph, file)
         logger.info(f"TaskGraph instance saved to: {filepath}")
+        # Keep config aligned for downstream consumers
+        config['taskgraph-pickle'] = filepath
         return filepath
     except Exception as e:
         logger.error(f"Failed to save TaskGraph instance: {e}")
         return None
+
+def load_taskgraph_if_available(config):
+    """Load a TaskGraph pickle if it exists and regeneration is not forced."""
+    tg_pickle = os.getenv("HWSW_TASKGRAPH_PICKLE") or config.get('taskgraph-pickle')
+    force_regen = os.getenv("HWSW_FORCE_TG_REGEN", "0").lower() in ("1", "true", "yes")
+
+    if tg_pickle and os.path.exists(tg_pickle) and not force_regen:
+        try:
+            with open(tg_pickle, "rb") as f:
+                TG = pickle.load(f)
+            logger.info(f"Loaded TaskGraph instance from: {tg_pickle}")
+            # Keep config aligned for downstream consumers
+            config['taskgraph-pickle'] = tg_pickle
+            return TG
+        except Exception as e:
+            logger.warning(f"Failed to load TaskGraph pickle {tg_pickle}: {e}. Will regenerate.")
+    return None
 
 def save_partition(args, solution, method='random'):
     """Save partition to pickle file"""
@@ -85,22 +165,27 @@ def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
         'Seed': config['seed'],
         'LB_Naive': very_naive_lower_bound,
     }
-    
-    # Merge with method results
-    result_summary_data = [{**base_data, **results_dict}]
-    
-    result_df = pd.DataFrame.from_dict(result_summary_data)
+    base_cols = list(base_data.keys())
 
-    print(result_df)
-    pprint(result_summary_data)
-    # print(result_summary_data)
+    # Build a consistent column list for all known methods
+    method_names = list(AVAILABLE_METHODS.keys())
+    method_cols = []
+    for method in method_names:
+        for suffix in ['opt_cost', 'opt_ratio', 'partition_cost', 'bb', 'makespan', 'time']:
+            method_cols.append(f"{method}_{suffix}")
+
+    # Default empty values for all method columns so they exist in the CSV
+    full_row = {**base_data, **{c: None for c in method_cols}, **results_dict}
+
+    # Include any extra metrics not in the standard columns
+    extra_cols = [c for c in full_row.keys() if c not in base_cols + method_cols]
+    full_cols = base_cols + method_cols + extra_cols
+
+    result_df = pd.DataFrame.from_dict([full_row]).reindex(columns=full_cols)
     
-    # Create outputs directory if it doesn't exist
-    os.makedirs(config['output-dir'], exist_ok=True)
-    file_path = f"outputs/{config['result-file-prefix']}-result-summary-soda-graphs-config.csv"
-    
-    # Ensure outputs dir exists
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    out_dir = os.getenv("HWSW_CSV_DIR") or config.get('output-dir', 'outputs')
+    os.makedirs(out_dir, exist_ok=True)
+    file_path = os.path.join(out_dir, f"{config['result-file-prefix']}-result-summary-soda-graphs-config.csv")
 
     # If a CSV already exists, align this row to the existing header columns so values
     # land in the appropriate column positions. Any new columns are appended.
@@ -131,64 +216,55 @@ def main():
     logger.info(f"Random seed set to {config['seed']}")
     
     try:
-        # Initialize Task Graph
-        logger.info(f"Loading graph from {config['graph-file']}")
-        TG = TaskGraph(area_constraint=config['area-constraint'])
-        TG.load_graph_from_pydot(
-            config['graph-file'],
-            k=config['hw-scale-factor'],
-            l=config['hw-scale-variance'],
-            mu=config['comm-scale-factor'],
-            A_max=100,
-            seed=config['seed']
-        )
+        # Initialize Task Graph (prefer existing pickle for consistent comparisons)
+        TG = load_taskgraph_if_available(config)
+        if TG is None:
+            logger.info(f"Loading graph from {config['graph-file']}")
+            TG = TaskGraph(area_constraint=config['area-constraint'])
+            TG.load_graph_from_pydot(
+                config['graph-file'],
+                k=config['hw-scale-factor'],
+                l=config['hw-scale-variance'],
+                mu=config['comm-scale-factor'],
+                A_max=100,
+                seed=config['seed']
+            )
 
-        print("visualize the task graph")
+            print("visualize the task graph")
 
-        # from figures.utils import visualize_task_graph
-        # visualize_task_graph(config=config, task_graph=TG, out_dir='Figs', fig_name='initial_task_graph')
+            # from figures.utils import visualize_task_graph
+            # visualize_task_graph(config=config, task_graph=TG, out_dir='Figs', fig_name='initial_task_graph')
 
-        save_taskgraph(config,TG)
+            save_taskgraph(config, TG)
+        else:
+            print("visualize the task graph")
         
         N = len(TG.graph.nodes())
         logger.info(f"Graph loaded successfully with {N} nodes")
         
         # Initialize method registry
         registry = MethodRegistry()
-        
-        # Register optimization methods
-        
-        #registry.register_method('random', random_assignment) 
-        #registry.register_method('non_diffgnn', simulate_nondiff_GNN)
-        registry.register_method('diff_gnn', simulate_diff_GNN)
-        # registry.register_method('gcon', simulate_gcon)
-        
-        # registry.register_method('pso', simulate_PSO)
-        # registry.register_method('dbpso',simulate_DBPSO)
-        # registry.register_method('clpso',simulate_CLPSO)
-        # registry.register_method('ccpso',simulate_CCPSO)
-        
-        # registry.register_method('esa',simulate_ESA)
-        
-        # registry.register_method('shade',simulate_SHADE)
-        # registry.register_method('jade',simulate_JADE)
-        
-        registry.register_method('gl25', simulate_GL25)
+
+        selected_methods = _get_selected_methods(config)
+        unknown_methods = [m for m in selected_methods if m not in AVAILABLE_METHODS]
+        if unknown_methods:
+            logger.warning("Unknown methods requested (skipping): %s", ", ".join(unknown_methods))
+        selected_methods = [m for m in selected_methods if m in AVAILABLE_METHODS]
+        if not selected_methods:
+            raise ValueError("No valid methods selected. Check config 'methods' or env HWSW_METHODS.")
+
+        logger.info("Available methods: %s", ", ".join(AVAILABLE_METHODS.keys()))
+        logger.info("Selected methods: %s", ", ".join(selected_methods))
+
+        for method_name in selected_methods:
+            if method_name == 'greedy':
+                registry.register_method(method_name, AVAILABLE_METHODS[method_name], task_graph=TG)
+            else:
+                registry.register_method(method_name, AVAILABLE_METHODS[method_name])
         
         # Calculate baseline
         very_naive_lower_bound = sum(min(TG.software_costs[node], TG.hardware_costs[node]) 
                                    for node in TG.graph.nodes())
-        
-        # Run greedy heuristic first (since it's internal to TaskGraph)
-        logger.info('='*50)
-        logger.info('STARTING GREEDY HEURISTIC')
-        logger.info('='*50)
-        
-        greedy_best_cost, greedy_solution = TG.greedy_heur()
-        greedy_result = registry.add_manual_result(
-            'greedy', greedy_best_cost, greedy_solution, TG
-        )
-        logger.info(f"Greedy Result: {greedy_best_cost:.4f}")
         
         # Run all registered optimization methods
         for method_name in registry.get_registered_method_names():
@@ -224,6 +300,7 @@ def main():
             )
             
             logger.info(f"{method_name.upper()} Result: {result.best_optimization_cost:.4f}")
+            _print_partition_assignment(method_name, result.partition_assignment)
         
         # Save all partitions
         logger.info('='*50)
