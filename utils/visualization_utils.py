@@ -27,7 +27,7 @@ plt.rcParams.update({
 
 
 def load_and_process_results(hw, area, seeds, config_type, solution_dir, 
-                             task_graph_dir='inputs/task_graph_complete'):
+                             task_graph_dir='inputs/task_graph_complete',verbose=False):
     """
     Load and process optimization results across multiple seeds.
     
@@ -63,7 +63,8 @@ def load_and_process_results(hw, area, seeds, config_type, solution_dir,
     naive_makespans = []
     # Process each seed
     for seed in seeds:
-        print(f"\n=== Processing seed {seed} ===")
+        if verbose:
+            print(f"\n=== Processing seed {seed} ===")
         
         # Construct task graph location based on config type
         task_graph_location = (f'{task_graph_dir}/taskgraph-squeeze_net_tosa-instance-'
@@ -92,19 +93,21 @@ def load_and_process_results(hw, area, seeds, config_type, solution_dir,
         solution_prefix = (f'taskgraph-squeeze_net_tosa_area-{area:.2f}_hwscale-{hw:.1f}_'
                           f'hwvar-0.50_comm-1.00_seed-{seed}_assignment')
         
-        
+        #plot_make
         # Code added for MIP method
         mip_solution_file = f'mip-opt-partitions/taskgraph-squeeze_net_tosa_area-{area:.2f}_hwscale-{hw:.1f}_hwvar-0.50_seed-{seed}_assignment-mip.pkl'
         with open(mip_solution_file, 'rb') as file:
-            print(f"  Processing mip solution: {mip_solution_file}")
+            if verbose:
+                print(f"  Processing mip solution: {mip_solution_file}")
             partition = pickle.load(file)
             #assignment = {k : 1 - partition[k] for k in graph.nodes}
-            makespan = task_graph.evaluate_makespan(partition)['makespan']
+            makespan = task_graph.evaluate_makespan(partition)
             results_by_method['MIP'].append(makespan)
         
         for sol in os.listdir(solution_dir):
             if sol.startswith(solution_prefix):
-                print(f"  Processing: {solution_dir}/{sol}")
+                if verbose:
+                    print(f"  Processing: {solution_dir}/{sol}")
                 
                 with open(f'{solution_dir}/{sol}', 'rb') as file:
                     # Extract method name
@@ -130,22 +133,26 @@ def load_and_process_results(hw, area, seeds, config_type, solution_dir,
         methods.append(method)
         mean_makespans.append(np.mean(makespans))
         std_makespans.append(np.std(makespans))
-        print(f"\n{method}:")
-        print(f"  Makespans: {makespans}")
-        print(f"  Mean: {np.mean(makespans):.2f}, Std: {np.std(makespans):.2f}")
-    
+        if verbose:
+            print(f"\n{method}:")
+            print(f"  Makespans: {makespans}")
+            print(f"  Mean: {np.mean(makespans):.2f}, Std: {np.std(makespans):.2f}")
+        
     # Calculate statistics for naive baseline
     naive_mean = np.mean(naive_makespans)
     naive_std = np.std(naive_makespans)
-    print(f"\nAll SW Assignment:")
-    print(f"  Makespans: {naive_makespans}")
-    print(f"  Mean: {naive_mean:.2f}, Std: {naive_std:.2f}")
+
+    if verbose:
+        print(f"\nAll SW Assignment:")
+        print(f"  Makespans: {naive_makespans}")
+        print(f"  Mean: {naive_mean:.2f}, Std: {naive_std:.2f}")
 
     # Find best method
     if mean_makespans:
         best_mean_makespan = min(mean_makespans)
         best_method = methods[mean_makespans.index(best_mean_makespan)]
-        print(f"\nBest method: {best_method} with mean makespan: {best_mean_makespan:.2f}")
+        if verbose:
+            print(f"\nBest method: {best_method} with mean makespan: {best_mean_makespan:.2f}")
     
     return {
         'methods': methods,
