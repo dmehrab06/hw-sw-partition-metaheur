@@ -41,10 +41,10 @@ class DiffGNNPlacement(nn.Module):
         self.convs = nn.ModuleList(convs)
         self.lin = nn.Linear(last_dim, 1)
 
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, edge_weight=None):
         h = x
         for conv in self.convs:
-            h = conv(h, edge_index)
+            h = conv(h, edge_index, edge_weight=edge_weight)
             h = F.relu(h)
             if self.dropout > 0:
                 h = F.dropout(h, p=self.dropout, training=self.training)
@@ -89,10 +89,10 @@ class DiffGNNOrder(nn.Module):
         self.order_hw_head = nn.Linear(last_dim, 1)
         self.order_sw_head = nn.Linear(last_dim, 1)
 
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, edge_weight=None):
         h = x
         for conv in self.convs:
-            h = conv(h, edge_index)
+            h = conv(h, edge_index, edge_weight=edge_weight)
             h = F.relu(h)
             if self.dropout > 0:
                 h = F.dropout(h, p=self.dropout, training=self.training)
@@ -195,7 +195,7 @@ class MPNNs(nn.Module):
         self.lin_in.reset_parameters()
         self.pred_local.reset_parameters()
 
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, edge_weight=None):
         if self.pre_linear:
             x = self.lin_in(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
@@ -205,9 +205,15 @@ class MPNNs(nn.Module):
             x_in = self.pre_lns[i](x) if self.pre_ln else x
 
             if self.res:
-                x = local_conv(x_in, edge_index) + self.res_lins[i](x)
+                if self.gnn == "gcn":
+                    x = local_conv(x_in, edge_index, edge_weight=edge_weight) + self.res_lins[i](x)
+                else:
+                    x = local_conv(x_in, edge_index) + self.res_lins[i](x)
             else:
-                x = local_conv(x_in, edge_index)
+                if self.gnn == "gcn":
+                    x = local_conv(x_in, edge_index, edge_weight=edge_weight)
+                else:
+                    x = local_conv(x_in, edge_index)
 
             if self.ln:
                 x = self.lns[i](x)
@@ -240,8 +246,8 @@ class MPNNsPlacement(nn.Module):
             **mpnns_kwargs,
         )
 
-    def forward(self, x, edge_index):
-        logits = self.net(x, edge_index).squeeze(-1)
+    def forward(self, x, edge_index, edge_weight=None):
+        logits = self.net(x, edge_index, edge_weight=edge_weight).squeeze(-1)
         logits2 = torch.stack([-logits, logits], dim=1)
         return logits2
 
@@ -260,8 +266,8 @@ class MPNNsOrder(nn.Module):
             **mpnns_kwargs,
         )
 
-    def forward(self, x, edge_index):
-        out = self.net(x, edge_index)
+    def forward(self, x, edge_index, edge_weight=None):
+        out = self.net(x, edge_index, edge_weight=edge_weight)
         assign_logit = out[:, 0]
         prio_hw = out[:, 1]
         prio_sw = out[:, 2]

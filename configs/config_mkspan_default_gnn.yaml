@@ -14,6 +14,16 @@ opt-cost-type: "mip"
 # opt-cost-type: "mip"
 # opt-cost-type: "default"
 
+visualization:
+  enabled: false
+  include_input_graph: true
+  include_output_schedule: true
+  # methods: "diff_gnn,diff_gnn_order,mip"
+  out_dir: "outputs/run_visualizations"
+  input_dir: "outputs/run_visualizations/input"
+  schedule_dir: "outputs/run_visualizations/schedule"
+  strict_partitions: false
+
 # Random assignment trials
 random:
     num_samples: 500
@@ -85,6 +95,12 @@ diffgnn:
     hidden_dim: 256
     num_layers: 3
     dropout: 0.5
+    regularizer_profile: "legacy"   # legacy | modern | minimal
+    selection_metric: "legacy_lp"   # legacy_lp | queue
+    # Optional overrides (take priority over regularizer_profile defaults):
+    # entropy_coeff: 0.001
+    # usage_balance_coeff: 0.5
+    # partition_cost_coeff: 0.01
 
 gcon:
     iter: 500

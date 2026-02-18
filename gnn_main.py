@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import pickle
 from pprint import pprint
+from collections.abc import Mapping
 
 from utils.logging_utils import LogManager
 print(f"After LogManager - report.log exists: {os.path.exists('report.log')}")
@@ -25,6 +26,10 @@ from meta_heuristic import (
 )
 
 from meta_heuristic.metaheuristic_registry import MethodRegistry
+try:
+    from tools.visualize_schedule_from_partitions import generate_visualizations_for_run
+except Exception:
+    generate_visualizations_for_run = None
 
 def _greedy_adapter(dim, func_to_optimize, config, task_graph=None, **kwargs):
     if task_graph is None:
@@ -75,6 +80,67 @@ def _get_selected_methods(config):
     if len(selected) == 1 and selected[0].lower() == "all":
         return list(AVAILABLE_METHODS.keys())
     return selected
+
+
+def _as_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("1", "true", "yes", "on", "enable", "enabled"):
+            return True
+        if s in ("0", "false", "no", "off", "disable", "disabled"):
+            return False
+    return default
+
+
+def _run_auto_visualizations(config, task_graph, methods):
+    vis_cfg_raw = config.get("visualization", {})
+    vis_cfg = dict(vis_cfg_raw) if isinstance(vis_cfg_raw, Mapping) else {}
+    enabled = _as_bool(vis_cfg.get("enabled", False), False)
+    if not enabled:
+        return
+
+    if generate_visualizations_for_run is None:
+        logger.warning("Visualization enabled, but visualization module is unavailable.")
+        return
+
+    include_input = _as_bool(
+        vis_cfg.get("include_input_graph", vis_cfg.get("input_graph", True)),
+        True,
+    )
+    include_output = _as_bool(
+        vis_cfg.get("include_output_schedule", vis_cfg.get("output_schedule", True)),
+        True,
+    )
+    strict_partitions = _as_bool(vis_cfg.get("strict_partitions", False), False)
+    vis_methods = _parse_methods(vis_cfg.get("methods", None))
+    if not vis_methods:
+        vis_methods = list(methods)
+    out_dir = vis_cfg.get("out_dir", None) or vis_cfg.get("output_dir", None)
+
+    try:
+        saved_paths = generate_visualizations_for_run(
+            config=config,
+            methods=vis_methods,
+            out_dir=out_dir,
+            task_graph=task_graph,
+            include_input=include_input,
+            include_output=include_output,
+            strict_partitions=strict_partitions,
+        )
+        if saved_paths:
+            logger.info("Auto visualization generated %d file(s).", len(saved_paths))
+            for p in saved_paths:
+                logger.info("Visualization: %s", p)
+        else:
+            logger.warning("Visualization enabled, but no files were generated.")
+    except Exception as e:
+        logger.warning("Visualization failed: %s", str(e), exc_info=True)
 
 def _print_partition_assignment(method_name, partition):
     """Print compact HW/SW node lists for a partition assignment."""
@@ -231,14 +297,7 @@ def main():
                 seed=config['seed']
             )
 
-            print("visualize the task graph")
-
-            # from figures.utils import visualize_task_graph
-            # visualize_task_graph(config=config, task_graph=TG, out_dir='Figs', fig_name='initial_task_graph')
-
             save_taskgraph(config, TG)
-        else:
-            print("visualize the task graph")
         
         N = len(TG.graph.nodes())
         logger.info(f"Graph loaded successfully with {N} nodes")
@@ -328,6 +387,9 @@ def main():
         
         # Save results to CSV
         save_results_to_csv(config, results_dict, N, very_naive_lower_bound)
+
+        # Optional post-run visualization (input DAG + output schedules)
+        _run_auto_visualizations(config, TG, registry.get_all_method_names())
 
     except Exception as e:
         logger.error(f"An error occurred during execution: {str(e)}", exc_info=True)

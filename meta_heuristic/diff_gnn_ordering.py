@@ -17,7 +17,9 @@ if __name__ == "__main__":
 try:
     from .diff_gnn_utils_schedule import (
         _build_torchgeo_data,
+        _dls_refine_probs,
         _enable_determinism,
+        _fill_hw_area_by_score,
         _relaxed_binary_assignment,
         _repair_candidate,
         _set_global_seeds,
@@ -26,7 +28,9 @@ try:
 except Exception:
     from diff_gnn_utils_schedule import (  # type: ignore
         _build_torchgeo_data,
+        _dls_refine_probs,
         _enable_determinism,
+        _fill_hw_area_by_score,
         _relaxed_binary_assignment,
         _repair_candidate,
         _set_global_seeds,
@@ -368,6 +372,8 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     perm_entropy_coeff = float(config.get("perm_entropy_coeff", 1e-3))
     pairwise_mode = str(config.get("pairwise_mode", "rank_sigmoid")).lower()
     pairwise_temp = float(config.get("pairwise_temp", 0.5))
+    paper_sigma = float(config.get("paper_sigma", 0.0))
+    paper_sigma = max(0.0, min(1.0, paper_sigma))
 
     seed = int(config.get("seed", 42))
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 10)))
@@ -379,12 +385,27 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     post_cfg_raw = config.get("postprocess", {})
     post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
     post_enabled = bool(post_cfg.get("enabled", config.get("lssp_postprocess_enabled", False)))
+    post_mode = str(post_cfg.get("mode", config.get("postprocess_mode", "none"))).lower()
+    if post_mode == "none" and post_enabled:
+        post_mode = "lssp"
+    if post_mode not in {"none", "dls", "lssp", "hybrid"}:
+        raise ValueError(f"Unsupported postprocess_mode '{post_mode}'. Use none|dls|lssp|hybrid.")
+    use_dls = post_mode in {"dls", "hybrid"}
+    use_lssp = post_mode in {"lssp", "hybrid"}
     post_during_eval = bool(post_cfg.get("during_eval", config.get("lssp_postprocess_during_eval", False)))
     post_eval_mode = str(post_cfg.get("eval_mode", config.get("lssp_postprocess_eval", "taskgraph"))).lower()
     post_max_iters = int(post_cfg.get("max_iters", config.get("lssp_postprocess_max_iters", 64)))
     post_enable_area_fill = bool(post_cfg.get("enable_area_fill", config.get("lssp_postprocess_area_fill", True)))
     post_fill_allow_worsen = float(post_cfg.get("fill_allow_worsen", config.get("lssp_postprocess_fill_allow_worsen", 0.0)))
     post_enable_swap = bool(post_cfg.get("enable_swap", config.get("lssp_postprocess_enable_swap", True)))
+    dls_steps = int(post_cfg.get("dls_steps", config.get("dls_steps", 2 if use_dls else 0)))
+    dls_flip_eta = float(post_cfg.get("dls_flip_eta", config.get("dls_flip_eta", 0.35)))
+    dls_swap_eta = float(post_cfg.get("dls_swap_eta", config.get("dls_swap_eta", 0.18)))
+    dls_score_temp = float(post_cfg.get("dls_score_temp", config.get("dls_score_temp", 0.7)))
+    dls_comm_coeff = float(post_cfg.get("dls_comm_coeff", config.get("dls_comm_coeff", 0.02)))
+    dls_area_proj_iters = int(post_cfg.get("dls_area_proj_iters", config.get("dls_area_proj_iters", 4)))
+    dls_area_proj_strength = float(post_cfg.get("dls_area_proj_strength", config.get("dls_area_proj_strength", 6.0)))
+    dls_fill_decode = bool(post_cfg.get("dls_fill_decode", config.get("dls_fill_decode", True)))
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -394,7 +415,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     logger.info(
-        "DiffGNNOrder training: sampler=%s epochs=%d lr=%.2e tau=%.2f->%.2f order_tau=%.2f->%.2f sinkhorn=%d gumbel=%s alpha=%.2f pairwise_mode=%s pairwise_temp=%.2f",
+        "DiffGNNOrder training: sampler=%s epochs=%d lr=%.2e tau=%.2f->%.2f order_tau=%.2f->%.2f sinkhorn=%d gumbel=%s alpha=%.2f pairwise_mode=%s pairwise_temp=%.2f post_mode=%s feature_profile=%s edge_weight_mode=%s paper_sigma=%.2f",
         sampler,
         epochs,
         lr,
@@ -407,8 +428,23 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         resource_logit_alpha,
         pairwise_mode,
         pairwise_temp,
+        post_mode,
+        str(config.get("feature_profile", "default")),
+        str(config.get("edge_weight_mode", "auto")),
+        paper_sigma,
     )
-    if post_enabled:
+    if use_dls:
+        logger.info(
+            "DiffGNNOrder DLS enabled: steps=%d flip_eta=%.2f swap_eta=%.2f temp=%.2f comm_coeff=%.3f area_proj_iters=%d area_proj_strength=%.2f",
+            dls_steps,
+            dls_flip_eta,
+            dls_swap_eta,
+            dls_score_temp,
+            dls_comm_coeff,
+            dls_area_proj_iters,
+            dls_area_proj_strength,
+        )
+    if use_lssp:
         logger.info(
             "DiffGNNOrder postprocess enabled: eval_mode=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s",
             post_eval_mode,
@@ -425,12 +461,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
 
     tau = tau_start
     order_tau = order_tau_start
+    edge_weight = getattr(data, "edge_weight", None)
+    paper_hgp = getattr(data, "paper_hgp", None)
 
     for ep in range(1, epochs + 1):
         model.train()
         optimizer.zero_grad()
 
-        logits2, prio_hw, prio_sw = model(data.x, data.edge_index)
+        logits2, prio_hw, prio_sw = model(data.x, data.edge_index, edge_weight=edge_weight)
         _, probs = _relaxed_binary_assignment(
             logits2,
             temperature=tau,
@@ -439,6 +477,22 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             logit_scale=logit_scale,
             center_logits=center_logits,
         )
+        if paper_sigma > 0 and paper_hgp is not None:
+            probs = (1.0 - paper_sigma) * probs + paper_sigma * paper_hgp.to(probs.device, probs.dtype)
+            probs = probs.clamp(0.0, 1.0)
+        if use_dls and dls_steps > 0:
+            probs = _dls_refine_probs(
+                TG,
+                probs,
+                node_list=node_list,
+                steps=dls_steps,
+                flip_eta=dls_flip_eta,
+                swap_eta=dls_swap_eta,
+                score_temp=dls_score_temp,
+                comm_coeff=dls_comm_coeff,
+                area_proj_iters=dls_area_proj_iters,
+                area_proj_strength=dls_area_proj_strength,
+            )
 
         loss, info = _differentiable_makespan_loss_with_order(
             TG,
@@ -473,7 +527,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         if (ep % hard_eval_every == 0) or (ep == epochs):
             model.eval()
             with torch.no_grad():
-                logits2_eval, prio_hw_eval, prio_sw_eval = model(data.x, data.edge_index)
+                logits2_eval, prio_hw_eval, prio_sw_eval = model(data.x, data.edge_index, edge_weight=edge_weight)
                 _, hard_probs_t = _relaxed_binary_assignment(
                     logits2_eval,
                     temperature=max(tau, 1e-6),
@@ -482,8 +536,25 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     logit_scale=logit_scale,
                     center_logits=center_logits,
                 )
+                if paper_sigma > 0 and paper_hgp is not None:
+                    hard_probs_t = (1.0 - paper_sigma) * hard_probs_t + paper_sigma * paper_hgp.to(hard_probs_t.device, hard_probs_t.dtype)
+                    hard_probs_t = hard_probs_t.clamp(0.0, 1.0)
 
                 hard_probs = hard_probs_t.cpu().numpy().astype(float)
+                if use_dls and dls_steps > 0:
+                    hard_probs_t_refined = _dls_refine_probs(
+                        TG,
+                        hard_probs_t.float(),
+                        node_list=node_list,
+                        steps=dls_steps,
+                        flip_eta=dls_flip_eta,
+                        swap_eta=dls_swap_eta,
+                        score_temp=dls_score_temp,
+                        comm_coeff=dls_comm_coeff,
+                        area_proj_iters=dls_area_proj_iters,
+                        area_proj_strength=dls_area_proj_strength,
+                    )
+                    hard_probs = hard_probs_t_refined.detach().cpu().numpy().astype(float)
                 decode_scores = _order_aware_repair_scores(
                     hard_probs=hard_probs,
                     prio_hw=prio_hw_eval.detach().cpu().numpy().astype(float),
@@ -491,8 +562,15 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     weight=order_decode_weight,
                 )
                 hard_probs_repaired = _repair_candidate(TG, hard_probs, node_list, prefer_by_score=decode_scores)
+                if use_dls and dls_fill_decode:
+                    hard_probs_repaired = _fill_hw_area_by_score(
+                        TG,
+                        hard_probs_repaired,
+                        node_list=node_list,
+                        prefer_by_score=decode_scores,
+                    )
                 solution = {node_list[i]: int(1 if hard_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
-                if post_enabled and post_during_eval:
+                if use_lssp and post_during_eval:
                     solution, _ = improve_with_lssp_local_search(
                         TG,
                         solution,
@@ -534,7 +612,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
 
     model.eval()
     with torch.no_grad():
-        logits2, prio_hw, prio_sw = model(data.x, data.edge_index)
+        logits2, prio_hw, prio_sw = model(data.x, data.edge_index, edge_weight=edge_weight)
         _, hard_probs_t = _relaxed_binary_assignment(
             logits2,
             temperature=0.1,
@@ -543,7 +621,24 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             logit_scale=logit_scale,
             center_logits=center_logits,
         )
+        if paper_sigma > 0 and paper_hgp is not None:
+            hard_probs_t = (1.0 - paper_sigma) * hard_probs_t + paper_sigma * paper_hgp.to(hard_probs_t.device, hard_probs_t.dtype)
+            hard_probs_t = hard_probs_t.clamp(0.0, 1.0)
         final_probs = hard_probs_t.cpu().numpy().astype(float)
+        if use_dls and dls_steps > 0:
+            final_probs_t_refined = _dls_refine_probs(
+                TG,
+                hard_probs_t.float(),
+                node_list=node_list,
+                steps=dls_steps,
+                flip_eta=dls_flip_eta,
+                swap_eta=dls_swap_eta,
+                score_temp=dls_score_temp,
+                comm_coeff=dls_comm_coeff,
+                area_proj_iters=dls_area_proj_iters,
+                area_proj_strength=dls_area_proj_strength,
+            )
+            final_probs = final_probs_t_refined.detach().cpu().numpy().astype(float)
         final_decode_scores = _order_aware_repair_scores(
             hard_probs=final_probs,
             prio_hw=prio_hw.detach().cpu().numpy().astype(float),
@@ -551,8 +646,15 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             weight=order_decode_weight,
         )
         final_probs_repaired = _repair_candidate(TG, final_probs, node_list, prefer_by_score=final_decode_scores)
+        if use_dls and dls_fill_decode:
+            final_probs_repaired = _fill_hw_area_by_score(
+                TG,
+                final_probs_repaired,
+                node_list=node_list,
+                prefer_by_score=final_decode_scores,
+            )
         final_solution = {node_list[i]: int(1 if final_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
-        if post_enabled:
+        if use_lssp:
             final_solution, post_info = improve_with_lssp_local_search(
                 TG,
                 final_solution,
@@ -611,7 +713,7 @@ def optimize_diff_gnn_order(TG, config=None, device="cpu"):
         _set_global_seeds(seed)
 
     device = torch.device(device)
-    data, node_list = _build_torchgeo_data(TG)
+    data, node_list = _build_torchgeo_data(TG, config=config)
     data = data.to(device)
 
     num_layers = int(config.get("num_layers", 3))

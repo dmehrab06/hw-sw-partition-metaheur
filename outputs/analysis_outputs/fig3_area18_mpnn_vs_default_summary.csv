@@ -1,0 +1,6 @@
+case,method,makespan,partition_cost,area_used,area_budget,cross_edges,comm_delay,hw_nodes
+default_gnn_paper_dls,diff_gnn_order,35.0,69.0,15.0,18.0000000004,6,14.0,5
+default_gnn_paper_dls,diff_gnn,37.0,66.0,16.0,18.0000000004,5,8.0,5
+mpnns_paper_dls,diff_gnn_order,35.0,69.0,15.0,18.0000000004,6,14.0,5
+mpnns_paper_dls,diff_gnn,40.0,65.0,18.0,18.0000000004,4,10.0,5
+reference,mip,34.0,66.0,18.0,18.0000000004,6,12.0,5

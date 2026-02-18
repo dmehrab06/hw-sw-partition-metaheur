@@ -15,6 +15,16 @@ taskgraph-pickle: "inputs/task_graph_complete/taskgraph-paper_fig3_11node-instan
 methods: "diff_gnn,diff_gnn_order"
 opt-cost-type: "mip"
 
+visualization:
+  enabled: false
+  include_input_graph: true
+  include_output_schedule: true
+  # methods: "diff_gnn,diff_gnn_order,mip"
+  out_dir: "outputs/run_visualizations"
+  input_dir: "outputs/run_visualizations/input"
+  schedule_dir: "outputs/run_visualizations/schedule"
+  strict_partitions: false
+
 random:
   num_samples: 50
   p: 0.5
@@ -28,6 +38,8 @@ diffgnn:
   dropout: 0.2
   model: "default"
   hard_eval_every: 50
+  regularizer_profile: "legacy"  # legacy | modern | minimal
+  selection_metric: "legacy_lp"  # legacy_lp | queue
 
 diffgnn_order:
   iter: 250
