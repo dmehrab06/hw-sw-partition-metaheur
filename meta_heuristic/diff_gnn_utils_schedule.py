@@ -150,7 +150,9 @@ def _relaxed_binary_assignment(logits2, temperature, hard, sampler="soft", logit
 def _build_torchgeo_data(TG):
     """
     Convert TaskGraph instance into torch and torch_geometric Data.
-    Node features: [sw_time, hw_time, area, degree] normalized per-column.
+    Node features (per node):
+      [sw_time, hw_time, area, degree, speedup, area_constraint, hw_scale]
+    All columns are min-max normalized across nodes; scenario-level scalars are broadcast.
     Returns Data(x=edge_index, ...) and node_list order.
     """
     G = TG.graph
@@ -160,8 +162,15 @@ def _build_torchgeo_data(TG):
     hw = np.array([TG.hardware_costs.get(n, 0.0) for n in node_list], dtype=np.float32)
     area = np.array([TG.hardware_area.get(n, 0.0) for n in node_list], dtype=np.float32)
     deg = np.array([G.degree(n) for n in node_list], dtype=np.float32)
+    # derived per-node feature: speedup (guard divide-by-zero)
+    speedup = hw / np.maximum(sw, 1e-6)
+    # broadcast scenario-level scalars as features
+    area_constraint = float(getattr(TG, "area_constraint", 0.0))
+    hw_scale = float(getattr(TG, "hw_scale_factor", getattr(TG, "HW_Scale_Factor", 1.0)))
+    area_constraint_col = np.full_like(sw, area_constraint, dtype=np.float32)
+    hw_scale_col = np.full_like(sw, hw_scale, dtype=np.float32)
 
-    X = np.vstack([sw, hw, area, deg]).T  # (N,4)
+    X = np.vstack([sw, hw, area, deg, speedup, area_constraint_col, hw_scale_col]).T  # (N,7)
     mins = X.min(axis=0, keepdims=True)
     maxs = X.max(axis=0, keepdims=True)
     ranges = np.where(maxs - mins <= 1e-9, 1.0, (maxs - mins))
@@ -240,7 +249,7 @@ def _differentiable_makespan_loss(
     beta_softmax=20.0,
     area_penalty_coeff=1e5,
     entropy_coeff=1e-3,
-    usage_balance_coeff=0.0,
+    usage_balance_coeff=0.5,
     target_hw_frac=None,
     partition_cost_coeff=0.0,
 ):
@@ -354,11 +363,14 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     tau_start = float(config.get("tau_start", 1.0))
     tau_final = float(config.get("tau_final", 0.1))
     beta_softmax = float(config.get("beta_softmax", 20.0))
+    # restore original stronger defaults (used in full comparison)
     area_penalty_coeff = float(config.get("area_penalty_coeff", 1e5))
     entropy_coeff = float(config.get("entropy_coeff", 1e-3))
     usage_balance_coeff = float(config.get("usage_balance_coeff", 0.5))
     target_hw_frac = config.get("target_hw_frac", None)
-    partition_cost_coeff = float(config.get("partition_cost_coeff", 1e-2))
+
+    base_part_coeff = float(config.get("partition_cost_coeff", 1e-2))
+    partition_cost_coeff = base_part_coeff
     seed = int(config.get("seed", 42))
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 10)))
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
@@ -521,13 +533,13 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
       - beta_softmax: 20.0
       - area_penalty_coeff: 1e5
       - entropy_coeff: 1e-3
-      - usage_balance_coeff: 0.0 (set >0 to push hardware usage toward target_hw_frac)
+      - usage_balance_coeff: 0.5 (set >0 to push hardware usage toward target_hw_frac)
       - target_hw_frac: defaults to area_constraint
-      - partition_cost_coeff: 0.0 (set >0 to penalize expected partition cost directly)
+      - partition_cost_coeff: 1e-2
       - seed: 42
       - hard_eval_every: epochs//10
       - sampling: 'soft' (default) or 'hard'
-      - logit_scale: 1.0 (increase to sharpen sigmoid probabilities)
+      - logit_scale: 8.0 (increase to sharpen sigmoid probabilities)
       - center_logits: False (set True to subtract batch mean before sigmoid)
     """
     if config is None:
@@ -610,9 +622,9 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
     diff_cfg = dict(config.get("diffgnn", {}))
     # default diffgnn settings
     if "iter" not in diff_cfg and "epochs" not in diff_cfg:
-        diff_cfg["iter"] = 750
+        diff_cfg["iter"] = 1000
     if "verbose" not in diff_cfg:
-        diff_cfg["verbose"] = 500
+        diff_cfg["verbose"] = 1000
     if "hidden_dim" not in diff_cfg:
         diff_cfg["hidden_dim"] = 256
     if "num_layers" not in diff_cfg:

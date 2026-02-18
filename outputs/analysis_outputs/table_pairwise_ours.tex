@@ -1,0 +1,22 @@
+\begin{table}[t]
+\centering
+\begin{tabular}{lrrrrrr}
+\toprule
+baseline & ours_better_% & mean_rel_impr_% & median_rel_impr_% & mean_abs_diff & median_abs_diff & n \\
+\midrule
+greedy & 80.000 & 9.655 & 5.403 & 1001.654 & 468.030 & 100 \\
+esa & 75.000 & 16.517 & 5.467 & 1375.257 & 479.406 & 100 \\
+clpso & 74.000 & 16.380 & 5.467 & 1358.090 & 479.406 & 100 \\
+ccpso & 73.000 & 15.416 & 5.403 & 1298.277 & 479.406 & 100 \\
+jade & 73.000 & 13.746 & 5.403 & 1074.424 & 479.406 & 100 \\
+random & 72.000 & 16.042 & 5.467 & 1344.688 & 479.406 & 100 \\
+shade & 72.000 & 13.656 & 5.467 & 1071.787 & 479.406 & 100 \\
+dbpso & 71.000 & 9.933 & 5.467 & 722.037 & 479.406 & 100 \\
+pso & 62.000 & -2.745 & 4.426 & 125.795 & 361.817 & 100 \\
+gl25 & 50.000 & -14.991 & 0.190 & -740.253 & 18.045 & 100 \\
+\bottomrule
+\end{tabular}
+
+\caption{Pairwise comparison of our method (diff_gnn) vs each baseline (positive improvement means lower makespan).}
+\label{tab:mkspan_pairwise_ours}
+\end{table}

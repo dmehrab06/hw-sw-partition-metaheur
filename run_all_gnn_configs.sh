@@ -7,7 +7,6 @@ OUTDIR="$ROOT/outputs/logs"
 mkdir -p "$OUTDIR"
 
 export PYTHONNOUSERSITE=1
-export HWSW_CSV_DIR="$OUTDIR"
 
 PYTHON="${PYTHON:-/people/dass304/.conda/envs/combopt/bin/python}"
 CONFIG_GLOB="${CONFIG_GLOB:-$CONFIG_DIR/config_mkspan_default_gnn.yaml}"
@@ -44,6 +43,19 @@ for config in "${CONFIGS[@]}"; do
     }
   fi
 
+  result_prefix=$("$PYTHON" - <<'PY' "$config"
+from omegaconf import OmegaConf
+import sys
+cfg = OmegaConf.load(sys.argv[1])
+print(cfg.get('result-file-prefix', 'makespan_opt_gnn'))
+PY
+)
+
+  out_src="$ROOT/outputs/${result_prefix}-result-summary-soda-graphs-config.csv"
+  if [[ -f "$out_src" ]]; then
+    cp "$out_src" "$OUTDIR/${result_prefix}-result-summary-soda-graphs-config.csv"
+  fi
+
 done
 
 echo "GNN batch complete. CSV copies are in $OUTDIR"
@@ -57,6 +69,6 @@ echo "GNN batch complete. CSV copies are in $OUTDIR"
 # CONFIG_GLOB="configs/config_mkspan_area_*_hw_*_seed_*.yaml" \
 # ./run_all_gnn_configs.sh
 
-# HWSW_METHODS="pso,dbpso,clpso,ccpso,gl25,esa,shade,jade,random,greedy,gnn,diff_gnn,non_diffgnn" \
+# HWSW_METHODS="pso,dbpso,clpso,ccpso,gl25,esa,shade,jade,random,greedy,diff_gnn" \
 # CONFIG_GLOB="configs/config_mkspan_area_*_hw_*_seed_*.yaml" \
 # ./run_all_gnn_configs.sh

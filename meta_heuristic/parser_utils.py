@@ -42,7 +42,7 @@ def parse_arguments() -> DictConfig:
                        help='Hardware scale variance (should be positive)')
     parser.add_argument('--comm-scale-factor', type=float,
                        help='Communication scale factor (should be positive)')
-    parser.add_argument('--seed', type=int, default=42,
+    parser.add_argument('--seed', type=int, default=None,
                        help='Random seed for reproducibility')
     
     args = parser.parse_args()
@@ -70,6 +70,10 @@ def parse_arguments() -> DictConfig:
     
     # Merge configurations (CLI arguments override YAML)
     config = OmegaConf.merge(yaml_config, cli_config)
+
+    # Fill default seed if not provided anywhere
+    if config.get('seed', None) is None:
+        config['seed'] = 42
 
     # Validate required parameters
     required_params = [

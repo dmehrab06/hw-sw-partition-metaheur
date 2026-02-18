@@ -115,3 +115,22 @@ Outputs:
   --partition makespan-opt-partitions/taskgraph-...-assignment-mip.pkl \
   --out Figs/hwsw/partition_overlay.png
 ```
+
+
+## Runn diff_gnn
+
+
+```bash
+cd hw-sw-partition-metaheur
+CONFIG_GLOB="{configs/config_mkspan_area_0.7_hw_0.3_seed_3.yaml,configs/config_mkspan_area_0.5_hw_0.3_seed_3.yaml,configs/config_mkspan_area_0.5_hw_0.3_seed_1.yaml,configs/config_mkspan_area_0.5_hw_0.1_seed_3.yaml,configs/config_mkspan_area_0.5_hw_0.5_seed_1.yaml}" \
+OUTDIR="outputs/test_diff_gnn" \
+LOGDIR="outputs/logs_test_diff_gnn" \
+CSV_OUT="outputs/test_diff_gnn/custom_diff_gnn.csv" \
+./run_diff_gnn.sh
+```
+
+```bash
+nohup env CONFIG_GLOB="configs/config_mkspan_area_*_hw_*_seed_*.yaml" ./run_diff_gnn.sh > diff_gnn.log 2>&1 &
+
+nohup env CONFIG_GLOB="configs/config_mkspan_area_*_hw_*_seed_*.yaml" ./run_diff_gnn_order.sh > diff_gnn_order.log 2>&1 &
+```

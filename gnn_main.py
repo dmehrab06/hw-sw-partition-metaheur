@@ -21,7 +21,7 @@ from meta_heuristic import (
     simulate_PSO, random_assignment, simulate_GL25,
     simulate_DBPSO, simulate_CLPSO, simulate_CCPSO,
     simulate_SHADE, simulate_JADE, simulate_ESA,
-    simulate_nondiff_GNN, simulate_diff_GNN
+    simulate_nondiff_GNN, simulate_diff_GNN, simulate_diff_GNN_order
 )
 
 from meta_heuristic.metaheuristic_registry import MethodRegistry
@@ -37,6 +37,7 @@ AVAILABLE_METHODS = {
     'greedy': _greedy_adapter,
     # 'non_diffgnn': simulate_nondiff_GNN,
     'diff_gnn': simulate_diff_GNN,
+    'diff_gnn_order': simulate_diff_GNN_order,
     'pso': simulate_PSO,
     'dbpso': simulate_DBPSO,
     'clpso': simulate_CLPSO,
@@ -48,7 +49,7 @@ AVAILABLE_METHODS = {
 }
 
 #DEFAULT_METHODS = list(AVAILABLE_METHODS.keys())
-DEFAULT_METHODS = ['random', 'greedy', 'diff_gnn', 'gl25']
+DEFAULT_METHODS = ['random', 'greedy', 'diff_gnn', 'diff_gnn_order', 'gl25']
 
 def _parse_methods(value):
     if value is None:

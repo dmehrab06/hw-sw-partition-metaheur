@@ -1,0 +1,23 @@
+\begin{table}[t]
+\centering
+\begin{tabular}{lrrrrrrr}
+\toprule
+method & mean_gap_% & median_gap_% & p95_gap_% & mean_ratio & win_rate_% & mean_time_s & n_instances \\
+\midrule
+gl25 & 135.240 & 104.506 & 435.814 & 2.352 & 38.000 & 37.331 & 100 \\
+diff_gnn & 167.278 & 108.525 & 455.281 & 2.673 & 43.000 & 100.407 & 100 \\
+pso & 178.067 & 111.712 & 474.485 & 2.781 & 19.000 & 84.916 & 100 \\
+dbpso & 219.510 & 137.842 & 841.336 & 3.195 & 1.000 & 94.242 & 100 \\
+greedy & 223.712 & 134.064 & 517.701 & 3.237 & 2.000 & 0.002 & 100 \\
+jade & 246.485 & 134.541 & 998.634 & 3.465 & 1.000 & 38.656 & 100 \\
+shade & 247.305 & 134.931 & 1007.222 & 3.473 & 1.000 & 38.702 & 100 \\
+ccpso & 263.016 & 138.889 & 1146.912 & 3.630 & 1.000 & 3.885 & 100 \\
+clpso & 266.356 & 141.038 & 1119.917 & 3.664 & 1.000 & 3.883 & 100 \\
+random & 267.322 & 140.606 & 1122.929 & 3.673 & 1.000 & 9.780 & 100 \\
+esa & 268.286 & 140.606 & 1125.098 & 3.683 & 1.000 & 19.206 & 100 \\
+\bottomrule
+\end{tabular}
+
+\caption{Overall makespan performance relative to the MIP baseline (lower is better). Gap/ratio are computed as method vs MIP makespan.}
+\label{tab:mkspan_overall_vs_mip}
+\end{table}

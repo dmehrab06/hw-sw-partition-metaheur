@@ -10,6 +10,7 @@ from .de_utils import simulate_SHADE, simulate_JADE
 from .nondiff_gnn_utils import simulate_nondiff_GNN
 # from .diff_gnn_utils import simulate_diff_GNN
 from .diff_gnn_utils_schedule import simulate_diff_GNN
+from .diff_gnn_ordering import simulate_diff_GNN_order
 
 
 
@@ -45,5 +46,6 @@ __all__ = [
     'simulate_SHADE',
     'simulate_JADE',
     'simulate_nondiff_GNN',
-    'simulate_diff_GNN'
+    'simulate_diff_GNN',
+    'simulate_diff_GNN_order',
 ]
