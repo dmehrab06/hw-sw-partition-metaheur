@@ -1,17 +1,16 @@
 import numpy as np
 import networkx as nx
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import os
 import random
 import math
 import sys
+from collections.abc import Mapping
 
 # torch-geometric imports
 try:
     from torch_geometric.data import Data
-    from torch_geometric.nn import GCNConv
 except Exception as e:
     raise ImportError("This module requires torch_geometric. Install with 'pip install torch-geometric'.") from e
 
@@ -27,6 +26,15 @@ if __name__ == "__main__":
     LogManager.initialize("logs/diff_gnn_utils.log")
 
 logger = LogManager.get_logger(__name__)
+
+try:
+    from .diff_gnn_models import build_placement_model
+except Exception:
+    from diff_gnn_models import build_placement_model  # type: ignore
+try:
+    from .lssp_postprocess import improve_with_lssp_local_search
+except Exception:
+    from lssp_postprocess import improve_with_lssp_local_search  # type: ignore
 
 def _set_global_seeds(seed: int) -> None:
     torch.manual_seed(seed)
@@ -46,80 +54,6 @@ def _enable_determinism(seed: int) -> None:
     # Avoid TF32 variability on Ampere/Hopper
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
-
-
-# # Lightweight differentiable GNN for binary partitioning (hardware/software)
-# class DiffGNN(nn.Module):
-#     def __init__(self, in_channels=4, hidden_dim=64):
-#         super().__init__()
-#         self.conv1 = GCNConv(in_channels, hidden_dim)
-#         self.conv2 = GCNConv(hidden_dim, hidden_dim // 2)
-#         self.lin = nn.Linear(hidden_dim // 2, 1)
-
-#     def forward(self, x, edge_index):
-#         """Standard two-layer GCN encoder followed by a single logit per node."""
-#         h = F.relu(self.conv1(x, edge_index))
-#         h = F.relu(self.conv2(h, edge_index))
-#         logits = self.lin(h).squeeze(-1)  # (N,)
-#         # produce two-class logits (class0=software, class1=hardware)
-#         logits2 = torch.stack([-logits, logits], dim=1)  # (N,2)
-#         return logits2
-
-class DiffGNN(nn.Module):
-    """
-    Lightweight differentiable GNN for binary partitioning (software vs hardware).
-
-    - num_layers controls how many GCNConv layers are used before the final linear head.
-    - Output is (N, 2) logits: [software_logit, hardware_logit] per node.
-    """
-    def __init__(
-        self,
-        in_channels: int = 4,
-        hidden_dim: int = 64,
-        num_layers: int = 2,
-        dropout: float = 0.0,
-    ):
-        super().__init__()
-        if num_layers < 1:
-            raise ValueError("num_layers must be >= 1")
-
-        self.num_layers = num_layers
-        self.dropout = dropout
-
-        # Build GCN stack
-        convs = []
-        if num_layers == 1:
-            # Single GCN layer directly into a smaller embedding size (like your original conv2 output)
-            convs.append(GCNConv(in_channels, hidden_dim // 2))
-            last_dim = hidden_dim // 2
-        else:
-            # First layer: in -> hidden_dim
-            convs.append(GCNConv(in_channels, hidden_dim))
-            # Middle/last GCN layers: keep same dim until final one reduces to hidden_dim//2
-            for _ in range(num_layers - 2):
-                convs.append(GCNConv(hidden_dim, hidden_dim))
-            convs.append(GCNConv(hidden_dim, hidden_dim // 2))
-            last_dim = hidden_dim // 2
-
-        self.convs = nn.ModuleList(convs)
-        self.lin = nn.Linear(last_dim, 1)
-
-    def forward(self, x, edge_index):
-        """
-        Returns:
-            logits2: (N, 2) where [:,0]=software logit, [:,1]=hardware logit
-        """
-        h = x
-        for conv in self.convs:
-            h = conv(h, edge_index)
-            h = F.relu(h)
-            if self.dropout > 0:
-                h = F.dropout(h, p=self.dropout, training=self.training)
-
-        logits = self.lin(h).squeeze(-1)              # (N,)
-        logits2 = torch.stack([-logits, logits], 1)   # (N,2)
-        return logits2
-
 
 
 def _relaxed_binary_assignment(logits2, temperature, hard, sampler="soft", logit_scale=1.0, center_logits=False):
@@ -357,8 +291,6 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         - Adam optimizer updates the model
     """
     import random
-    from utils.scheduler_utils import compute_dag_makespan
-
     lr = float(config.get("lr", 1e-3))
     epochs = int(config.get("epochs", 1000))
     tau_start = float(config.get("tau_start", 1.0))
@@ -379,6 +311,15 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     center_logits = bool(config.get("center_logits", True))
     # choose whether to make training assignments hard 0/1 (straight-through) or soft (sigmoid)
     hard_train_outputs = bool(config.get("hard_train_outputs", sampler != "soft"))
+    post_cfg_raw = config.get("postprocess", {})
+    post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
+    post_enabled = bool(post_cfg.get("enabled", config.get("lssp_postprocess_enabled", False)))
+    post_during_eval = bool(post_cfg.get("during_eval", config.get("lssp_postprocess_during_eval", False)))
+    post_eval_mode = str(post_cfg.get("eval_mode", config.get("lssp_postprocess_eval", "taskgraph"))).lower()
+    post_max_iters = int(post_cfg.get("max_iters", config.get("lssp_postprocess_max_iters", 64)))
+    post_enable_area_fill = bool(post_cfg.get("enable_area_fill", config.get("lssp_postprocess_area_fill", True)))
+    post_fill_allow_worsen = float(post_cfg.get("fill_allow_worsen", config.get("lssp_postprocess_fill_allow_worsen", 0.0)))
+    post_enable_swap = bool(post_cfg.get("enable_swap", config.get("lssp_postprocess_enable_swap", True)))
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -400,8 +341,18 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         str(center_logits),
         str(hard_train_outputs),
     )
+    if post_enabled:
+        logger.info(
+            "DiffGNN postprocess enabled: eval_mode=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s",
+            post_eval_mode,
+            str(post_during_eval),
+            post_max_iters,
+            str(post_enable_area_fill),
+            post_fill_allow_worsen,
+            str(post_enable_swap),
+        )
 
-    best_mip_cost = float('inf')
+    best_sched_cost = float('inf')
     best_assign = None
     best_probs = None
 
@@ -449,33 +400,41 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                 hard_probs = hard_probs_t.cpu().numpy().astype(float)  # 0/1
                 hard_probs_repaired = _repair_candidate(TG, hard_probs, node_list, prefer_by_score=hard_probs)
                 solution = {node_list[i]: int(1 if hard_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
+                if post_enabled and post_during_eval:
+                    solution, _ = improve_with_lssp_local_search(
+                        TG,
+                        solution,
+                        max_iters=post_max_iters,
+                        eval_mode=post_eval_mode,
+                        enable_area_fill=post_enable_area_fill,
+                        fill_allow_worsen=post_fill_allow_worsen,
+                        enable_swap=post_enable_swap,
+                    )
                 violation = TG.violates(solution)
                 if violation:
-                    current_mip_cost = TG.violation_cost
+                    current_sched_cost = TG.violation_cost
                 else:
-                    mip_assignment = [1 - solution[k] for k in TG.rounak_graph]
                     try:
-                        makespan, _ = compute_dag_makespan(TG.rounak_graph, mip_assignment)
-                        current_mip_cost = makespan
+                        current_sched_cost = float(TG.evaluate_makespan(solution)["makespan"])
                     except Exception as e:
-                        logger.warning("compute_dag_makespan failed during training eval: %s", str(e))
-                        current_mip_cost = float('inf')
+                        logger.warning("evaluate_makespan failed during training eval: %s", str(e))
+                        current_sched_cost = float('inf')
 
-                if current_mip_cost < best_mip_cost:
-                    best_mip_cost = current_mip_cost
+                if current_sched_cost < best_sched_cost:
+                    best_sched_cost = current_sched_cost
                     best_assign = solution.copy()
                     best_probs = hard_probs.copy()
 
         if ep % max(1, epochs // 10) == 0 or ep <= 5:
             logger.info(
-                "Epoch %d/%d loss=%.6f surrogate_makespan=%.6f area_frac=%.4f area_pen=%.3f mip_best=%.6f",
+                "Epoch %d/%d loss=%.6f surrogate_makespan=%.6f area_frac=%.4f area_pen=%.3f sched_best=%.6f",
                 ep,
                 epochs,
                 info["loss"],
                 info["makespan_surrogate"],
                 info["area_frac"],
                 info["area_penalty"],
-                best_mip_cost,
+                best_sched_cost,
             )
 
     # Final deterministic prediction using low-temperature hard sampling
@@ -488,29 +447,45 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         final_probs = hard_probs_t.cpu().numpy().astype(float)
         final_probs_repaired = _repair_candidate(TG, final_probs, node_list, prefer_by_score=final_probs)
         final_solution = {node_list[i]: int(1 if final_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
+        if post_enabled:
+            final_solution, post_info = improve_with_lssp_local_search(
+                TG,
+                final_solution,
+                max_iters=post_max_iters,
+                eval_mode=post_eval_mode,
+                enable_area_fill=post_enable_area_fill,
+                fill_allow_worsen=post_fill_allow_worsen,
+                enable_swap=post_enable_swap,
+            )
+            logger.info(
+                "DiffGNN final postprocess: improved=%s cost=%.3f hw_area=%.3f/%.3f (%s)",
+                str(post_info["improved"]),
+                post_info["cost"],
+                post_info["hw_area"],
+                post_info["budget"],
+                post_info["eval_mode"],
+            )
         violation = TG.violates(final_solution)
         if violation:
-            final_mip_cost = TG.violation_cost
+            final_sched_cost = TG.violation_cost
         else:
-            mip_assignment = [1 - final_solution[k] for k in TG.rounak_graph]
             try:
-                final_makespan, _ = compute_dag_makespan(TG.rounak_graph, mip_assignment)
-                final_mip_cost = final_makespan
+                final_sched_cost = float(TG.evaluate_makespan(final_solution)["makespan"])
             except Exception as e:
-                logger.warning("compute_dag_makespan failed at final eval: %s", str(e))
-                final_mip_cost = float('inf')
+                logger.warning("evaluate_makespan failed at final eval: %s", str(e))
+                final_sched_cost = float('inf')
 
     # choose best between tracked best and final
-    if best_assign is None or final_mip_cost < best_mip_cost:
+    if best_assign is None or final_sched_cost < best_sched_cost:
         best_assign = final_solution
         best_probs = final_probs
-        best_mip_cost = final_mip_cost
+        best_sched_cost = final_sched_cost
 
-    logger.info("Training finished. Best MIP makespan: %.6f", best_mip_cost)
+    logger.info("Training finished. Best queue makespan: %.6f", best_sched_cost)
     return {
         "best_assign": best_assign,            # dict node -> {0,1}
         "best_probs": np.asarray(best_probs),  # numpy array 0/1
-        "best_mip_cost": float(best_mip_cost),
+        "best_mip_cost": float(best_sched_cost),
         "model": model,
     }
 
@@ -561,14 +536,23 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
     num_layers = int(config.get("num_layers", 3))
     dropout = float(config.get("dropout", 0.5))
     hidden_dim = int(config.get("hidden_dim", 256))
+    model_name = str(config.get("model", config.get("model_name", "default"))).lower()
+    model_extra_cfg = {
+        k: v
+        for k, v in config.items()
+        if k not in {"model", "model_name", "hidden_dim", "num_layers", "dropout"}
+    }
 
-    model = DiffGNN(
+    model = build_placement_model(
+        model_name=model_name,
         in_channels=data.num_node_features,
         hidden_dim=hidden_dim,
         num_layers=num_layers,
         dropout=dropout,
+        **model_extra_cfg,
     )
 
+    logger.info("DiffGNN model selected: %s", model_name)
     print(model)
 
     return _train_with_relaxed_binary(TG, model, data, node_list, config, device)
@@ -632,6 +616,8 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
         diff_cfg["num_layers"] = 3
     if "dropout" not in diff_cfg:
         diff_cfg["dropout"] = 0.5
+    if "model" not in diff_cfg and "model_name" not in diff_cfg:
+        diff_cfg["model"] = "default"
     # map common aliases
     if "iter" in diff_cfg and "epochs" not in diff_cfg:
         diff_cfg["epochs"] = diff_cfg["iter"]
@@ -663,14 +649,12 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
 
     assert sol_arr.shape[0] == dim, f"dim ({dim}) != number of nodes ({sol_arr.shape[0]})"
 
-    # Evaluate with provided black-box function to align with registry expectations
-    raw_cost = func_to_optimize(sol_arr)
-    if isinstance(raw_cost, dict) and "makespan" in raw_cost:
-        eval_cost = float(raw_cost["makespan"])
-    elif isinstance(raw_cost, (list, tuple, np.ndarray)):
-        eval_cost = float(np.asarray(raw_cost).ravel()[0])
+    # Queue-scheduler evaluation aligned with TaskGraph.evaluate_makespan.
+    solution = {node_list[i]: int(sol_arr[i] > 0.5) for i in range(len(node_list))}
+    if TG.violates(solution):
+        eval_cost = float(TG.violation_cost)
     else:
-        eval_cost = float(raw_cost)
+        eval_cost = float(TG.evaluate_makespan(solution)["makespan"])
 
     # Prefer the MIP/LP makespan we already computed during training if available
     best_cost = float(result.get("best_mip_cost", eval_cost))
@@ -678,7 +662,7 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
         best_cost = eval_cost
 
     logger.info(
-        "simulate_diff_GNN finished: best_cost=%.6f (eval_cost=%.6f, mip_cost=%.6f)",
+        "simulate_diff_GNN finished: best_cost=%.6f (eval_cost=%.6f, train_best_cost=%.6f)",
         best_cost,
         eval_cost,
         result.get("best_mip_cost", float("nan")),

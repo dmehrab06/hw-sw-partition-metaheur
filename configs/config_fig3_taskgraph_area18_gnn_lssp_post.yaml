@@ -1,0 +1,57 @@
+# Fig.3 task-graph with absolute HW area budget = 18 + LSSP-style local-search postprocess
+graph-file: "inputs/task_graph_topology/custom/paper_fig3_11node.dot"
+area-constraint: 0.4090909091
+hw-scale-factor: 1.0
+hw-scale-variance: 0.1
+comm-scale-factor: 1.0
+seed: 42
+
+solution-dir: "outputs/fig3_partitions_area18_lssp_post"
+result-file-prefix: "fig3_area18_diffgnn_lssp_post"
+output-dir: "outputs"
+taskgraph-dir: "inputs/task_graph_complete"
+taskgraph-pickle: "inputs/task_graph_complete/taskgraph-paper_fig3_11node-instance-config-config_fig3_taskgraph_area18_gnn.pkl"
+
+methods: "diff_gnn,diff_gnn_order"
+opt-cost-type: "mip"
+
+random:
+  num_samples: 50
+  p: 0.5
+
+diffgnn:
+  iter: 250
+  verbose: 250
+  device: "cpu"
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.2
+  model: "default"
+  hard_eval_every: 50
+  postprocess:
+    enabled: true
+    during_eval: false
+    eval_mode: "taskgraph"
+    max_iters: 120
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: true
+
+diffgnn_order:
+  iter: 250
+  verbose: 250
+  device: "cpu"
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.2
+  model: "default"
+  hard_eval_every: 50
+  fast_mode: true
+  postprocess:
+    enabled: true
+    during_eval: false
+    eval_mode: "taskgraph"
+    max_iters: 120
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: true

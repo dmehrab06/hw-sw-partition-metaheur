@@ -2,7 +2,6 @@ from typing import Dict, Callable, Any, List
 import pandas as pd
 from dataclasses import dataclass
 from utils.logging_utils import LogManager
-from utils.scheduler_utils import compute_dag_makespan
 import time
 
 # Set up logging
@@ -35,13 +34,12 @@ def _normalize_partition(partition: dict):
         raise ValueError(f"Invalid partition value for node={node}: {a!r}")
     return out
 
-def _compute_lp_makespan(task_graph, partition: dict) -> float:
-    """Compute LP makespan using compute_dag_makespan with area-constraint penalty."""
+def _compute_schedule_makespan(task_graph, partition: dict) -> float:
+    """Compute queue-based makespan using TaskGraph.evaluate_makespan with area-constraint penalty."""
     if task_graph.violates(partition):
         return task_graph.violation_cost
-    assignment = [1 - partition[n] for n in task_graph.rounak_graph]
-    makespan, _ = compute_dag_makespan(task_graph.rounak_graph, assignment)
-    return makespan
+    result = task_graph.evaluate_makespan(partition)
+    return float(result["makespan"])
 
 
 @dataclass
@@ -103,7 +101,7 @@ class MethodRegistry:
         partition = _normalize_partition(partition)
         print(partition)
         if naive_opt_func_name == 'mip':
-            makespan = _compute_lp_makespan(task_graph, partition)
+            makespan = _compute_schedule_makespan(task_graph, partition)
         else:
             makespan = task_graph.evaluate_makespan(partition)['makespan']
         partition_cost = task_graph.evaluate_partition_cost(partition)
@@ -131,7 +129,7 @@ class MethodRegistry:
         partition = _normalize_partition(partition)
         print(partition)
         if naive_opt_func_name == 'mip':
-            makespan = _compute_lp_makespan(task_graph, partition)
+            makespan = _compute_schedule_makespan(task_graph, partition)
         else:
             makespan = task_graph.evaluate_makespan(partition)['makespan']
         partition_cost = task_graph.evaluate_partition_cost(partition)
