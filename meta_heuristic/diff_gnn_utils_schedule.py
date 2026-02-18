@@ -249,7 +249,7 @@ def _differentiable_makespan_loss(
     beta_softmax=20.0,
     area_penalty_coeff=1e5,
     entropy_coeff=1e-3,
-    usage_balance_coeff=0.5,
+    usage_balance_coeff=0.0,
     target_hw_frac=None,
     partition_cost_coeff=0.0,
 ):
@@ -313,7 +313,8 @@ def _differentiable_makespan_loss(
 
     # optional balance penalty to push hardware usage toward a target fraction
     if target_hw_frac is None:
-        target_hw_frac = float(TG.area_constraint)
+        # cap target to avoid pushing toward very large HW usage when area is loose
+        target_hw_frac = min(float(TG.area_constraint), 0.3)
     usage_balance = usage_balance_coeff * (area_frac - float(target_hw_frac)) ** 2
 
     # entropy-like term to push probabilities to binary (smooth)
@@ -359,22 +360,22 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     from utils.scheduler_utils import compute_dag_makespan
 
     lr = float(config.get("lr", 1e-3))
-    epochs = int(config.get("epochs", 400))
+    epochs = int(config.get("epochs", 1000))
     tau_start = float(config.get("tau_start", 1.0))
     tau_final = float(config.get("tau_final", 0.1))
     beta_softmax = float(config.get("beta_softmax", 20.0))
-    # restore original stronger defaults (used in full comparison)
     area_penalty_coeff = float(config.get("area_penalty_coeff", 1e5))
     entropy_coeff = float(config.get("entropy_coeff", 1e-3))
-    usage_balance_coeff = float(config.get("usage_balance_coeff", 0.5))
+    usage_balance_coeff = float(config.get("usage_balance_coeff", 0.0))
     target_hw_frac = config.get("target_hw_frac", None)
-
-    base_part_coeff = float(config.get("partition_cost_coeff", 1e-2))
-    partition_cost_coeff = base_part_coeff
+    # scale partition penalty up when area is generous to discourage over-hardware placements
+    base_part_coeff = float(config.get("partition_cost_coeff", 5e-2))
+    part_scale = max(1.0, float(getattr(TG, "area_constraint", 0.0)) / 0.3)
+    partition_cost_coeff = base_part_coeff * part_scale
     seed = int(config.get("seed", 42))
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 10)))
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
-    logit_scale = float(config.get("logit_scale", 8.0))
+    logit_scale = float(config.get("logit_scale", 3.0))
     center_logits = bool(config.get("center_logits", True))
     # choose whether to make training assignments hard 0/1 (straight-through) or soft (sigmoid)
     hard_train_outputs = bool(config.get("hard_train_outputs", sampler != "soft"))
@@ -533,13 +534,13 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
       - beta_softmax: 20.0
       - area_penalty_coeff: 1e5
       - entropy_coeff: 1e-3
-      - usage_balance_coeff: 0.5 (set >0 to push hardware usage toward target_hw_frac)
-      - target_hw_frac: defaults to area_constraint
-      - partition_cost_coeff: 1e-2
+      - usage_balance_coeff: 0.0 (set >0 to push hardware usage toward target_hw_frac)
+      - target_hw_frac: defaults to min(area_constraint, 0.3)
+      - partition_cost_coeff: 5e-2 (scaled up automatically when area_constraint is large)
       - seed: 42
       - hard_eval_every: epochs//10
       - sampling: 'soft' (default) or 'hard'
-      - logit_scale: 8.0 (increase to sharpen sigmoid probabilities)
+      - logit_scale: 3.0 (increase to sharpen sigmoid probabilities)
       - center_logits: False (set True to subtract batch mean before sigmoid)
     """
     if config is None:
