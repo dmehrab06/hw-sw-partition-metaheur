@@ -119,7 +119,7 @@ flowchart LR
 
 ```
 
-## With odering but with more details
+## With ordering (details)
 
 ```mermaid
 flowchart LR
