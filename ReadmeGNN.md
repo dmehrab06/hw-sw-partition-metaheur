@@ -68,66 +68,53 @@ find outputs/final_visualizations/fig3 -type f -name "*.png" | sort
 ## without ordering
 
 ```mermaid
-flowchart TD
-    A[simulate_diff_GNN] --> B[Read TG + diffgnn config defaults]
-    B --> C[Select device]
-    C --> D[optimize_diff_gnn]
-    D --> E[Build graph data + placement model]
+flowchart LR
+  subgraph T["diff_gnn training"]
+    IG[Input DAG graph] --> FEAT[Features: sw_time, hw_time, area, optional HG and HGP]
+    FEAT --> GNN[Diff GNN encoder with optional edge_mlp]
+    GNN --> HEAD[Placement head: HW probability per node]
+    HEAD --> LOSS[Differentiable loss: makespan surrogate, area, regularizers]
+    LOSS -.->|backprop| GNN
+  end
 
-    E --> F[Training loop]
-    F --> F1[Forward pass -> logits]
-    F1 --> F2[Relaxed binary assignment]
-    F2 --> F3[Optional: paper_sigma blend + DLS refine]
-    F3 --> F4[Differentiable makespan loss]
-    F4 --> F5[Backprop + Adam]
+  subgraph I["diff_gnn postprocess and inference"]
+    IG --> FEATI[Same feature build]
+    FEATI --> GNNI[Trained Diff GNN]
+    GNN -->|trained weights| GNNI
+    GNNI --> DEC[Decode to binary HW SW partition]
+    DEC --> DLS[DLS refine optional]
+    DLS --> LSSP[LSSP local search optional]
+    LSSP --> OUT[Final partition and final metric]
+  end
 
-    F5 --> G{Hard eval step?}
-    G -- Yes --> H[Hard decode + repair/fill]
-    H --> I[Optional LSSP local search]
-    I --> J[Evaluate train metric]
-    J --> K[Track best assignment]
-    G -- No --> F
-    K --> F
-
-    F --> L[Final hard decode]
-    L --> M[Repair/fill + optional final LSSP]
-    M --> N[Evaluate final metric]
-    N --> O[Return best_assign + best_cost]
-    O --> P[Wrapper: to sol_arr + final repair]
-    P --> Q[Output: best_cost, sol_arr]
+  linkStyle 4 stroke:#d62728,stroke-width:2px,stroke-dasharray:6 4,color:#d62728
 
 ```
-## with ordering 
+
+## With ordering
 
 ```mermaid
-flowchart TD
-    A[simulate_diff_GNN_order] --> B[Read TG + diffgnn_order defaults]
-    B --> C[Select device]
-    C --> D[optimize_diff_gnn_order]
-    D --> E[Build graph data + order model]
+flowchart LR
+  subgraph T["diff_gnn_order training"]
+    IG[Input DAG graph] --> FEAT[Features: sw_time, hw_time, area, optional HG and HGP]
+    FEAT --> ENC[Diff GNN Order encoder with optional edge_mlp]
+    ENC --> PH[Placement head: HW probability]
+    ENC --> OH[Ordering heads: prio_hw and prio_sw]
+    PH --> OLOSS[Order aware differentiable loss: makespan, area, ordering terms]
+    OH --> OLOSS
+    OLOSS -.->|backprop| ENC
+  end
 
-    E --> F[Training loop]
-    F --> F1[Forward -> logits + prio_hw + prio_sw]
-    F1 --> F2[Relaxed binary assignment]
-    F2 --> F3[Optional: paper_sigma blend + DLS refine]
-    F3 --> F4[Order-aware differentiable loss]
-    F4 --> F5[Includes sinkhorn/gumbel/pairwise/perm terms]
-    F5 --> F6[Backprop + Adam]
+  subgraph I["diff_gnn_order postprocess and inference"]
+    IG --> FEATI[Same feature build]
+    FEATI --> ENCI[Trained Diff GNN Order]
+    ENC -->|trained weights| ENCI
+    ENCI --> ODEC[Order aware decode combines placement plus prio_hw and prio_sw]
+    ODEC --> DLS[DLS refine optional]
+    DLS --> LSSP[LSSP local search optional]
+    LSSP --> OUT[Final ordered partition and final metric]
+  end
 
-    F6 --> G{Hard eval step?}
-    G -- Yes --> H[Order-aware decode score]
-    H --> I[Repair/fill using decode score]
-    I --> J[Optional LSSP local search]
-    J --> K[Evaluate train metric]
-    K --> L[Track best assignment]
-    G -- No --> F
-    L --> F
-
-    F --> M[Final hard decode]
-    M --> N[Order-aware repair/fill + optional final LSSP]
-    N --> O[Evaluate final metric]
-    O --> P[Return best_assign + best_cost]
-    P --> Q[Wrapper: to sol_arr + final repair]
-    Q --> R[Output: best_cost, sol_arr]
+  linkStyle 6 stroke:#d62728,stroke-width:2px,stroke-dasharray:6 4,color:#d62728
 
 ```
