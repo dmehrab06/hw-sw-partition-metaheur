@@ -2,6 +2,7 @@ import math
 import os
 import random
 import sys
+import time
 from collections.abc import Mapping
 
 import networkx as nx
@@ -54,14 +55,16 @@ if __name__ == "__main__":
 logger = LogManager.get_logger(__name__)
 
 _FAST_MODE_DEFAULTS = {
-    "iter": 600,
-    "verbose": 600,
+    "iter": 500,
+    "verbose": 500,
     "hidden_dim": 128,
     "num_layers": 2,
     "dropout": 0.3,
     "sinkhorn_iters": 8,
     "order_refine_steps": 1,
-    "hard_eval_every": 120,
+    "hard_eval_every": 150,
+    "gumbel_noise": False,
+    "gumbel_scale": 0.0,
     "pairwise_mode": "rank_sigmoid",
     "pairwise_temp": 0.7,
 }
@@ -376,7 +379,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     paper_sigma = max(0.0, min(1.0, paper_sigma))
 
     seed = int(config.get("seed", 42))
-    hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 10)))
+    hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 5)))
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
     logit_scale = float(config.get("logit_scale", 8.0))
     center_logits = bool(config.get("center_logits", True))
@@ -390,15 +393,18 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         post_mode = "lssp"
     if post_mode not in {"none", "dls", "lssp", "hybrid"}:
         raise ValueError(f"Unsupported postprocess_mode '{post_mode}'. Use none|dls|lssp|hybrid.")
-    use_dls = post_mode in {"dls", "hybrid"}
-    use_lssp = post_mode in {"lssp", "hybrid"}
+    post_during_train = bool(post_cfg.get("during_train", config.get("postprocess_during_train", False)))
     post_during_eval = bool(post_cfg.get("during_eval", config.get("lssp_postprocess_during_eval", False)))
+    use_dls_train = post_mode in {"dls", "hybrid"} and post_during_train
+    use_dls_final = post_mode in {"dls", "hybrid"}
+    use_lssp_eval = post_mode in {"lssp", "hybrid"} and post_during_train and post_during_eval
+    use_lssp_final = post_mode in {"lssp", "hybrid"}
     post_eval_mode = str(post_cfg.get("eval_mode", config.get("lssp_postprocess_eval", "taskgraph"))).lower()
     post_max_iters = int(post_cfg.get("max_iters", config.get("lssp_postprocess_max_iters", 64)))
     post_enable_area_fill = bool(post_cfg.get("enable_area_fill", config.get("lssp_postprocess_area_fill", True)))
     post_fill_allow_worsen = float(post_cfg.get("fill_allow_worsen", config.get("lssp_postprocess_fill_allow_worsen", 0.0)))
     post_enable_swap = bool(post_cfg.get("enable_swap", config.get("lssp_postprocess_enable_swap", True)))
-    dls_steps = int(post_cfg.get("dls_steps", config.get("dls_steps", 2 if use_dls else 0)))
+    dls_steps = int(post_cfg.get("dls_steps", config.get("dls_steps", 2 if use_dls_final else 0)))
     dls_flip_eta = float(post_cfg.get("dls_flip_eta", config.get("dls_flip_eta", 0.35)))
     dls_swap_eta = float(post_cfg.get("dls_swap_eta", config.get("dls_swap_eta", 0.18)))
     dls_score_temp = float(post_cfg.get("dls_score_temp", config.get("dls_score_temp", 0.7)))
@@ -415,7 +421,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     logger.info(
-        "DiffGNNOrder training: sampler=%s epochs=%d lr=%.2e tau=%.2f->%.2f order_tau=%.2f->%.2f sinkhorn=%d gumbel=%s alpha=%.2f pairwise_mode=%s pairwise_temp=%.2f post_mode=%s feature_profile=%s edge_weight_mode=%s paper_sigma=%.2f",
+        "DiffGNNOrder training: sampler=%s epochs=%d lr=%.2e tau=%.2f->%.2f order_tau=%.2f->%.2f sinkhorn=%d gumbel=%s alpha=%.2f pairwise_mode=%s pairwise_temp=%.2f post_mode=%s post_during_train=%s feature_profile=%s edge_weight_mode=%s paper_sigma=%.2f",
         sampler,
         epochs,
         lr,
@@ -429,13 +435,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         pairwise_mode,
         pairwise_temp,
         post_mode,
+        str(post_during_train),
         str(config.get("feature_profile", "default")),
         str(config.get("edge_weight_mode", "auto")),
         paper_sigma,
     )
-    if use_dls:
+    if use_dls_train:
         logger.info(
-            "DiffGNNOrder DLS enabled: steps=%d flip_eta=%.2f swap_eta=%.2f temp=%.2f comm_coeff=%.3f area_proj_iters=%d area_proj_strength=%.2f",
+            "DiffGNNOrder DLS enabled during training: steps=%d flip_eta=%.2f swap_eta=%.2f temp=%.2f comm_coeff=%.3f area_proj_iters=%d area_proj_strength=%.2f",
             dls_steps,
             dls_flip_eta,
             dls_swap_eta,
@@ -444,10 +451,11 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             dls_area_proj_iters,
             dls_area_proj_strength,
         )
-    if use_lssp:
+    if use_lssp_final:
         logger.info(
-            "DiffGNNOrder postprocess enabled: eval_mode=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s",
+            "DiffGNNOrder final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s",
             post_eval_mode,
+            str(post_during_train),
             str(post_during_eval),
             post_max_iters,
             str(post_enable_area_fill),
@@ -480,7 +488,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         if paper_sigma > 0 and paper_hgp is not None:
             probs = (1.0 - paper_sigma) * probs + paper_sigma * paper_hgp.to(probs.device, probs.dtype)
             probs = probs.clamp(0.0, 1.0)
-        if use_dls and dls_steps > 0:
+        if use_dls_train and dls_steps > 0:
             probs = _dls_refine_probs(
                 TG,
                 probs,
@@ -541,7 +549,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     hard_probs_t = hard_probs_t.clamp(0.0, 1.0)
 
                 hard_probs = hard_probs_t.cpu().numpy().astype(float)
-                if use_dls and dls_steps > 0:
+                if use_dls_train and dls_steps > 0:
                     hard_probs_t_refined = _dls_refine_probs(
                         TG,
                         hard_probs_t.float(),
@@ -562,7 +570,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     weight=order_decode_weight,
                 )
                 hard_probs_repaired = _repair_candidate(TG, hard_probs, node_list, prefer_by_score=decode_scores)
-                if use_dls and dls_fill_decode:
+                if use_dls_train and dls_fill_decode:
                     hard_probs_repaired = _fill_hw_area_by_score(
                         TG,
                         hard_probs_repaired,
@@ -570,7 +578,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         prefer_by_score=decode_scores,
                     )
                 solution = {node_list[i]: int(1 if hard_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
-                if use_lssp and post_during_eval:
+                if use_lssp_eval:
                     solution, _ = improve_with_lssp_local_search(
                         TG,
                         solution,
@@ -610,6 +618,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 best_sched_cost,
             )
 
+    logger.info("DiffGNNOrder final decode started.")
     model.eval()
     with torch.no_grad():
         logits2, prio_hw, prio_sw = model(data.x, data.edge_index, edge_weight=edge_weight)
@@ -625,7 +634,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             hard_probs_t = (1.0 - paper_sigma) * hard_probs_t + paper_sigma * paper_hgp.to(hard_probs_t.device, hard_probs_t.dtype)
             hard_probs_t = hard_probs_t.clamp(0.0, 1.0)
         final_probs = hard_probs_t.cpu().numpy().astype(float)
-        if use_dls and dls_steps > 0:
+        if use_dls_final and dls_steps > 0:
             final_probs_t_refined = _dls_refine_probs(
                 TG,
                 hard_probs_t.float(),
@@ -646,7 +655,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             weight=order_decode_weight,
         )
         final_probs_repaired = _repair_candidate(TG, final_probs, node_list, prefer_by_score=final_decode_scores)
-        if use_dls and dls_fill_decode:
+        if use_dls_final and dls_fill_decode:
             final_probs_repaired = _fill_hw_area_by_score(
                 TG,
                 final_probs_repaired,
@@ -654,7 +663,15 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 prefer_by_score=final_decode_scores,
             )
         final_solution = {node_list[i]: int(1 if final_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
-        if use_lssp:
+        if use_lssp_final:
+            post_t0 = time.perf_counter()
+            logger.info(
+                "DiffGNNOrder final postprocess started: mode=%s eval_mode=%s max_iters=%d swap=%s",
+                post_mode,
+                post_eval_mode,
+                post_max_iters,
+                str(post_enable_swap),
+            )
             final_solution, post_info = improve_with_lssp_local_search(
                 TG,
                 final_solution,
@@ -672,6 +689,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 post_info["budget"],
                 post_info["eval_mode"],
             )
+            logger.info("DiffGNNOrder final postprocess elapsed: %.3fs", time.perf_counter() - post_t0)
 
         violation = TG.violates(final_solution)
         if violation:
@@ -759,40 +777,59 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
         # Fallback to diffgnn block for convenience.
         diff_cfg = dict(config.get("diffgnn", {}))
 
-    fast_mode = bool(diff_cfg.get("fast_mode", False))
+    fast_mode = bool(diff_cfg.get("fast_mode", True))
     if fast_mode:
         for key, value in _FAST_MODE_DEFAULTS.items():
             diff_cfg.setdefault(key, value)
         logger.info("diff_gnn_order fast_mode enabled. Applied speed defaults for unset keys.")
 
     if "iter" not in diff_cfg and "epochs" not in diff_cfg:
-        diff_cfg["iter"] = 1500
+        diff_cfg["iter"] = 600
     if "verbose" not in diff_cfg:
-        diff_cfg["verbose"] = 1500
+        diff_cfg["verbose"] = 600
     if "hidden_dim" not in diff_cfg:
-        diff_cfg["hidden_dim"] = 256
+        diff_cfg["hidden_dim"] = 128
     if "num_layers" not in diff_cfg:
-        diff_cfg["num_layers"] = 3
+        diff_cfg["num_layers"] = 2
     if "dropout" not in diff_cfg:
-        diff_cfg["dropout"] = 0.5
+        diff_cfg["dropout"] = 0.3
     if "model" not in diff_cfg and "model_name" not in diff_cfg:
         diff_cfg["model"] = "default"
 
     if "iter" in diff_cfg and "epochs" not in diff_cfg:
         diff_cfg["epochs"] = diff_cfg["iter"]
+    epochs = int(diff_cfg.get("epochs", 600))
+
+    # Speed patch defaults for ordering path (applies even when fast_mode is
+    # explicitly disabled, unless the user already overrides each knob).
+    if bool(diff_cfg.get("speed_patch", True)):
+        diff_cfg.setdefault("sinkhorn_iters", 8)
+        diff_cfg.setdefault("order_refine_steps", 1)
+        diff_cfg.setdefault("gumbel_noise", False)
+        diff_cfg.setdefault("gumbel_scale", 0.0)
+
+    if "hard_eval_every" not in diff_cfg:
+        diff_cfg["hard_eval_every"] = max(1, epochs // 5)
+    elif bool(diff_cfg.get("speed_patch", True)):
+        diff_cfg["hard_eval_every"] = max(int(diff_cfg["hard_eval_every"]), max(1, epochs // 5))
+
+    post_cfg_raw = diff_cfg.get("postprocess", {})
+    post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
+    post_cfg.setdefault("during_train", False)
+    diff_cfg["postprocess"] = post_cfg
 
     # Ordering defaults
     diff_cfg.setdefault("order_tau_start", 1.0)
     diff_cfg.setdefault("order_tau_final", 0.2)
-    diff_cfg.setdefault("sinkhorn_iters", 20)
-    diff_cfg.setdefault("gumbel_noise", True)
-    diff_cfg.setdefault("gumbel_scale", 1.0)
+    diff_cfg.setdefault("sinkhorn_iters", 8)
+    diff_cfg.setdefault("gumbel_noise", False)
+    diff_cfg.setdefault("gumbel_scale", 0.0)
     diff_cfg.setdefault("resource_logit_alpha", 2.0)
-    diff_cfg.setdefault("order_refine_steps", 2)
+    diff_cfg.setdefault("order_refine_steps", 1)
     diff_cfg.setdefault("perm_reg_coeff", 1e-2)
     diff_cfg.setdefault("perm_entropy_coeff", 1e-3)
     diff_cfg.setdefault("pairwise_mode", "rank_sigmoid")
-    diff_cfg.setdefault("pairwise_temp", 0.5)
+    diff_cfg.setdefault("pairwise_temp", 0.7)
 
     if "seed" not in diff_cfg and "seed" in config:
         diff_cfg["seed"] = config.get("seed")

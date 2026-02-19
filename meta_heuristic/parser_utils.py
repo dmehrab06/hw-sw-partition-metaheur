@@ -44,6 +44,14 @@ def parse_arguments() -> DictConfig:
                        help='Communication scale factor (should be positive)')
     parser.add_argument('--seed', type=int, default=None,
                        help='Random seed for reproducibility')
+    parser.add_argument('--result-csv', type=str,
+                       help='Optional output CSV filename/path override')
+    parser.add_argument('--result-file-prefix', type=str,
+                       help='Optional output CSV prefix when --result-csv is not provided')
+    parser.add_argument('--output-dir', type=str,
+                       help='Optional output directory for generated files')
+    parser.add_argument('--methods', type=str,
+                       help='Comma-separated method list override (e.g., \"diff_gnn,diff_gnn_order,gl25\")')
     
     args = parser.parse_args()
 

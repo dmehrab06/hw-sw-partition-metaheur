@@ -19,9 +19,9 @@ visualization:
   enabled: true
   include_input_graph: true
   include_output_schedule: true
-  out_dir: "outputs/final_visualizations/mkspan_default"
-  input_dir: "outputs/final_visualizations/mkspan_default/input"
-  schedule_dir: "outputs/final_visualizations/mkspan_default/schedule"
+  out_dir: "outputs/final_visualizations/mkspan_default_dls_hybrid"
+  input_dir: "outputs/final_visualizations/mkspan_default_dls_hybrid/input"
+  schedule_dir: "outputs/final_visualizations/mkspan_default_dls_hybrid/schedule"
   strict_partitions: false
 
 # Random assignment trials
@@ -106,7 +106,7 @@ diffgnn:
     hard_eval_every: 200
     postprocess:
       mode: "hybrid"
-      during_train: false
+      during_train: true
       eval_mode: "taskgraph"
       max_iters: 12
       enable_area_fill: true
@@ -138,7 +138,7 @@ diffgnn_order:
     gumbel_scale: 0.0
     postprocess:
       mode: "hybrid"
-      during_train: false
+      during_train: true
       eval_mode: "taskgraph"
       max_iters: 12
       enable_area_fill: true

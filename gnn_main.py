@@ -252,7 +252,24 @@ def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
     
     out_dir = os.getenv("HWSW_CSV_DIR") or config.get('output-dir', 'outputs')
     os.makedirs(out_dir, exist_ok=True)
-    file_path = os.path.join(out_dir, f"{config['result-file-prefix']}-result-summary-soda-graphs-config.csv")
+
+    csv_name_override = (
+        os.getenv("HWSW_RESULT_CSV")
+        or config.get("result-csv")
+        or config.get("result-csv-name")
+    )
+    result_prefix = os.getenv("HWSW_RESULT_PREFIX") or config.get('result-file-prefix', 'results')
+
+    if csv_name_override:
+        file_path = (
+            csv_name_override
+            if os.path.isabs(csv_name_override)
+            else os.path.join(out_dir, csv_name_override)
+        )
+    else:
+        file_path = os.path.join(out_dir, f"{result_prefix}-result-summary-soda-graphs-config.csv")
+
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     # If a CSV already exists, align this row to the existing header columns so values
     # land in the appropriate column positions. Any new columns are appended.

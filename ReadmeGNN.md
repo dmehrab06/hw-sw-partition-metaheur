@@ -46,3 +46,17 @@ Installed: ```2.6.0+cu124 12.4 0.21.0+cu124 2.6.0+cu124 True```
 
 `pip install torch-geometric torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.6.0+cu124.html`
 
+
+## Run diff_gnn + diff_gnn_order and print visualization paths
+
+```bash
+HWSW_METHODS="diff_gnn,diff_gnn_order" /people/dass304/.conda/envs/combopt/bin/python gnn_main.py -c configs/config_mkspan_default_gnn.yaml
+
+echo "[viz] saved under: outputs/final_visualizations/mkspan_default"
+find outputs/final_visualizations/mkspan_default -type f -name "*.png" | sort
+
+HWSW_METHODS="diff_gnn,diff_gnn_order" /people/dass304/.conda/envs/combopt/bin/python gnn_main.py -c configs/config_fig3_taskgraph_gnn.yaml
+
+echo "[viz] saved under: outputs/final_visualizations/fig3"
+find outputs/final_visualizations/fig3 -type f -name "*.png" | sort
+```

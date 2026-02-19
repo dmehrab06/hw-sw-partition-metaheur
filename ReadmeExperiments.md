@@ -137,4 +137,26 @@ nohup env CONFIG_GLOB="configs/config_mkspan_area_*_hw_*_seed_*.yaml" ./run_diff
 
 ```bash
 HWSW_METHODS="diff_gnn,diff_gnn_order" /people/dass304/.conda/envs/combopt/bin/python gnn_main.py -c configs/config_mkspan_default_gnn.yaml
+
+HWSW_RESULT_CSV="my_gpu_results.csv" \
+HWSW_METHODS="diff_gnn,diff_gnn_order,gl25" \
+CONFIG_GLOB="configs/config_mkspan_default_gnn.yaml configs/config_fig3_taskgraph_gnn.yaml" \
+./run_all_gnn_configs.sh
 ```
+
+
+
+HWSW_METHODS="diff_gnn,diff_gnn_order" /people/dass304/.conda/envs/combopt/bin/python gnn_main.py -c configs/config_mkspan_default_gnn.yaml
+
+HWSW_METHODS="diff_gnn,diff_gnn_order" /people/dass304/.conda/envs/combopt/bin/python gnn_main.py -c configs/config_fig3_taskgraph_gnn.yaml
+
+
+/people/dass304/.conda/envs/combopt/bin/python tools/visualize_schedule_from_partitions.py \
+  --config configs/config_mkspan_default_gnn.yaml \
+  --methods gl25,mip \
+  --include-input true \
+  --include-output true \
+  --out-dir /people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/outputs/final_visualizations/mkspan_default
+
+
+nohup env CONFIG_GLOB="configs/config_mkspan_area_*_hw_*_seed_*.yaml" ./run_diff_gnn_order.sh > diff_gnn_order.log 2>&1 &
