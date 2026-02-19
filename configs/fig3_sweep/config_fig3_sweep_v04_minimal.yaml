@@ -1,0 +1,102 @@
+graph-file: inputs/task_graph_topology/custom/paper_fig3_11node.dot
+area-constraint: 0.5
+hw-scale-factor: 1.0
+hw-scale-variance: 0.1
+comm-scale-factor: 1.0
+seed: 42
+solver-tool: cvxpy
+solution-dir: outputs/fig3_sweep_partitions/v04_minimal
+result-file-prefix: fig3_sweep
+output-dir: outputs/sweeps
+taskgraph-dir: inputs/task_graph_complete
+taskgraph-pickle: inputs/task_graph_complete/taskgraph-paper_fig3_11node-instance-config-config_fig3_taskgraph_gnn.pkl
+opt-cost-type: mip
+visualization:
+  enabled: false
+  include_input_graph: true
+  include_output_schedule: true
+  out_dir: outputs/final_visualizations/fig3
+  input_dir: outputs/final_visualizations/fig3/input
+  schedule_dir: outputs/final_visualizations/fig3/schedule
+  strict_partitions: false
+random:
+  num_samples: 50
+  p: 0.5
+diffgnn:
+  iter: 400
+  verbose: 400
+  device: cpu
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.2
+  model: default
+  hard_eval_every: 80
+  regularizer_profile: minimal
+  selection_metric: queue
+  selection_metric_train: queue
+  selection_metric_final: legacy_lp
+  final_legacy_lp_if_mip: true
+  reuse_trained_final_cost: true
+  speed_patch: true
+  feature_profile: paper
+  edge_weight_mode: paper_cosine
+  paper_sigma: 0.2
+  postprocess:
+    mode: hybrid
+    during_train: false
+    eval_mode: taskgraph
+    max_iters: 16
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: false
+    dls_steps: 2
+    dls_flip_eta: 0.35
+    dls_swap_eta: 0.18
+    dls_score_temp: 0.7
+    dls_comm_coeff: 0.02
+    dls_area_proj_iters: 4
+    dls_area_proj_strength: 6.0
+    dls_fill_decode: true
+diffgnn_order:
+  iter: 400
+  verbose: 400
+  device: cpu
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.2
+  model: default
+  speed_patch: true
+  hard_eval_every: 80
+  fast_mode: true
+  sinkhorn_iters: 8
+  order_refine_steps: 1
+  gumbel_noise: false
+  gumbel_scale: 0.0
+  feature_profile: paper
+  edge_weight_mode: paper_cosine
+  paper_sigma: 0.2
+  postprocess:
+    mode: hybrid
+    during_train: false
+    eval_mode: taskgraph
+    max_iters: 16
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: false
+    dls_steps: 2
+    dls_flip_eta: 0.35
+    dls_swap_eta: 0.18
+    dls_score_temp: 0.7
+    dls_comm_coeff: 0.02
+    dls_area_proj_iters: 4
+    dls_area_proj_strength: 6.0
+    dls_fill_decode: true
+  entropy_coeff: 0.0
+  usage_balance_coeff: 0.0
+  partition_cost_coeff: 0.0
+  perm_reg_coeff: 0.0
+  perm_entropy_coeff: 0.0
+gl25:
+  iter: 2000
+  n_pop: 500
+  verbose: 500

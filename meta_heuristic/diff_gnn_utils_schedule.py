@@ -88,26 +88,38 @@ def _build_torchgeo_data(TG, config=None):
     Convert TaskGraph instance into torch_geometric Data with configurable
     node features and edge weights.
 
+    Also produces edge attributes used by optional learned edge-weight modules:
+      edge_attr = [comm_norm, |delta_hg|_norm, |delta_hgp|_norm]
+
     feature_profile:
       - default: [sw, hw, area, degree, speedup, area_constraint, hw_scale] (min-max)
-      - paper:   [HG, HGP] where HG=sw-hw, HGP=(sw-hw)/area (z-score), from Zheng et al.
+      - paper: [HG, HGP] where HG=sw-hw, HGP=(sw-hw)/area (z-score), from Zheng et al.
+      - default_plus_paper: concatenate default(7) + paper(2) -> 9-dim node features
 
     edge_weight_mode:
       - none
       - comm: normalized communication cost
       - paper_cosine: cosine similarity on node features, mapped to [0,1]
+      - paper2_cosine: cosine similarity using only [HG, HGP] (paper 2D features)
       - comm_cosine: average of normalized comm and cosine
       - auto: paper_cosine for feature_profile=paper, else none
     """
     cfg = dict(config) if isinstance(config, Mapping) else {}
     feature_profile = str(cfg.get("feature_profile", "default")).lower()
     edge_weight_mode = str(cfg.get("edge_weight_mode", "auto")).lower()
+    is_paper_profile = feature_profile == "paper"
+    is_augmented_profile = feature_profile in {"default_plus_paper", "default+paper", "hybrid"}
+    if feature_profile not in {"default", "paper", "default_plus_paper", "default+paper", "hybrid"}:
+        raise ValueError(
+            f"Unsupported feature_profile '{feature_profile}'. Use default|paper|default_plus_paper."
+        )
     if edge_weight_mode == "auto":
-        edge_weight_mode = "paper_cosine" if feature_profile == "paper" else "none"
+        edge_weight_mode = "paper_cosine" if is_paper_profile else "none"
     make_undirected = bool(
         cfg.get(
             "make_undirected",
-            feature_profile == "paper" or edge_weight_mode in {"paper_cosine", "comm_cosine"},
+            is_paper_profile
+            or edge_weight_mode in {"paper_cosine", "paper2_cosine", "comm_cosine"},
         )
     )
 
@@ -120,31 +132,43 @@ def _build_torchgeo_data(TG, config=None):
     area = np.array([TG.hardware_area.get(n, 0.0) for n in node_list], dtype=np.float32)
     area_safe = np.maximum(area, 1e-6)
 
+    # paper two-dimensional features
+    hg = sw - hw
+    hgp = hg / area_safe
+    paper_raw = np.vstack([hg, hgp]).T  # (N, 2)
+    paper_mean = paper_raw.mean(axis=0, keepdims=True)
+    paper_std = paper_raw.std(axis=0, keepdims=True)
+    paper_std = np.where(paper_std <= 1e-9, 1.0, paper_std)
+    paper_norm = (paper_raw - paper_mean) / paper_std
+
+    # original/default features
+    deg = np.array([G.degree(n) for n in node_list], dtype=np.float32)
+    speedup = hw / np.maximum(sw, 1e-6)
+    area_constraint = float(getattr(TG, "area_constraint", 0.0))
+    hw_scale = float(getattr(TG, "hw_scale_factor", getattr(TG, "HW_Scale_Factor", 1.0)))
+    area_constraint_col = np.full_like(sw, area_constraint, dtype=np.float32)
+    hw_scale_col = np.full_like(sw, hw_scale, dtype=np.float32)
+    default_raw = np.vstack([sw, hw, area, deg, speedup, area_constraint_col, hw_scale_col]).T
+    default_mins = default_raw.min(axis=0, keepdims=True)
+    default_maxs = default_raw.max(axis=0, keepdims=True)
+    default_ranges = np.where(default_maxs - default_mins <= 1e-9, 1.0, (default_maxs - default_mins))
+    default_norm = (default_raw - default_mins) / default_ranges
+
     paper_hgp = None
-    if feature_profile == "paper":
-        hg = sw - hw
-        hgp = hg / area_safe
-        F = np.vstack([hg, hgp]).T  # (N,2)
-        mean = F.mean(axis=0, keepdims=True)
-        std = F.std(axis=0, keepdims=True)
-        std = np.where(std <= 1e-9, 1.0, std)
-        X_norm = (F - mean) / std
+    if is_paper_profile:
+        X_norm = paper_norm
         # keep a [0,1] normalized HGP for optional output blending trick (paper-inspired).
         hgp_min, hgp_max = float(hgp.min()), float(hgp.max())
         hgp_range = max(hgp_max - hgp_min, 1e-6)
         paper_hgp = ((hgp - hgp_min) / hgp_range).astype(np.float32)
+    elif is_augmented_profile:
+        X_norm = np.concatenate([default_norm, paper_norm], axis=1)
+        # allow optional paper_sigma blending when paper dimensions are present
+        hgp_min, hgp_max = float(hgp.min()), float(hgp.max())
+        hgp_range = max(hgp_max - hgp_min, 1e-6)
+        paper_hgp = ((hgp - hgp_min) / hgp_range).astype(np.float32)
     else:
-        deg = np.array([G.degree(n) for n in node_list], dtype=np.float32)
-        speedup = hw / np.maximum(sw, 1e-6)
-        area_constraint = float(getattr(TG, "area_constraint", 0.0))
-        hw_scale = float(getattr(TG, "hw_scale_factor", getattr(TG, "HW_Scale_Factor", 1.0)))
-        area_constraint_col = np.full_like(sw, area_constraint, dtype=np.float32)
-        hw_scale_col = np.full_like(sw, hw_scale, dtype=np.float32)
-        X = np.vstack([sw, hw, area, deg, speedup, area_constraint_col, hw_scale_col]).T
-        mins = X.min(axis=0, keepdims=True)
-        maxs = X.max(axis=0, keepdims=True)
-        ranges = np.where(maxs - mins <= 1e-9, 1.0, (maxs - mins))
-        X_norm = (X - mins) / ranges
+        X_norm = default_norm
 
     x = torch.tensor(X_norm, dtype=torch.float32)
 
@@ -161,26 +185,40 @@ def _build_torchgeo_data(TG, config=None):
     if len(edges) == 0:
         edge_index = torch.zeros((2, 0), dtype=torch.long)
         edge_weight_t = None
+        edge_attr_t = torch.zeros((0, 3), dtype=torch.float32)
     else:
         src = [node_to_idx[u] for u, _ in edges]
         dst = [node_to_idx[v] for _, v in edges]
         edge_index = torch.tensor([src, dst], dtype=torch.long)
+        src_np = np.asarray(src, dtype=np.int64)
+        dst_np = np.asarray(dst, dtype=np.int64)
+
+        comm_raw = []
+        for u, v in edges:
+            c = float(TG.communication_costs.get((u, v), TG.communication_costs.get((v, u), 0.0)))
+            comm_raw.append(max(c, 0.0))
+        comm_raw = np.array(comm_raw, dtype=np.float32)
+        comm_norm = comm_raw / max(float(comm_raw.max()), 1.0)
+
+        # Edge attributes for learned edge-weight modules.
+        hg_delta = np.abs(hg[src_np] - hg[dst_np]).astype(np.float32)
+        hg_delta_norm = hg_delta / max(float(hg_delta.max()), 1.0)
+        hgp_delta = np.abs(hgp[src_np] - hgp[dst_np]).astype(np.float32)
+        hgp_delta_norm = hgp_delta / max(float(hgp_delta.max()), 1.0)
+        edge_attr_np = np.stack([comm_norm, hg_delta_norm, hgp_delta_norm], axis=1).astype(np.float32)
+        edge_attr_t = torch.tensor(edge_attr_np, dtype=torch.float32)
 
         edge_weight_t = None
         mode = edge_weight_mode
         if mode != "none":
-            comm_raw = []
-            for u, v in edges:
-                c = float(TG.communication_costs.get((u, v), TG.communication_costs.get((v, u), 0.0)))
-                comm_raw.append(max(c, 0.0))
-            comm_raw = np.array(comm_raw, dtype=np.float32)
-            comm_norm = comm_raw / max(float(comm_raw.max()), 1.0)
-
             if mode == "comm":
                 ew = comm_norm
             else:
                 # cosine similarity on selected node features
-                vec = X_norm.astype(np.float32)
+                if mode == "paper2_cosine":
+                    vec = paper_norm.astype(np.float32)
+                else:
+                    vec = X_norm.astype(np.float32)
                 norms = np.linalg.norm(vec, axis=1) + 1e-6
                 cos_vals = []
                 for u, v in edges:
@@ -190,6 +228,8 @@ def _build_torchgeo_data(TG, config=None):
                     cos_vals.append((cos + 1.0) * 0.5)  # map [-1,1] -> [0,1]
                 cos_norm = np.clip(np.array(cos_vals, dtype=np.float32), 0.0, 1.0)
                 if mode == "paper_cosine":
+                    ew = cos_norm
+                elif mode == "paper2_cosine":
                     ew = cos_norm
                 elif mode == "comm_cosine":
                     ew = 0.5 * comm_norm + 0.5 * cos_norm
@@ -203,6 +243,7 @@ def _build_torchgeo_data(TG, config=None):
     data_kwargs = {"x": x, "edge_index": edge_index}
     if edge_weight_t is not None:
         data_kwargs["edge_weight"] = edge_weight_t
+    data_kwargs["edge_attr"] = edge_attr_t
     data = Data(**data_kwargs)
     if paper_hgp is not None:
         data.paper_hgp = torch.tensor(paper_hgp, dtype=torch.float32)
@@ -438,12 +479,17 @@ def _dls_refine_probs(
     comm_coeff: float = 0.02,
     area_proj_iters: int = 4,
     area_proj_strength: float = 6.0,
+    lssp_like: bool = False,
+    lssp_pri_coeff: float = 0.35,
+    lssp_beta: float = 8.0,
+    lssp_fill_eta: float = 0.20,
 ) -> torch.Tensor:
     """
     Differentiable local-search style refinement:
       1) soft-flip toward hardware desirability score
       2) soft-swap mass from low-value HW nodes to high-value SW nodes
       3) differentiable area projection each step
+      4) optional LSSP-like soft criticality + area-fill shaping
     """
     if steps <= 0:
         return probs
@@ -466,12 +512,28 @@ def _dls_refine_probs(
         for (u, v), c in TG.communication_costs.items()
         if u in node_to_idx and v in node_to_idx
     ]
+    succ_pairs = [[] for _ in range(len(node_list))]
+    for u, v in TG.graph.edges():
+        if u not in node_to_idx or v not in node_to_idx:
+            continue
+        i = node_to_idx[u]
+        j = node_to_idx[v]
+        comm_uv = float(TG.communication_costs.get((u, v), TG.communication_costs.get((v, u), 0.0)))
+        succ_pairs[i].append((j, max(comm_uv, 0.0)))
+    topo_nodes = list(nx.topological_sort(TG.graph))
+    topo_idx = [node_to_idx[n] for n in topo_nodes if n in node_to_idx]
+
     mean_comm = float(np.mean([c for _, _, c in edge_pairs])) if edge_pairs else 1.0
     mean_comm = max(mean_comm, 1e-6)
 
     eta_flip = float(max(0.0, min(1.0, flip_eta)))
     eta_swap = float(max(0.0, min(1.0, swap_eta)))
     temp = float(max(score_temp, 1e-6))
+    pri_coeff = float(max(0.0, lssp_pri_coeff))
+    pri_beta = float(max(lssp_beta, 1e-6))
+    fill_eta = float(max(0.0, min(1.0, lssp_fill_eta)))
+    area_safe = areas.clamp_min(1e-6)
+    area_norm = area_safe / area_safe.mean().clamp_min(1e-6)
 
     for _ in range(max(1, int(steps))):
         comm_pressure = torch.zeros_like(p)
@@ -482,6 +544,25 @@ def _dls_refine_probs(
             comm_pressure[j] = comm_pressure[j] - w * diff_ij
 
         score = base_score + comm_pressure
+        if lssp_like and topo_idx:
+            # LSSP-inspired differentiable criticality:
+            # reverse-topological soft longest path estimate under current soft partition.
+            exec_time = p * hw_times + (1.0 - p) * sw_times
+            tail = torch.zeros_like(p)
+            for i in reversed(topo_idx):
+                succs = succ_pairs[i]
+                if succs:
+                    vals = []
+                    for j, c in succs:
+                        comm = torch.abs(p[i] - p[j]) * float(c)
+                        vals.append(comm + tail[j])
+                    succ_term = (1.0 / pri_beta) * torch.logsumexp(pri_beta * torch.stack(vals), dim=0)
+                else:
+                    succ_term = tail.new_tensor(0.0)
+                tail[i] = exec_time[i] + succ_term
+            tail_norm = (tail - tail.mean()) / (tail.std(unbiased=False) + 1e-6)
+            score = score + pri_coeff * tail_norm
+
         target_hw = torch.sigmoid(score / temp)
         p = torch.lerp(p, target_hw, eta_flip)
 
@@ -492,6 +573,17 @@ def _dls_refine_probs(
         release_weights = F.softmax(release_hw / temp, dim=0)
         transfer = eta_swap * 0.5 * (want_hw.mean() + release_hw.mean())
         p = (p + transfer * (gain_weights - release_weights)).clamp(0.0, 1.0)
+
+        if lssp_like and fill_eta > 0 and area_budget > 0:
+            # LSSP stage-1 analogue: softly fill remaining HW budget using
+            # desirability-per-area so low-area/high-benefit tasks are preferred.
+            area_used = torch.dot(p, areas.clamp_min(0.0))
+            slack = F.relu((float(area_budget) - area_used) / float(max(area_budget, 1e-6)))
+            if float(slack.item()) > 0.0:
+                density = score / (area_norm + 1e-6)
+                fill_pref = (1.0 - p) * torch.sigmoid(density / temp)
+                fill_weights = F.softmax(fill_pref / temp, dim=0)
+                p = (p + fill_eta * slack * fill_weights).clamp(0.0, 1.0)
 
         p = _soft_project_area(
             p,
@@ -669,6 +761,10 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     dls_area_proj_iters = int(post_cfg.get("dls_area_proj_iters", config.get("dls_area_proj_iters", 4)))
     dls_area_proj_strength = float(post_cfg.get("dls_area_proj_strength", config.get("dls_area_proj_strength", 6.0)))
     dls_fill_decode = bool(post_cfg.get("dls_fill_decode", config.get("dls_fill_decode", True)))
+    dls_lssp_like = bool(post_cfg.get("dls_lssp_like", config.get("dls_lssp_like", False)))
+    dls_lssp_pri_coeff = float(post_cfg.get("dls_lssp_pri_coeff", config.get("dls_lssp_pri_coeff", 0.35)))
+    dls_lssp_beta = float(post_cfg.get("dls_lssp_beta", config.get("dls_lssp_beta", 8.0)))
+    dls_lssp_fill_eta = float(post_cfg.get("dls_lssp_fill_eta", config.get("dls_lssp_fill_eta", 0.20)))
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -698,9 +794,24 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         str(center_logits),
         str(hard_train_outputs),
     )
+    edge_weight_learner = str(
+        config.get(
+            "edge_weight_learner",
+            "per_edge" if bool(config.get("learn_edge_weight", False)) else "none",
+        )
+    ).lower()
+    if edge_weight_learner != "none":
+        logger.info(
+            "DiffGNN learned edge weight enabled: learner=%s min_scale=%.3f max_scale=%.3f num_edges=%d edge_attr_dim=%d",
+            edge_weight_learner,
+            float(config.get("edge_weight_min_scale", 0.5)),
+            float(config.get("edge_weight_max_scale", 1.5)),
+            int(data.edge_index.shape[1]),
+            int(getattr(data, "edge_attr", torch.zeros((0, 0))).shape[1]),
+        )
     if use_dls_train:
         logger.info(
-            "DiffGNN DLS enabled during training: steps=%d flip_eta=%.2f swap_eta=%.2f temp=%.2f comm_coeff=%.3f area_proj_iters=%d area_proj_strength=%.2f",
+            "DiffGNN DLS enabled during training: steps=%d flip_eta=%.2f swap_eta=%.2f temp=%.2f comm_coeff=%.3f area_proj_iters=%d area_proj_strength=%.2f lssp_like=%s pri_coeff=%.2f pri_beta=%.2f fill_eta=%.2f",
             dls_steps,
             dls_flip_eta,
             dls_swap_eta,
@@ -708,6 +819,10 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
             dls_comm_coeff,
             dls_area_proj_iters,
             dls_area_proj_strength,
+            str(dls_lssp_like),
+            dls_lssp_pri_coeff,
+            dls_lssp_beta,
+            dls_lssp_fill_eta,
         )
     if use_lssp_final:
         logger.info(
@@ -726,13 +841,14 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     best_probs = None
 
     edge_weight = getattr(data, "edge_weight", None)
+    edge_attr = getattr(data, "edge_attr", None)
     paper_hgp = getattr(data, "paper_hgp", None)
 
     tau = tau_start
     for ep in range(1, epochs + 1):
         model.train()
         optimizer.zero_grad()
-        logits2 = model(data.x, data.edge_index, edge_weight=edge_weight)
+        logits2 = model(data.x, data.edge_index, edge_weight=edge_weight, edge_attr=edge_attr)
         _, probs = _relaxed_binary_assignment(
             logits2,
             temperature=tau,
@@ -756,6 +872,10 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                 comm_coeff=dls_comm_coeff,
                 area_proj_iters=dls_area_proj_iters,
                 area_proj_strength=dls_area_proj_strength,
+                lssp_like=dls_lssp_like,
+                lssp_pri_coeff=dls_lssp_pri_coeff,
+                lssp_beta=dls_lssp_beta,
+                lssp_fill_eta=dls_lssp_fill_eta,
             )
 
         loss, info = _differentiable_makespan_loss(
@@ -780,7 +900,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         if (ep % hard_eval_every == 0) or (ep == epochs):
             model.eval()
             with torch.no_grad():
-                logits2_eval = model(data.x, data.edge_index, edge_weight=edge_weight)
+                logits2_eval = model(data.x, data.edge_index, edge_weight=edge_weight, edge_attr=edge_attr)
                 _, hard_probs_t = _relaxed_binary_assignment(
                     logits2_eval, temperature=max(tau, 1e-6), hard=True, sampler=sampler, logit_scale=logit_scale, center_logits=center_logits
                 )
@@ -801,6 +921,10 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                         comm_coeff=dls_comm_coeff,
                         area_proj_iters=dls_area_proj_iters,
                         area_proj_strength=dls_area_proj_strength,
+                        lssp_like=dls_lssp_like,
+                        lssp_pri_coeff=dls_lssp_pri_coeff,
+                        lssp_beta=dls_lssp_beta,
+                        lssp_fill_eta=dls_lssp_fill_eta,
                     )
                     hard_probs = hard_probs_t_refined.detach().cpu().numpy().astype(float)
                 hard_probs_repaired = _repair_candidate(TG, hard_probs, node_list, prefer_by_score=hard_probs)
@@ -845,7 +969,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     logger.info("DiffGNN final decode started.")
     model.eval()
     with torch.no_grad():
-        logits2 = model(data.x, data.edge_index, edge_weight=edge_weight)
+        logits2 = model(data.x, data.edge_index, edge_weight=edge_weight, edge_attr=edge_attr)
         _, hard_probs_t = _relaxed_binary_assignment(
             logits2, temperature=0.1, hard=True, sampler=sampler, logit_scale=logit_scale, center_logits=center_logits
         )
@@ -865,6 +989,10 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                 comm_coeff=dls_comm_coeff,
                 area_proj_iters=dls_area_proj_iters,
                 area_proj_strength=dls_area_proj_strength,
+                lssp_like=dls_lssp_like,
+                lssp_pri_coeff=dls_lssp_pri_coeff,
+                lssp_beta=dls_lssp_beta,
+                lssp_fill_eta=dls_lssp_fill_eta,
             )
             final_probs = final_probs_t_refined.detach().cpu().numpy().astype(float)
         final_probs_repaired = _repair_candidate(TG, final_probs, node_list, prefer_by_score=final_probs)
@@ -998,6 +1126,21 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
         for k, v in config.items()
         if k not in {"model", "model_name", "hidden_dim", "num_layers", "dropout"}
     }
+    if model_name in {"mpnns", "mpnn"} and bool(config.get("mpnns_edge_aware", False)):
+        model_extra_cfg.setdefault(
+            "mpnns_edge_attr_dim",
+            int(getattr(data, "edge_attr", torch.zeros((0, 0))).shape[1]),
+        )
+    edge_weight_learner = str(
+        config.get(
+            "edge_weight_learner",
+            "per_edge" if bool(config.get("learn_edge_weight", False)) else "none",
+        )
+    ).lower()
+    if edge_weight_learner != "none":
+        model_extra_cfg.setdefault("edge_weight_learner", edge_weight_learner)
+        model_extra_cfg.setdefault("num_edges", int(data.edge_index.shape[1]))
+        model_extra_cfg.setdefault("edge_attr_dim", int(getattr(data, "edge_attr", torch.zeros((0, 0))).shape[1]))
 
     model = build_placement_model(
         model_name=model_name,
@@ -1061,23 +1204,27 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
 
     # pull diff GNN specific config (fallback to top-level keys for convenience)
     diff_cfg = dict(config.get("diffgnn", {}))
-    # default diffgnn settings (speed-oriented; explicit config overrides these)
+    # default diffgnn settings (simple + fast-competitive; explicit config overrides these)
     if "iter" not in diff_cfg and "epochs" not in diff_cfg:
-        diff_cfg["iter"] = 600
+        diff_cfg["iter"] = 250
     if "verbose" not in diff_cfg:
-        diff_cfg["verbose"] = 600
+        diff_cfg["verbose"] = 250
     if "hidden_dim" not in diff_cfg:
-        diff_cfg["hidden_dim"] = 128
+        diff_cfg["hidden_dim"] = 64
     if "num_layers" not in diff_cfg:
-        diff_cfg["num_layers"] = 2
+        diff_cfg["num_layers"] = 3
     if "dropout" not in diff_cfg:
-        diff_cfg["dropout"] = 0.3
+        diff_cfg["dropout"] = 0.2
     if "model" not in diff_cfg and "model_name" not in diff_cfg:
         diff_cfg["model"] = "default"
     # map common aliases
     if "iter" in diff_cfg and "epochs" not in diff_cfg:
         diff_cfg["epochs"] = diff_cfg["iter"]
-    epochs = int(diff_cfg.get("epochs", 600))
+    if "learn_edge_weight" not in diff_cfg and "learned_edge_weight" in diff_cfg:
+        diff_cfg["learn_edge_weight"] = bool(diff_cfg.get("learned_edge_weight"))
+    if "edge_weight_learner" not in diff_cfg and bool(diff_cfg.get("learn_edge_weight", False)):
+        diff_cfg["edge_weight_learner"] = "per_edge"
+    epochs = int(diff_cfg.get("epochs", 250))
 
     # Speed-oriented defaults: use queue metric while training, then optionally
     # evaluate one final legacy LP cost for MIP-style experiments.
@@ -1094,15 +1241,34 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
         else:
             diff_cfg["selection_metric_final"] = train_metric
 
+    speed_patch_enabled = bool(diff_cfg.get("speed_patch", True))
+    default_hard_eval_every = max(1, epochs // 5)
     if "hard_eval_every" not in diff_cfg:
-        diff_cfg["hard_eval_every"] = max(1, epochs // 5)
-    elif bool(diff_cfg.get("speed_patch", True)):
-        diff_cfg["hard_eval_every"] = max(int(diff_cfg["hard_eval_every"]), max(1, epochs // 5))
+        diff_cfg["hard_eval_every"] = default_hard_eval_every
+    elif speed_patch_enabled:
+        diff_cfg["hard_eval_every"] = max(int(diff_cfg["hard_eval_every"]), default_hard_eval_every)
 
     post_cfg_raw = diff_cfg.get("postprocess", {})
     post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
+    post_cfg.setdefault("mode", "none")
     post_cfg.setdefault("during_train", False)
     diff_cfg["postprocess"] = post_cfg
+
+    # Lightweight defaults for faster/more stable convergence when users keep the
+    # config minimal. Any explicit regularizer key in config overrides this block.
+    if not any(
+        k in diff_cfg
+        for k in (
+            "regularizer_profile",
+            "entropy_coeff",
+            "usage_balance_coeff",
+            "partition_cost_coeff",
+            "target_hw_frac",
+        )
+    ):
+        diff_cfg["entropy_coeff"] = 0.0
+        diff_cfg["usage_balance_coeff"] = 0.0
+        diff_cfg["partition_cost_coeff"] = 1.0 / 12.0  # 0.0833...
     # ensure seed/device pass-through
     if "seed" not in diff_cfg and "seed" in config:
         diff_cfg["seed"] = config.get("seed")

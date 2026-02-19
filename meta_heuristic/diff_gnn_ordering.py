@@ -20,6 +20,7 @@ try:
         _build_torchgeo_data,
         _dls_refine_probs,
         _enable_determinism,
+        _evaluate_discrete_solution,
         _fill_hw_area_by_score,
         _relaxed_binary_assignment,
         _repair_candidate,
@@ -31,6 +32,7 @@ except Exception:
         _build_torchgeo_data,
         _dls_refine_probs,
         _enable_determinism,
+        _evaluate_discrete_solution,
         _fill_hw_area_by_score,
         _relaxed_binary_assignment,
         _repair_candidate,
@@ -55,14 +57,14 @@ if __name__ == "__main__":
 logger = LogManager.get_logger(__name__)
 
 _FAST_MODE_DEFAULTS = {
-    "iter": 500,
-    "verbose": 500,
-    "hidden_dim": 128,
-    "num_layers": 2,
-    "dropout": 0.3,
+    "iter": 250,
+    "verbose": 250,
+    "hidden_dim": 64,
+    "num_layers": 3,
+    "dropout": 0.2,
     "sinkhorn_iters": 8,
     "order_refine_steps": 1,
-    "hard_eval_every": 150,
+    "hard_eval_every": 50,
     "gumbel_noise": False,
     "gumbel_scale": 0.0,
     "pairwise_mode": "rank_sigmoid",
@@ -380,6 +382,8 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
 
     seed = int(config.get("seed", 42))
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 5)))
+    selection_metric_train = str(config.get("selection_metric_train", config.get("selection_metric", "queue"))).lower()
+    selection_metric_final = str(config.get("selection_metric_final", selection_metric_train)).lower()
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
     logit_scale = float(config.get("logit_scale", 8.0))
     center_logits = bool(config.get("center_logits", True))
@@ -412,6 +416,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     dls_area_proj_iters = int(post_cfg.get("dls_area_proj_iters", config.get("dls_area_proj_iters", 4)))
     dls_area_proj_strength = float(post_cfg.get("dls_area_proj_strength", config.get("dls_area_proj_strength", 6.0)))
     dls_fill_decode = bool(post_cfg.get("dls_fill_decode", config.get("dls_fill_decode", True)))
+    dls_lssp_like = bool(post_cfg.get("dls_lssp_like", config.get("dls_lssp_like", False)))
+    dls_lssp_pri_coeff = float(post_cfg.get("dls_lssp_pri_coeff", config.get("dls_lssp_pri_coeff", 0.35)))
+    dls_lssp_beta = float(post_cfg.get("dls_lssp_beta", config.get("dls_lssp_beta", 8.0)))
+    dls_lssp_fill_eta = float(post_cfg.get("dls_lssp_fill_eta", config.get("dls_lssp_fill_eta", 0.20)))
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -440,9 +448,29 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         str(config.get("edge_weight_mode", "auto")),
         paper_sigma,
     )
+    logger.info(
+        "DiffGNNOrder metrics: train_metric=%s final_metric=%s",
+        selection_metric_train,
+        selection_metric_final,
+    )
+    edge_weight_learner = str(
+        config.get(
+            "edge_weight_learner",
+            "per_edge" if bool(config.get("learn_edge_weight", False)) else "none",
+        )
+    ).lower()
+    if edge_weight_learner != "none":
+        logger.info(
+            "DiffGNNOrder learned edge weight enabled: learner=%s min_scale=%.3f max_scale=%.3f num_edges=%d edge_attr_dim=%d",
+            edge_weight_learner,
+            float(config.get("edge_weight_min_scale", 0.5)),
+            float(config.get("edge_weight_max_scale", 1.5)),
+            int(data.edge_index.shape[1]),
+            int(getattr(data, "edge_attr", torch.zeros((0, 0))).shape[1]),
+        )
     if use_dls_train:
         logger.info(
-            "DiffGNNOrder DLS enabled during training: steps=%d flip_eta=%.2f swap_eta=%.2f temp=%.2f comm_coeff=%.3f area_proj_iters=%d area_proj_strength=%.2f",
+            "DiffGNNOrder DLS enabled during training: steps=%d flip_eta=%.2f swap_eta=%.2f temp=%.2f comm_coeff=%.3f area_proj_iters=%d area_proj_strength=%.2f lssp_like=%s pri_coeff=%.2f pri_beta=%.2f fill_eta=%.2f",
             dls_steps,
             dls_flip_eta,
             dls_swap_eta,
@@ -450,6 +478,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             dls_comm_coeff,
             dls_area_proj_iters,
             dls_area_proj_strength,
+            str(dls_lssp_like),
+            dls_lssp_pri_coeff,
+            dls_lssp_beta,
+            dls_lssp_fill_eta,
         )
     if use_lssp_final:
         logger.info(
@@ -470,13 +502,19 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     tau = tau_start
     order_tau = order_tau_start
     edge_weight = getattr(data, "edge_weight", None)
+    edge_attr = getattr(data, "edge_attr", None)
     paper_hgp = getattr(data, "paper_hgp", None)
 
     for ep in range(1, epochs + 1):
         model.train()
         optimizer.zero_grad()
 
-        logits2, prio_hw, prio_sw = model(data.x, data.edge_index, edge_weight=edge_weight)
+        logits2, prio_hw, prio_sw = model(
+            data.x,
+            data.edge_index,
+            edge_weight=edge_weight,
+            edge_attr=edge_attr,
+        )
         _, probs = _relaxed_binary_assignment(
             logits2,
             temperature=tau,
@@ -500,6 +538,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 comm_coeff=dls_comm_coeff,
                 area_proj_iters=dls_area_proj_iters,
                 area_proj_strength=dls_area_proj_strength,
+                lssp_like=dls_lssp_like,
+                lssp_pri_coeff=dls_lssp_pri_coeff,
+                lssp_beta=dls_lssp_beta,
+                lssp_fill_eta=dls_lssp_fill_eta,
             )
 
         loss, info = _differentiable_makespan_loss_with_order(
@@ -535,7 +577,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         if (ep % hard_eval_every == 0) or (ep == epochs):
             model.eval()
             with torch.no_grad():
-                logits2_eval, prio_hw_eval, prio_sw_eval = model(data.x, data.edge_index, edge_weight=edge_weight)
+                logits2_eval, prio_hw_eval, prio_sw_eval = model(
+                    data.x,
+                    data.edge_index,
+                    edge_weight=edge_weight,
+                    edge_attr=edge_attr,
+                )
                 _, hard_probs_t = _relaxed_binary_assignment(
                     logits2_eval,
                     temperature=max(tau, 1e-6),
@@ -561,6 +608,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         comm_coeff=dls_comm_coeff,
                         area_proj_iters=dls_area_proj_iters,
                         area_proj_strength=dls_area_proj_strength,
+                        lssp_like=dls_lssp_like,
+                        lssp_pri_coeff=dls_lssp_pri_coeff,
+                        lssp_beta=dls_lssp_beta,
+                        lssp_fill_eta=dls_lssp_fill_eta,
                     )
                     hard_probs = hard_probs_t_refined.detach().cpu().numpy().astype(float)
                 decode_scores = _order_aware_repair_scores(
@@ -589,15 +640,11 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         enable_swap=post_enable_swap,
                     )
 
-                violation = TG.violates(solution)
-                if violation:
-                    current_sched_cost = TG.violation_cost
-                else:
-                    try:
-                        current_sched_cost = float(TG.evaluate_makespan(solution)["makespan"])
-                    except Exception as e:
-                        logger.warning("evaluate_makespan failed during training eval: %s", str(e))
-                        current_sched_cost = float("inf")
+                current_sched_cost = _evaluate_discrete_solution(
+                    TG,
+                    solution,
+                    metric=selection_metric_train,
+                )
 
                 if current_sched_cost < best_sched_cost:
                     best_sched_cost = current_sched_cost
@@ -621,7 +668,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     logger.info("DiffGNNOrder final decode started.")
     model.eval()
     with torch.no_grad():
-        logits2, prio_hw, prio_sw = model(data.x, data.edge_index, edge_weight=edge_weight)
+        logits2, prio_hw, prio_sw = model(
+            data.x,
+            data.edge_index,
+            edge_weight=edge_weight,
+            edge_attr=edge_attr,
+        )
         _, hard_probs_t = _relaxed_binary_assignment(
             logits2,
             temperature=0.1,
@@ -646,6 +698,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 comm_coeff=dls_comm_coeff,
                 area_proj_iters=dls_area_proj_iters,
                 area_proj_strength=dls_area_proj_strength,
+                lssp_like=dls_lssp_like,
+                lssp_pri_coeff=dls_lssp_pri_coeff,
+                lssp_beta=dls_lssp_beta,
+                lssp_fill_eta=dls_lssp_fill_eta,
             )
             final_probs = final_probs_t_refined.detach().cpu().numpy().astype(float)
         final_decode_scores = _order_aware_repair_scores(
@@ -691,26 +747,47 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             )
             logger.info("DiffGNNOrder final postprocess elapsed: %.3fs", time.perf_counter() - post_t0)
 
-        violation = TG.violates(final_solution)
-        if violation:
-            final_sched_cost = TG.violation_cost
-        else:
-            try:
-                final_sched_cost = float(TG.evaluate_makespan(final_solution)["makespan"])
-            except Exception as e:
-                logger.warning("evaluate_makespan failed at final eval: %s", str(e))
-                final_sched_cost = float("inf")
+        final_sched_cost_train = _evaluate_discrete_solution(
+            TG,
+            final_solution,
+            metric=selection_metric_train,
+        )
 
-    if best_assign is None or final_sched_cost < best_sched_cost:
+    if best_assign is None or final_sched_cost_train < best_sched_cost:
         best_assign = final_solution
         best_probs = final_probs
-        best_sched_cost = final_sched_cost
+        best_sched_cost = final_sched_cost_train
 
-    logger.info("DiffGNNOrder training finished. Best queue makespan: %.6f", best_sched_cost)
+    if selection_metric_final == selection_metric_train:
+        best_final_cost = float(best_sched_cost)
+    else:
+        metric_t0 = time.perf_counter()
+        logger.info(
+            "DiffGNNOrder final metric eval started: metric=%s train_metric=%s",
+            selection_metric_final,
+            selection_metric_train,
+        )
+        best_final_cost = _evaluate_discrete_solution(
+            TG,
+            best_assign,
+            metric=selection_metric_final,
+        )
+        logger.info("DiffGNNOrder final metric eval elapsed: %.3fs", time.perf_counter() - metric_t0)
+
+    logger.info(
+        "DiffGNNOrder training finished. Best %s makespan: %.6f; selected assignment %s makespan: %.6f",
+        selection_metric_train,
+        best_sched_cost,
+        selection_metric_final,
+        best_final_cost,
+    )
     return {
         "best_assign": best_assign,
         "best_probs": np.asarray(best_probs),
-        "best_mip_cost": float(best_sched_cost),
+        "best_mip_cost": float(best_final_cost),
+        "best_train_cost": float(best_sched_cost),
+        "selection_metric_train": selection_metric_train,
+        "selection_metric_final": selection_metric_final,
         "model": model,
     }
 
@@ -743,6 +820,21 @@ def optimize_diff_gnn_order(TG, config=None, device="cpu"):
         for k, v in config.items()
         if k not in {"model", "model_name", "hidden_dim", "num_layers", "dropout"}
     }
+    if model_name in {"mpnns", "mpnn"} and bool(config.get("mpnns_edge_aware", False)):
+        model_extra_cfg.setdefault(
+            "mpnns_edge_attr_dim",
+            int(getattr(data, "edge_attr", torch.zeros((0, 0))).shape[1]),
+        )
+    edge_weight_learner = str(
+        config.get(
+            "edge_weight_learner",
+            "per_edge" if bool(config.get("learn_edge_weight", False)) else "none",
+        )
+    ).lower()
+    if edge_weight_learner != "none":
+        model_extra_cfg.setdefault("edge_weight_learner", edge_weight_learner)
+        model_extra_cfg.setdefault("num_edges", int(data.edge_index.shape[1]))
+        model_extra_cfg.setdefault("edge_attr_dim", int(getattr(data, "edge_attr", torch.zeros((0, 0))).shape[1]))
 
     model = build_order_model(
         model_name=model_name,
@@ -784,21 +876,38 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
         logger.info("diff_gnn_order fast_mode enabled. Applied speed defaults for unset keys.")
 
     if "iter" not in diff_cfg and "epochs" not in diff_cfg:
-        diff_cfg["iter"] = 600
+        diff_cfg["iter"] = 250
     if "verbose" not in diff_cfg:
-        diff_cfg["verbose"] = 600
+        diff_cfg["verbose"] = 250
     if "hidden_dim" not in diff_cfg:
-        diff_cfg["hidden_dim"] = 128
+        diff_cfg["hidden_dim"] = 64
     if "num_layers" not in diff_cfg:
-        diff_cfg["num_layers"] = 2
+        diff_cfg["num_layers"] = 3
     if "dropout" not in diff_cfg:
-        diff_cfg["dropout"] = 0.3
+        diff_cfg["dropout"] = 0.2
     if "model" not in diff_cfg and "model_name" not in diff_cfg:
         diff_cfg["model"] = "default"
 
     if "iter" in diff_cfg and "epochs" not in diff_cfg:
         diff_cfg["epochs"] = diff_cfg["iter"]
-    epochs = int(diff_cfg.get("epochs", 600))
+    if "learn_edge_weight" not in diff_cfg and "learned_edge_weight" in diff_cfg:
+        diff_cfg["learn_edge_weight"] = bool(diff_cfg.get("learned_edge_weight"))
+    if "edge_weight_learner" not in diff_cfg and bool(diff_cfg.get("learn_edge_weight", False)):
+        diff_cfg["edge_weight_learner"] = "per_edge"
+    epochs = int(diff_cfg.get("epochs", 250))
+
+    optimize_name = str(getattr(func_to_optimize, "__name__", "") or "").lower()
+    uses_mip_blackbox = optimize_name.endswith("_mip") or "_mip" in optimize_name
+    train_metric = str(diff_cfg.get("selection_metric_train", diff_cfg.get("selection_metric", "queue"))).lower()
+    if "selection_metric_train" not in diff_cfg:
+        diff_cfg["selection_metric_train"] = train_metric
+    if "selection_metric" not in diff_cfg:
+        diff_cfg["selection_metric"] = train_metric
+    if "selection_metric_final" not in diff_cfg:
+        if bool(diff_cfg.get("final_legacy_lp_if_mip", True)) and uses_mip_blackbox:
+            diff_cfg["selection_metric_final"] = "legacy_lp"
+        else:
+            diff_cfg["selection_metric_final"] = train_metric
 
     # Speed patch defaults for ordering path (applies even when fast_mode is
     # explicitly disabled, unless the user already overrides each knob).
@@ -808,15 +917,36 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
         diff_cfg.setdefault("gumbel_noise", False)
         diff_cfg.setdefault("gumbel_scale", 0.0)
 
+    speed_patch_enabled = bool(diff_cfg.get("speed_patch", True))
+    default_hard_eval_every = max(1, epochs // 5)
     if "hard_eval_every" not in diff_cfg:
-        diff_cfg["hard_eval_every"] = max(1, epochs // 5)
-    elif bool(diff_cfg.get("speed_patch", True)):
-        diff_cfg["hard_eval_every"] = max(int(diff_cfg["hard_eval_every"]), max(1, epochs // 5))
+        diff_cfg["hard_eval_every"] = default_hard_eval_every
+    elif speed_patch_enabled:
+        diff_cfg["hard_eval_every"] = max(int(diff_cfg["hard_eval_every"]), default_hard_eval_every)
 
     post_cfg_raw = diff_cfg.get("postprocess", {})
     post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
+    post_cfg.setdefault("mode", "none")
     post_cfg.setdefault("during_train", False)
     diff_cfg["postprocess"] = post_cfg
+
+    # Lightweight defaults when users keep configs minimal.
+    if not any(
+        k in diff_cfg
+        for k in (
+            "entropy_coeff",
+            "usage_balance_coeff",
+            "partition_cost_coeff",
+            "perm_reg_coeff",
+            "perm_entropy_coeff",
+            "target_hw_frac",
+        )
+    ):
+        diff_cfg["entropy_coeff"] = 0.0
+        diff_cfg["usage_balance_coeff"] = 0.0
+        diff_cfg["partition_cost_coeff"] = 1e-2
+        diff_cfg["perm_reg_coeff"] = 0.0
+        diff_cfg["perm_entropy_coeff"] = 0.0
 
     # Ordering defaults
     diff_cfg.setdefault("order_tau_start", 1.0)
@@ -856,19 +986,25 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
     assert sol_arr.shape[0] == dim, f"dim ({dim}) != number of nodes ({sol_arr.shape[0]})"
 
     solution = {node_list[i]: int(sol_arr[i] > 0.5) for i in range(len(node_list))}
-    if TG.violates(solution):
-        eval_cost = float(TG.violation_cost)
-    else:
-        eval_cost = float(TG.evaluate_makespan(solution)["makespan"])
+
+    selection_metric = str(
+        diff_cfg.get(
+            "selection_metric_final",
+            diff_cfg.get("selection_metric_train", diff_cfg.get("selection_metric", "queue")),
+        )
+    ).lower()
+    eval_cost = _evaluate_discrete_solution(TG, solution, metric=selection_metric)
 
     best_cost = float(result.get("best_mip_cost", eval_cost))
     if not math.isfinite(best_cost):
         best_cost = eval_cost
 
     logger.info(
-        "simulate_diff_GNN_order finished: best_cost=%.6f (eval_cost=%.6f, train_best_cost=%.6f)",
+        "simulate_diff_GNN_order finished: best_cost=%.6f (eval_cost=%.6f, train_best_cost=%.6f, metric=%s, train_metric=%s)",
         best_cost,
         eval_cost,
-        result.get("best_mip_cost", float("nan")),
+        result.get("best_train_cost", float("nan")),
+        selection_metric,
+        result.get("selection_metric_train", "unknown"),
     )
     return best_cost, sol_arr

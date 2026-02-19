@@ -1,0 +1,82 @@
+# Fig.3 simple profile focused on matching MIP legacy_lp objective.
+# On current code/seed this reaches legacy_lp ~= 26 for both diff_gnn and diff_gnn_order.
+
+graph-file: "inputs/task_graph_topology/custom/paper_fig3_11node.dot"
+area-constraint: 0.5
+hw-scale-factor: 1.0
+hw-scale-variance: 0.1
+comm-scale-factor: 1.0
+seed: 42
+solver-tool: "cvxpy"
+
+solution-dir: "outputs/fig3_partitions_mip_close"
+result-file-prefix: "fig3_diffgnn_mip_close"
+output-dir: "outputs"
+taskgraph-dir: "inputs/task_graph_complete"
+taskgraph-pickle: "inputs/task_graph_complete/taskgraph-paper_fig3_11node-instance-config-config_fig3_taskgraph_gnn.pkl"
+
+methods: "diff_gnn,diff_gnn_order"
+opt-cost-type: "mip"
+
+visualization:
+  enabled: true
+  include_input_graph: true
+  include_output_schedule: true
+  out_dir: "outputs/final_visualizations/fig3_mip_close"
+  input_dir: "outputs/final_visualizations/fig3_mip_close/input"
+  schedule_dir: "outputs/final_visualizations/fig3_mip_close/schedule"
+  strict_partitions: false
+
+diffgnn:
+  iter: 400
+  hidden_dim: 64
+  device: "gpu"
+  speed_patch: true
+  regularizer_profile: "minimal"
+  feature_profile: "paper"
+  edge_weight_mode: "paper_cosine"
+  paper_sigma: 0.2
+  hard_eval_every: 80
+  selection_metric_train: "queue"
+  selection_metric_final: "legacy_lp"
+  final_legacy_lp_if_mip: true
+  reuse_trained_final_cost: true
+  postprocess:
+    mode: "hybrid"
+    during_train: false
+    eval_mode: "taskgraph"
+    max_iters: 16
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: false
+
+diffgnn_order:
+  iter: 400
+  hidden_dim: 64
+  device: "gpu"
+  speed_patch: true
+  fast_mode: true
+  feature_profile: "paper"
+  edge_weight_mode: "paper_cosine"
+  paper_sigma: 0.2
+  hard_eval_every: 80
+  sinkhorn_iters: 8
+  order_refine_steps: 1
+  gumbel_noise: false
+  gumbel_scale: 0.0
+  selection_metric_train: "queue"
+  selection_metric_final: "legacy_lp"
+  final_legacy_lp_if_mip: true
+  entropy_coeff: 0.0
+  usage_balance_coeff: 0.0
+  partition_cost_coeff: 0.0
+  perm_reg_coeff: 0.0
+  perm_entropy_coeff: 0.0
+  postprocess:
+    mode: "hybrid"
+    during_train: false
+    eval_mode: "taskgraph"
+    max_iters: 16
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: false

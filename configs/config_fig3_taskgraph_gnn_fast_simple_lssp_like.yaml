@@ -1,0 +1,121 @@
+# Fig.3 fast/simple differentiable baseline (GCN + edge-MLP)
+# with LSSP-inspired differentiable DLS shaping enabled.
+
+graph-file: "inputs/task_graph_topology/custom/paper_fig3_11node.dot"
+area-constraint: 0.5
+hw-scale-factor: 1.0
+hw-scale-variance: 0.1
+comm-scale-factor: 1.0
+seed: 42
+solver-tool: "cvxpy"
+
+solution-dir: "outputs/fig3_partitions_fast_simple_lssp_like"
+result-file-prefix: "fig3_diffgnn_fast_simple_lssp_like"
+output-dir: "outputs"
+taskgraph-dir: "inputs/task_graph_complete"
+taskgraph-pickle: "inputs/task_graph_complete/taskgraph-paper_fig3_11node-instance-config-config_fig3_taskgraph_gnn.pkl"
+
+methods: "diff_gnn,diff_gnn_order"
+opt-cost-type: "mip"
+
+visualization:
+  enabled: true
+  include_input_graph: true
+  include_output_schedule: true
+  out_dir: "outputs/final_visualizations/fig3_fast_simple_lssp_like"
+  input_dir: "outputs/final_visualizations/fig3_fast_simple_lssp_like/input"
+  schedule_dir: "outputs/final_visualizations/fig3_fast_simple_lssp_like/schedule"
+  strict_partitions: false
+
+diffgnn:
+  iter: 500
+  hidden_dim: 256
+  device: "gpu"
+  speed_patch: true
+  feature_profile: "default_plus_paper"
+  edge_weight_mode: "paper2_cosine"
+  edge_weight_learner: "mlp"
+  edge_mlp_hidden_dim: 16
+  edge_weight_min_scale: 0.5
+  edge_weight_max_scale: 1.5
+  hard_eval_every: 50
+  selection_metric: "legacy_lp"
+  selection_metric_train: "legacy_lp"
+  selection_metric_final: "legacy_lp"
+  final_legacy_lp_if_mip: true
+  reuse_trained_final_cost: true
+  postprocess:
+    mode: "hybrid"
+    during_train: true
+    eval_mode: "taskgraph"
+    max_iters: 16
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: false
+    dls_steps: 3
+    dls_flip_eta: 0.35
+    dls_swap_eta: 0.18
+    dls_score_temp: 0.70
+    dls_comm_coeff: 0.02
+    dls_area_proj_iters: 4
+    dls_area_proj_strength: 6.0
+    dls_fill_decode: true
+    dls_lssp_like: true
+    dls_lssp_pri_coeff: 0.45
+    dls_lssp_beta: 10.0
+    dls_lssp_fill_eta: 0.25
+
+diffgnn_order:
+  iter: 500
+  hidden_dim: 256
+  device: "gpu"
+  fast_mode: true
+  speed_patch: true
+  feature_profile: "default_plus_paper"
+  edge_weight_mode: "paper2_cosine"
+  edge_weight_learner: "mlp"
+  edge_mlp_hidden_dim: 16
+  edge_weight_min_scale: 0.5
+  edge_weight_max_scale: 1.5
+  hard_eval_every: 50
+  selection_metric: "legacy_lp"
+  selection_metric_train: "legacy_lp"
+  selection_metric_final: "legacy_lp"
+  final_legacy_lp_if_mip: true
+  sinkhorn_iters: 12
+  order_refine_steps: 2
+  gumbel_noise: false
+  gumbel_scale: 0.0
+  pairwise_mode: "rank_sigmoid"
+  pairwise_temp: 0.35
+  order_decode_weight: 0.45
+  entropy_coeff: 0.0
+  usage_balance_coeff: 0.0
+  partition_cost_coeff: 0.01
+  perm_reg_coeff: 0.0
+  perm_entropy_coeff: 0.0
+  postprocess:
+    mode: "hybrid"
+    during_train: true
+    eval_mode: "taskgraph"
+    max_iters: 16
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: false
+    dls_steps: 3
+    dls_flip_eta: 0.35
+    dls_swap_eta: 0.18
+    dls_score_temp: 0.70
+    dls_comm_coeff: 0.02
+    dls_area_proj_iters: 4
+    dls_area_proj_strength: 6.0
+    dls_fill_decode: true
+    dls_lssp_like: true
+    dls_lssp_pri_coeff: 0.45
+    dls_lssp_beta: 10.0
+    dls_lssp_fill_eta: 0.25
+
+gl25:
+  iter: 2000
+  n_pop: 500
+  verbose: 500

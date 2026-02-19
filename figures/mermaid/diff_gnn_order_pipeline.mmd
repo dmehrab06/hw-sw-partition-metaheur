@@ -1,0 +1,21 @@
+flowchart TD
+  A[Load TaskGraph and config] --> B[Build node and edge features]
+  B --> C[Shared GCN encoder]
+  C --> D[Head 1: partition logits]
+  C --> E[Head 2: order scores]
+  D --> F[Soft partition probabilities]
+  E --> G[Sinkhorn and refinement to soft permutation]
+  F --> H[Surrogate schedule with partition and order]
+  G --> H
+  H --> I[Area and permutation regularization]
+  I --> J[Backprop and optimizer step]
+  J --> K{Hard eval epoch?}
+  K -- Yes --> L[Decode hard partition plus order and eval queue makespan]
+  K -- No --> M[Continue training]
+  L --> M
+  M --> N{Last epoch?}
+  N -- No --> C
+  N -- Yes --> O[Final hard decode]
+  O --> P[Optional hybrid postprocess]
+  P --> Q[Final discrete metric eval queue or legacy_lp]
+  Q --> R[Save best partition and report]

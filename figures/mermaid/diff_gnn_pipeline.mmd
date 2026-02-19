@@ -1,0 +1,17 @@
+flowchart TD
+  A[Load TaskGraph and config] --> B[Build node and edge features]
+  B --> C[GCN encoder to per-node logits]
+  C --> D[Soft assignment p_hw via sigmoid and temperature]
+  D --> E[Compute differentiable surrogate makespan]
+  E --> F[Add area penalty and regularizers]
+  F --> G[Backprop and optimizer step]
+  G --> H{Hard eval epoch?}
+  H -- Yes --> I[Decode hard partition and eval queue makespan]
+  H -- No --> J[Continue training]
+  I --> J
+  J --> K{Last epoch?}
+  K -- No --> C
+  K -- Yes --> L[Final hard decode]
+  L --> M[Optional hybrid postprocess]
+  M --> N[Final discrete metric eval queue or legacy_lp]
+  N --> O[Save best partition and report]

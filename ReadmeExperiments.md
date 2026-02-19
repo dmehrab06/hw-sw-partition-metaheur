@@ -47,6 +47,21 @@ To force specific methods:
 HWSW_METHODS="random,greedy,diff_gnn,gl25" /people/dass304/.conda/envs/combopt/bin/python gnn_main.py -c configs/config_mkspan_default_gnn.yaml
 ```
 
+## Fast simple differentiable (recommended)
+Minimal config, fast defaults, MIP-style objective:
+```bash
+HWSW_METHODS="diff_gnn" \
+/people/dass304/.conda/envs/combopt/bin/python gnn_main.py \
+-c configs/config_fig3_taskgraph_gnn_fast_simple.yaml
+```
+
+Optional: include ordered variant and GL25 on the same Fig.3 case:
+```bash
+HWSW_METHODS="diff_gnn,diff_gnn_order,gl25" \
+/people/dass304/.conda/envs/combopt/bin/python gnn_main.py \
+-c configs/config_fig3_taskgraph_gnn_fast_simple.yaml
+```
+
 ## GNN sweep
 Default single config:
 ```bash
@@ -133,6 +148,82 @@ CSV_OUT="outputs/test_diff_gnn/custom_diff_gnn.csv" \
 nohup env CONFIG_GLOB="configs/config_mkspan_area_*_hw_*_seed_*.yaml" ./run_diff_gnn.sh > diff_gnn.log 2>&1 &
 
 nohup env CONFIG_GLOB="configs/config_mkspan_area_*_hw_*_seed_*.yaml" ./run_diff_gnn_order.sh > diff_gnn_order.log 2>&1 &
+
+## Fig3 MIP-close profiles (legacy_lp metric)
+Reference on this case (`paper_fig3_11node`, area `0.5`):
+- MIP objective (`legacy_lp`): `26`
+- MIP queue makespan: `29`
+
+### Recommended profile (queue + MIP close)
+```bash
+cd /people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur
+HWSW_METHODS="diff_gnn,diff_gnn_order" \
+/people/dass304/.conda/envs/combopt/bin/python gnn_main.py \
+-c configs/config_fig3_taskgraph_gnn_fast_simple.yaml
+```
+Observed:
+- `diff_gnn_opt_cost=26`, `diff_gnn_makespan=31`
+- `diff_gnn_order_opt_cost=26`, `diff_gnn_order_makespan=29`
+
+### Objective-only profile (slower queue, still useful for ablation)
+```bash
+cd /people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur
+HWSW_METHODS="diff_gnn,diff_gnn_order" \
+/people/dass304/.conda/envs/combopt/bin/python gnn_main.py \
+-c configs/config_fig3_taskgraph_gnn_mip_close.yaml
+```
+Observed:
+- `diff_gnn_opt_cost=26`, `diff_gnn_makespan=39`
+- `diff_gnn_order_opt_cost=26`, `diff_gnn_order_makespan=35`
+
+## Simplified Mermaid pipelines
+Diagram files:
+- `figures/mermaid/diff_gnn_pipeline.mmd`
+- `figures/mermaid/diff_gnn_order_pipeline.mmd`
+
+```mermaid
+flowchart TD
+  A[Load TaskGraph and config] --> B[Build node and edge features]
+  B --> C[GCN encoder to per-node logits]
+  C --> D[Soft assignment p_hw via sigmoid and temperature]
+  D --> E[Compute differentiable surrogate makespan]
+  E --> F[Add area penalty and regularizers]
+  F --> G[Backprop and optimizer step]
+  G --> H{Hard eval epoch?}
+  H -- Yes --> I[Decode hard partition and eval queue makespan]
+  H -- No --> J[Continue training]
+  I --> J
+  J --> K{Last epoch?}
+  K -- No --> C
+  K -- Yes --> L[Final hard decode]
+  L --> M[Optional hybrid postprocess]
+  M --> N[Final discrete metric eval queue or legacy_lp]
+  N --> O[Save best partition and report]
+```
+
+```mermaid
+flowchart TD
+  A[Load TaskGraph and config] --> B[Build node and edge features]
+  B --> C[Shared GCN encoder]
+  C --> D[Head 1: partition logits]
+  C --> E[Head 2: order scores]
+  D --> F[Soft partition probabilities]
+  E --> G[Sinkhorn and refinement to soft permutation]
+  F --> H[Surrogate schedule with partition and order]
+  G --> H
+  H --> I[Area and permutation regularization]
+  I --> J[Backprop and optimizer step]
+  J --> K{Hard eval epoch?}
+  K -- Yes --> L[Decode hard partition plus order and eval queue makespan]
+  K -- No --> M[Continue training]
+  L --> M
+  M --> N{Last epoch?}
+  N -- No --> C
+  N -- Yes --> O[Final hard decode]
+  O --> P[Optional hybrid postprocess]
+  P --> Q[Final discrete metric eval queue or legacy_lp]
+  Q --> R[Save best partition and report]
+```
 ```
 
 ```bash
