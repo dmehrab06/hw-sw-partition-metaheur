@@ -71,13 +71,13 @@ slurm_outputs/
 ################################################################################
 # Figures / plots / generated artifacts
 ################################################################################
-Figs/
-Figures/
+# Figs/
+# Figures/
 figures/__pycache__/   # (code cache under your figures package)
-*.png
-*.jpg
-*.jpeg
-*.pdf
+# *.png
+# *.jpg
+# *.jpeg
+# *.pdf
 
 ################################################################################
 # Experiment trackers / caches
