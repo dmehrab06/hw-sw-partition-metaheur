@@ -154,6 +154,30 @@ def _dag_layered_layout(graph: nx.DiGraph) -> dict:
     return pos
 
 
+def _dag_shape_stats(graph: nx.DiGraph) -> tuple[int, int] | None:
+    """
+    Return (num_layers, max_layer_width) for a DAG, or None for non-DAG.
+    """
+    try:
+        topo = list(nx.topological_sort(graph))
+    except Exception:
+        return None
+
+    depth = {n: 0 for n in topo}
+    for n in topo:
+        preds = list(graph.predecessors(n))
+        if preds:
+            depth[n] = max(depth[p] + 1 for p in preds)
+
+    layers: dict[int, list] = {}
+    for n in topo:
+        layers.setdefault(depth[n], []).append(n)
+
+    if not layers:
+        return (1, 1)
+    return (1 + max(layers.keys()), max(len(v) for v in layers.values()))
+
+
 def _plot_input_task_graph(task_graph, out_path: str, context: dict | None = None) -> None:
     import matplotlib
 
@@ -164,15 +188,48 @@ def _plot_input_task_graph(task_graph, out_path: str, context: dict | None = Non
     g = task_graph.graph
     pos = _dag_layered_layout(g)
     num_nodes = len(g.nodes())
+    num_edges = len(g.edges())
+
+    dag_stats = _dag_shape_stats(g)
+    if dag_stats is None:
+        # fallback estimate for non-DAGs
+        approx = max(1, int(math.sqrt(max(1, num_nodes))))
+        num_layers, max_layer_width = approx, approx
+    else:
+        num_layers, max_layer_width = dag_stats
+
+    # Adaptive canvas size for larger graphs.
+    fig_w = 10.0 + 0.65 * float(num_layers) + 0.010 * float(num_edges)
+    fig_h = 6.0 + 0.28 * float(max_layer_width) + 0.004 * float(num_nodes)
+    fig_w = min(max(fig_w, 12.0), 52.0)
+    fig_h = min(max(fig_h, 8.0), 34.0)
+
     show_attrs = num_nodes <= 50
     show_edge_labels = num_nodes <= 40
+    show_node_labels = num_nodes <= 220
 
-    fig, ax = plt.subplots(figsize=(16.5, 8.5))
+    if num_nodes <= 30:
+        node_size = 1500
+        node_font_size = 10
+    elif num_nodes <= 80:
+        node_size = 1000
+        node_font_size = 8.5
+    elif num_nodes <= 220:
+        node_size = 520
+        node_font_size = 7
+    elif num_nodes <= 600:
+        node_size = 240
+        node_font_size = 0  # unused when labels hidden
+    else:
+        node_size = 140
+        node_font_size = 0  # unused when labels hidden
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
     nx.draw_networkx_nodes(
         g,
         pos,
-        node_size=1500 if num_nodes <= 30 else 1000,
+        node_size=node_size,
         node_color="#f7f7f7",
         edgecolors="#2d2d2d",
         linewidths=1.0,
@@ -190,7 +247,15 @@ def _plot_input_task_graph(task_graph, out_path: str, context: dict | None = Non
         connectionstyle="arc3,rad=0.02",
     )
 
-    nx.draw_networkx_labels(g, pos, labels={n: str(n) for n in g.nodes()}, font_size=10, font_weight="bold", ax=ax)
+    if show_node_labels:
+        nx.draw_networkx_labels(
+            g,
+            pos,
+            labels={n: str(n) for n in g.nodes()},
+            font_size=node_font_size,
+            font_weight="bold",
+            ax=ax,
+        )
 
     if show_attrs:
         attr_labels = {}
@@ -239,7 +304,13 @@ def _plot_input_task_graph(task_graph, out_path: str, context: dict | None = Non
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     fig.tight_layout(rect=[0.0, 0.04, 1.0, 1.0])
-    fig.savefig(out_path, dpi=220)
+    if num_nodes <= 200:
+        dpi = 220
+    elif num_nodes <= 500:
+        dpi = 170
+    else:
+        dpi = 140
+    fig.savefig(out_path, dpi=dpi)
     plt.close(fig)
 
 
