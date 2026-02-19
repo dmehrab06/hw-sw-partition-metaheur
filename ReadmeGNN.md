@@ -118,3 +118,50 @@ flowchart LR
   linkStyle 6 stroke:#d62728,stroke-width:2px,stroke-dasharray:6 4,color:#d62728
 
 ```
+
+## With odering but with more details
+
+```mermaid
+flowchart LR
+  subgraph T["diff_gnn_order training detail"]
+    IG[Input DAG graph] --> FEAT[Feature build]
+    FEAT --> ENC[Graph encoder with optional edge_mlp]
+
+    ENC --> PHEAD[Placement head]
+    ENC --> OHW[Order head hw priority]
+    ENC --> OSW[Order head sw priority]
+
+    PHEAD --> ASSIGN[Relaxed HW probability assignment]
+    OHW --> SINK[Differentiable ordering via sinkhorn]
+    OSW --> SINK
+    SINK --> PAIR[Pairwise ranking consistency]
+    ASSIGN --> PAIR
+
+    ASSIGN --> LOSS[Schedule surrogate and area loss]
+    PAIR --> LOSS
+    LOSS -.->|backprop| ENC
+  end
+
+  subgraph I["diff_gnn_order inference and postprocess detail"]
+    IG2[Input DAG graph] --> FEAT2[Feature build]
+    FEAT2 --> ENCI[Trained diff_gnn_order]
+    ENC -->|trained weights| ENCI
+
+    ENCI --> PHEADI[Placement output]
+    ENCI --> OHWI[HW priority output]
+    ENCI --> OSWI[SW priority output]
+
+    PHEADI --> HARD[Hard decode HW SW]
+    OHWI --> ODEC[Order aware decode score]
+    OSWI --> ODEC
+    HARD --> ODEC
+
+    ODEC --> AREA[Area repair and fill]
+    AREA --> DLS[DLS refine optional]
+    DLS --> LSSP[LSSP local search optional]
+    LSSP --> OUT[Final ordered partition and metric]
+  end
+
+  linkStyle 12 stroke:#d62728,stroke-width:2px,stroke-dasharray:6 4,color:#d62728
+
+```
