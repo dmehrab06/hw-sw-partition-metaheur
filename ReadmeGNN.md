@@ -65,7 +65,28 @@ find outputs/final_visualizations/fig3 -type f -name "*.png" | sort
 
 # Mermaid diagram
 
-## without ordering
+## GCPS method ([https://link.springer.com/article/10.1007/s10617-021-09255-9])
+
+```mermaid
+flowchart LR
+  A[Input DAG and task attributes]
+  A --> B[Preprocess: normalized adjacency and HG HGP features]
+  B --> C[Two layer GCN model]
+  C --> D[Pretraining with auxiliary Tcost]
+  D --> E[Training loop]
+  E --> F[Predict HW probability per task]
+  F --> G[Greedy decode under area constraint]
+  G --> H[LSSP scheduling]
+  H --> I{Schedule improved}
+  I -- Yes --> J[Update best partition]
+  J --> E
+  I -- No --> K{Stop condition met}
+  K -- No --> E
+  K -- Yes --> L[Final partition and final schedule]
+
+```
+
+## DIFF-GNN (without ordering)-ours
 
 ```mermaid
 flowchart LR
@@ -91,7 +112,8 @@ flowchart LR
 
 ```
 
-## With ordering
+## DIFF-GNN-Order (with ordering)
+
 
 ```mermaid
 flowchart LR
@@ -119,7 +141,7 @@ flowchart LR
 
 ```
 
-## With ordering (details)
+## DIFF-GNN-Order (with ordering details)
 
 ```mermaid
 flowchart LR
