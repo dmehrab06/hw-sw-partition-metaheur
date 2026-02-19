@@ -187,3 +187,66 @@ flowchart LR
   linkStyle 12 stroke:#d62728,stroke-width:2px,stroke-dasharray:6 4,color:#d62728
 
 ```
+
+### DIFF-GNN-Order (with details)
+
+```mermaid
+flowchart TD
+  G["Input DAG and node features"]
+
+  subgraph N["diff_gnn_order network"]
+    H["Graph encoder with optional edge_mlp"]
+    P["Placement logits"]
+    OH["HW order scores"]
+    OS["SW order scores"]
+    G --> H
+    H --> P
+    H --> OH
+    H --> OS
+  end
+
+  P --> X["HW probability x_i via relaxed binary"]
+  OH --> SINK["Sinkhorn soft permutation"]
+  OS --> SINK
+  SINK --> B["Soft precedence weights B(j to i)"]
+
+  subgraph D["DAG dependency clock"]
+    P1["Pred arrival 1"]
+    P2["Pred arrival 2"]
+    Pk["..."]
+    DMAX["dep_ready_i = soft max of predecessor arrivals"]
+    P1 --> DMAX
+    P2 --> DMAX
+    Pk --> DMAX
+  end
+
+  subgraph Q["Order aware queue clock"]
+    J1["Same lane finish 1"]
+    J2["Same lane finish 2"]
+    BQ["B(j to i) from soft order"]
+    QMAX["queue_ready_i = weighted soft max with B"]
+    J1 --> QMAX
+    J2 --> QMAX
+    BQ --> QMAX
+  end
+
+  B --> BQ
+  DMAX --> S["start_i = soft max(dep_ready_i, queue_ready_i)"]
+  QMAX --> S
+
+  X --> DUR["duration_i from HW SW probability"]
+  S --> F["finish_i = start_i + duration_i"]
+  DUR --> F
+
+  F --> M["soft makespan = soft max over all finishes"]
+  X --> L["Total loss = makespan + area + partition + ordering regularizers"]
+  SINK --> L
+  M --> L
+
+  L -.->|backprop| H
+
+  M --> DEC["Hard decode to HW SW partition"]
+  DEC --> POST["Optional DLS and optional LSSP"]
+  POST --> OUT["Final ordered partition and final metric"]
+
+```
