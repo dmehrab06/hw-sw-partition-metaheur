@@ -16,7 +16,7 @@ taskgraph-dir: "inputs/task_graph_complete"
 taskgraph-pickle: "inputs/task_graph_complete/taskgraph-paper_fig3_11node-instance-config-config_fig3_taskgraph_gnn.pkl"
 
 methods: "diff_gnn,diff_gnn_order"
-opt-cost-type: "mip"
+opt-cost-type: "makespan"
 
 visualization:
   enabled: true
@@ -36,9 +36,10 @@ diffgnn:
   device: "gpu"
   speed_patch: true
   hard_eval_every: 50
+  hard_eval_only_final: true
   selection_metric: "queue"
   selection_metric_train: "queue"
-  selection_metric_final: "legacy_lp"
+  selection_metric_final: "queue"
   final_legacy_lp_if_mip: true
   reuse_trained_final_cost: true
   entropy_coeff: 0.0
@@ -74,6 +75,7 @@ diffgnn_order:
   edge_weight_min_scale: 0.5
   edge_weight_max_scale: 1.5
   hard_eval_every: 100
+  hard_eval_only_final: true
   sinkhorn_iters: 12
   order_refine_steps: 2
   gumbel_noise: false
@@ -87,7 +89,7 @@ diffgnn_order:
   perm_reg_coeff: 0.0
   perm_entropy_coeff: 0.0
   selection_metric_train: "queue"
-  selection_metric_final: "legacy_lp"
+  selection_metric_final: "queue"
   final_legacy_lp_if_mip: true
   postprocess:
     mode: "hybrid"

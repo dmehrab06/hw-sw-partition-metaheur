@@ -249,13 +249,16 @@ class ScheduleConstPartitionSolver:
             topo_indices = [self.node_to_index[node] for node in topo_order]
             
             logger.info(f"Topological order: {topo_order}")
-            # Only constrain consecutive nodes in topological order
-            for k in range(len(topo_indices) - 1):
-                i, j = topo_indices[k], topo_indices[k + 1]
-                
-                # If both nodes are software, node i must complete before node j starts
-                # This constraint is active only when both x[i] = 1 and x[j] = 1 (both software)
-                constraints.append(f[i] <= t[j] + big_M * (1 - x[i]) + big_M * (1 - x[j]))
+            # Constrain all topological pairs (i before j), not only adjacent nodes.
+            # This preserves a single software order consistent with global topological order.
+            for a in range(len(topo_indices) - 1):
+                i = topo_indices[a]
+                for b in range(a + 1, len(topo_indices)):
+                    j = topo_indices[b]
+
+                    # If both nodes are software, node i must complete before node j starts.
+                    # This is relaxed away when either node is hardware via big-M terms.
+                    constraints.append(f[i] <= t[j] + big_M * (1 - x[i]) + big_M * (1 - x[j]))
         else:
             # Original O(n²) approach with binary ordering variables
             Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering

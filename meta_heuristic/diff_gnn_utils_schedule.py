@@ -28,6 +28,44 @@ if __name__ == "__main__":
 
 logger = LogManager.get_logger(__name__)
 
+_MKSPAN_DIFFGNN_DEFAULTS = {
+    "iter": 1000,
+    "verbose": 1000,
+    "device": "gpu",
+    "hidden_dim": 64,
+    "num_layers": 3,
+    "dropout": 0.2,
+    "model": "default",
+    "selection_metric": "queue",
+    "selection_metric_train": "queue",
+    "selection_metric_final": "legacy_lp",
+    "final_legacy_lp_if_mip": True,
+    "reuse_trained_final_cost": True,
+    "speed_patch": True,
+    "hard_eval_only_final": True,
+    "entropy_coeff": 0.0,
+    "usage_balance_coeff": 0.0,
+    "partition_cost_coeff": 0.0833333333,
+}
+
+_MKSPAN_POSTPROCESS_DEFAULTS = {
+    "mode": "hybrid",
+    "during_train": False,
+    "eval_mode": "taskgraph",
+    "max_iters": 120,
+    "enable_area_fill": True,
+    "fill_allow_worsen": 0.0,
+    "enable_swap": True,
+    "dls_steps": 2,
+    "dls_flip_eta": 0.35,
+    "dls_swap_eta": 0.18,
+    "dls_score_temp": 0.70,
+    "dls_comm_coeff": 0.02,
+    "dls_area_proj_iters": 4,
+    "dls_area_proj_strength": 6.0,
+    "dls_fill_decode": True,
+}
+
 try:
     from .diff_gnn_models import build_placement_model
 except Exception:
@@ -727,6 +765,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     selection_metric_final = str(config.get("selection_metric_final", selection_metric_train)).lower()
     seed = int(config.get("seed", 42))
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 5)))
+    hard_eval_only_final = bool(config.get("hard_eval_only_final", True))
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
     logit_scale = float(config.get("logit_scale", 8.0 if regularizer_profile == "legacy" else 3.0))
     center_logits = bool(config.get("center_logits", True))
@@ -773,7 +812,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     logger.info(
-        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, reg_profile=%s, selection_metric_train=%s, selection_metric_final=%s, post_mode=%s, post_during_train=%s, feature_profile=%s, edge_weight_mode=%s, paper_sigma=%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s, hard_train_outputs=%s",
+        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, reg_profile=%s, selection_metric_train=%s, selection_metric_final=%s, post_mode=%s, post_during_train=%s, feature_profile=%s, edge_weight_mode=%s, paper_sigma=%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s, hard_train_outputs=%s, hard_eval_every=%d, hard_eval_only_final=%s",
         sampler,
         epochs,
         lr,
@@ -793,6 +832,8 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         logit_scale,
         str(center_logits),
         str(hard_train_outputs),
+        hard_eval_every,
+        str(hard_eval_only_final),
     )
     edge_weight_learner = str(
         config.get(
@@ -897,7 +938,8 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
 
         # hard_eval_every = 1 # sid: remove this later
         # occasional hard evaluation to get discrete assignment
-        if (ep % hard_eval_every == 0) or (ep == epochs):
+        run_hard_eval = (ep == epochs) or ((not hard_eval_only_final) and (ep % hard_eval_every == 0))
+        if run_hard_eval:
             model.eval()
             with torch.no_grad():
                 logits2_eval = model(data.x, data.edge_index, edge_weight=edge_weight, edge_attr=edge_attr)
@@ -1202,21 +1244,11 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
         logger.error(msg)
         raise ValueError(msg)
 
-    # pull diff GNN specific config (fallback to top-level keys for convenience)
+    # Pull method config and fill missing values from mkspan defaults.
     diff_cfg = dict(config.get("diffgnn", {}))
-    # default diffgnn settings (explicit config overrides these)
-    if "iter" not in diff_cfg and "epochs" not in diff_cfg:
-        diff_cfg["iter"] = 250
-    if "verbose" not in diff_cfg:
-        diff_cfg["verbose"] = 250
-    if "hidden_dim" not in diff_cfg:
-        diff_cfg["hidden_dim"] = 64
-    if "num_layers" not in diff_cfg:
-        diff_cfg["num_layers"] = 3
-    if "dropout" not in diff_cfg:
-        diff_cfg["dropout"] = 0.2
-    if "model" not in diff_cfg and "model_name" not in diff_cfg:
-        diff_cfg["model"] = "default"
+    for key, value in _MKSPAN_DIFFGNN_DEFAULTS.items():
+        diff_cfg.setdefault(key, value)
+
     # map common aliases
     if "iter" in diff_cfg and "epochs" not in diff_cfg:
         diff_cfg["epochs"] = diff_cfg["iter"]
@@ -1224,7 +1256,7 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
         diff_cfg["learn_edge_weight"] = bool(diff_cfg.get("learned_edge_weight"))
     if "edge_weight_learner" not in diff_cfg and bool(diff_cfg.get("learn_edge_weight", False)):
         diff_cfg["edge_weight_learner"] = "per_edge"
-    epochs = int(diff_cfg.get("epochs", 250))
+    epochs = int(diff_cfg.get("epochs", diff_cfg.get("iter", _MKSPAN_DIFFGNN_DEFAULTS["iter"])))
 
     # Speed-oriented defaults: use queue metric while training, then optionally
     # evaluate one final legacy LP cost for MIP-style experiments.
@@ -1241,31 +1273,13 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
         else:
             diff_cfg["selection_metric_final"] = train_metric
 
-    speed_patch_enabled = bool(diff_cfg.get("speed_patch", True))
-    default_hard_eval_every = max(1, epochs // 5)
     if "hard_eval_every" not in diff_cfg:
-        diff_cfg["hard_eval_every"] = default_hard_eval_every
-    elif speed_patch_enabled:
-        diff_cfg["hard_eval_every"] = max(int(diff_cfg["hard_eval_every"]), default_hard_eval_every)
+        diff_cfg["hard_eval_every"] = max(1, int(epochs) // 5)
 
     post_cfg_raw = diff_cfg.get("postprocess", {})
     post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
-    # Queue-oriented robust defaults: run stronger local search only at final decode.
-    post_cfg.setdefault("mode", "hybrid")
-    post_cfg.setdefault("during_train", False)
-    post_cfg.setdefault("eval_mode", "taskgraph")
-    post_cfg.setdefault("max_iters", 120)
-    post_cfg.setdefault("enable_area_fill", True)
-    post_cfg.setdefault("fill_allow_worsen", 0.0)
-    post_cfg.setdefault("enable_swap", True)
-    post_cfg.setdefault("dls_steps", 2)
-    post_cfg.setdefault("dls_flip_eta", 0.35)
-    post_cfg.setdefault("dls_swap_eta", 0.18)
-    post_cfg.setdefault("dls_score_temp", 0.70)
-    post_cfg.setdefault("dls_comm_coeff", 0.02)
-    post_cfg.setdefault("dls_area_proj_iters", 4)
-    post_cfg.setdefault("dls_area_proj_strength", 6.0)
-    post_cfg.setdefault("dls_fill_decode", True)
+    for key, value in _MKSPAN_POSTPROCESS_DEFAULTS.items():
+        post_cfg.setdefault(key, value)
     diff_cfg["postprocess"] = post_cfg
 
     # Lightweight defaults for faster/more stable convergence when users keep the

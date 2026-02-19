@@ -11,7 +11,7 @@ result-file-prefix: "makespan_opt_gnn"
 output-dir: "outputs"
 taskgraph-dir: "inputs/task_graph_complete"
 taskgraph-pickle: "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default_gnn.pkl"
-opt-cost-type: "mip"
+opt-cost-type: "makespan"
 # opt-cost-type: "mip"
 # opt-cost-type: "default"
 
@@ -92,17 +92,18 @@ diffgnn:
     iter: 1000
     verbose: 1000
     device: "gpu"
-    hidden_dim: 64
+    hidden_dim: 256
     num_layers: 3
     dropout: 0.2
     model: "default"
     selection_metric: "queue"
     selection_metric_train: "queue"
-    selection_metric_final: "legacy_lp"
+    selection_metric_final: "queue"
     final_legacy_lp_if_mip: true
     reuse_trained_final_cost: true
     speed_patch: true
-    hard_eval_every: 50
+    hard_eval_every: 200
+    hard_eval_only_final: true
     entropy_coeff: 0.0
     usage_balance_coeff: 0.0
     partition_cost_coeff: 0.0833333333
@@ -132,7 +133,8 @@ diffgnn_order:
     dropout: 0.2
     model: "default"
     speed_patch: true
-    hard_eval_every: 100
+    hard_eval_every: 200
+    hard_eval_only_final: true
     fast_mode: true
     feature_profile: "default_plus_paper"
     edge_weight_mode: "paper2_cosine"
@@ -153,7 +155,7 @@ diffgnn_order:
     perm_reg_coeff: 0.0
     perm_entropy_coeff: 0.0
     selection_metric_train: "queue"
-    selection_metric_final: "legacy_lp"
+    selection_metric_final: "queue"
     final_legacy_lp_if_mip: true
     postprocess:
       mode: "hybrid"

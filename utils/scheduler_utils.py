@@ -522,21 +522,10 @@ def _formulate_cvxpy_problem(graph: nx.DiGraph, assignment: np.ndarray, exec_tim
     software_count = 0
     
     if len(software_nodes) > 1:
-        # Create subgraph of software nodes to determine execution order
-        software_subgraph = graph.subgraph(software_nodes)
-        
-        if software_subgraph.number_of_edges() > 0:
-            # Use topological ordering for dependent software nodes
-            try:
-                sw_order = list(nx.topological_sort(software_subgraph))
-            except nx.NetworkXError:
-                # Fallback to node order if subgraph has cycles (shouldn't happen in DAG)
-                logger.error("Software subgraph has cycles")
-                sw_order = sorted(software_nodes)
-        else:
-            # No dependencies among software nodes, use arbitrary order
-            sw_order = sorted(software_nodes)
-        
+        # Use global DAG topological order and then filter to software nodes.
+        # This keeps LP software sequencing consistent with queue simulation.
+        sw_order = [node for node in nx.topological_sort(graph) if assignment[node_to_index[node]] == 1]
+
         # Add sequential constraints for consecutive software nodes
         for i in range(len(sw_order) - 1):
             curr_node = sw_order[i]
@@ -545,7 +534,7 @@ def _formulate_cvxpy_problem(graph: nx.DiGraph, assignment: np.ndarray, exec_tim
             next_idx = node_to_index[next_node]
             
             constraint = start_times[next_idx] >= start_times[curr_idx] + exec_times[curr_idx]
-            # constraints.append(constraint)
+            constraints.append(constraint)
             software_count += 1
     
     # Constraint 3: Makespan definition constraints
