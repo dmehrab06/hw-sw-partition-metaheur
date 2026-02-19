@@ -266,8 +266,11 @@ def _plot_schedule(task_graph, partition: dict, method: str, out_path: str, cont
     area_used_frac = (area_used / total_area) if total_area > 0 else 0.0
     area_budget_frac = (area_budget / total_area) if total_area > 0 else 0.0
 
-    lane_gap = 0.9
+    # Keep Software/Bus/Hardware groups visually separated, but pack stacked
+    # hardware lanes tightly so there is no blank vertical gap between them.
     bar_h = 0.34
+    hw_lane_pitch = bar_h
+    group_gap = 0.9
 
     software_tasks = [(n, starts[n], finishes[n]) for n in sw_nodes]
     hardware_tasks = [(n, starts[n], finishes[n]) for n in hw_nodes]
@@ -277,9 +280,9 @@ def _plot_schedule(task_graph, partition: dict, method: str, out_path: str, cont
     num_hw_lanes = max(1, 1 + max((lane for _, _, _, lane in hardware_laned), default=0))
 
     y_hardware_top = 0.0
-    y_hardware_by_lane = {lane: (y_hardware_top - lane * lane_gap) for lane in range(num_hw_lanes)}
-    y_bus = y_hardware_top + lane_gap
-    y_software = y_bus + lane_gap
+    y_hardware_by_lane = {lane: (y_hardware_top - lane * hw_lane_pitch) for lane in range(num_hw_lanes)}
+    y_bus = y_hardware_top + group_gap
+    y_software = y_bus + group_gap
 
     bus_transfers = []
     for (u, v), comm in task_graph.communication_costs.items():
@@ -289,7 +292,7 @@ def _plot_schedule(task_graph, partition: dict, method: str, out_path: str, cont
             bus_transfers.append((u, v, start, end))
     bus_transfers.sort(key=lambda t: t[2])
 
-    fig_h_sched = 5.6 + max(0, num_hw_lanes - 1) * 0.8
+    fig_h_sched = 5.6 + max(0, num_hw_lanes - 1) * 0.45
     fig, (ax, ax_info) = plt.subplots(
         2,
         1,
