@@ -371,7 +371,7 @@ def _resolve_regularizer_config(config, TG):
 
     if profile == "modern":
         defaults = {
-            "entropy_coeff": 1e-3,
+            "entropy_coeff": 0.0,
             "usage_balance_coeff": 0.0,
             "target_hw_frac": min(area_constraint, 0.3),
             "partition_cost_coeff": 5e-2 * max(1.0, area_constraint / 0.3),
@@ -385,8 +385,8 @@ def _resolve_regularizer_config(config, TG):
         }
     else:
         defaults = {
-            "entropy_coeff": 1e-3,
-            "usage_balance_coeff": 0.5,
+            "entropy_coeff": 0.0,
+            "usage_balance_coeff": 0.0,
             "target_hw_frac": area_constraint,
             "partition_cost_coeff": 1e-2,
         }
@@ -602,7 +602,7 @@ def _differentiable_makespan_loss(
     node_list,
     beta_softmax=20.0,
     area_penalty_coeff=1e5,
-    entropy_coeff=1e-3,
+    entropy_coeff=0.0,
     usage_balance_coeff=0.0,
     target_hw_frac=None,
     partition_cost_coeff=0.0,
@@ -1087,7 +1087,7 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
       - tau_final: 0.1
       - beta_softmax: 20.0
       - area_penalty_coeff: 1e5
-      - entropy_coeff: 1e-3
+      - entropy_coeff: 0.0
       - usage_balance_coeff: 0.0 (set >0 to push hardware usage toward target_hw_frac)
       - target_hw_frac: defaults to min(area_constraint, 0.3)
       - partition_cost_coeff: 5e-2 (scaled up automatically when area_constraint is large)
@@ -1204,7 +1204,7 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
 
     # pull diff GNN specific config (fallback to top-level keys for convenience)
     diff_cfg = dict(config.get("diffgnn", {}))
-    # default diffgnn settings (simple + fast-competitive; explicit config overrides these)
+    # default diffgnn settings (explicit config overrides these)
     if "iter" not in diff_cfg and "epochs" not in diff_cfg:
         diff_cfg["iter"] = 250
     if "verbose" not in diff_cfg:
@@ -1250,8 +1250,22 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
 
     post_cfg_raw = diff_cfg.get("postprocess", {})
     post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
-    post_cfg.setdefault("mode", "none")
+    # Queue-oriented robust defaults: run stronger local search only at final decode.
+    post_cfg.setdefault("mode", "hybrid")
     post_cfg.setdefault("during_train", False)
+    post_cfg.setdefault("eval_mode", "taskgraph")
+    post_cfg.setdefault("max_iters", 120)
+    post_cfg.setdefault("enable_area_fill", True)
+    post_cfg.setdefault("fill_allow_worsen", 0.0)
+    post_cfg.setdefault("enable_swap", True)
+    post_cfg.setdefault("dls_steps", 2)
+    post_cfg.setdefault("dls_flip_eta", 0.35)
+    post_cfg.setdefault("dls_swap_eta", 0.18)
+    post_cfg.setdefault("dls_score_temp", 0.70)
+    post_cfg.setdefault("dls_comm_coeff", 0.02)
+    post_cfg.setdefault("dls_area_proj_iters", 4)
+    post_cfg.setdefault("dls_area_proj_strength", 6.0)
+    post_cfg.setdefault("dls_fill_decode", True)
     diff_cfg["postprocess"] = post_cfg
 
     # Lightweight defaults for faster/more stable convergence when users keep the

@@ -92,26 +92,28 @@ diffgnn:
     iter: 1000
     verbose: 1000
     device: "gpu"
-    hidden_dim: 256
+    hidden_dim: 64
     num_layers: 3
-    dropout: 0.5
+    dropout: 0.2
     model: "default"
-    regularizer_profile: "legacy"
     selection_metric: "queue"
     selection_metric_train: "queue"
     selection_metric_final: "legacy_lp"
     final_legacy_lp_if_mip: true
     reuse_trained_final_cost: true
     speed_patch: true
-    hard_eval_every: 200
+    hard_eval_every: 50
+    entropy_coeff: 0.0
+    usage_balance_coeff: 0.0
+    partition_cost_coeff: 0.0833333333
     postprocess:
       mode: "hybrid"
       during_train: false
       eval_mode: "taskgraph"
-      max_iters: 12
+      max_iters: 120
       enable_area_fill: true
       fill_allow_worsen: 0.0
-      enable_swap: false
+      enable_swap: true
       dls_steps: 2
       dls_flip_eta: 0.35
       dls_swap_eta: 0.18
@@ -127,23 +129,40 @@ diffgnn_order:
     device: "gpu"
     hidden_dim: 256
     num_layers: 3
-    dropout: 0.5
+    dropout: 0.2
     model: "default"
     speed_patch: true
-    hard_eval_every: 200
+    hard_eval_every: 100
     fast_mode: true
-    sinkhorn_iters: 8
-    order_refine_steps: 1
+    feature_profile: "default_plus_paper"
+    edge_weight_mode: "paper2_cosine"
+    edge_weight_learner: "mlp"
+    edge_mlp_hidden_dim: 16
+    edge_weight_min_scale: 0.5
+    edge_weight_max_scale: 1.5
+    sinkhorn_iters: 12
+    order_refine_steps: 2
     gumbel_noise: false
     gumbel_scale: 0.0
+    pairwise_mode: "rank_sigmoid"
+    pairwise_temp: 0.35
+    order_decode_weight: 0.45
+    entropy_coeff: 0.0
+    usage_balance_coeff: 0.0
+    partition_cost_coeff: 0.01
+    perm_reg_coeff: 0.0
+    perm_entropy_coeff: 0.0
+    selection_metric_train: "queue"
+    selection_metric_final: "legacy_lp"
+    final_legacy_lp_if_mip: true
     postprocess:
       mode: "hybrid"
       during_train: false
       eval_mode: "taskgraph"
-      max_iters: 12
+      max_iters: 120
       enable_area_fill: true
       fill_allow_worsen: 0.0
-      enable_swap: false
+      enable_swap: true
       dls_steps: 2
       dls_flip_eta: 0.35
       dls_swap_eta: 0.18

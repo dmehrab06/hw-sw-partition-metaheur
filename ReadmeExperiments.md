@@ -251,3 +251,8 @@ HWSW_METHODS="diff_gnn,diff_gnn_order" /people/dass304/.conda/envs/combopt/bin/p
 
 
 nohup env CONFIG_GLOB="configs/config_mkspan_area_*_hw_*_seed_*.yaml" ./run_diff_gnn_order.sh > diff_gnn_order.log 2>&1 &
+
+
+HWSW_METHODS="diff_gnn,diff_gnn_order" /people/dass304/.conda/envs/combopt/bin/python gnn_main.py -c configs/config_fig3_taskgraph_gnn_fast_simple.yaml
+
+HWSW_METHODS="diff_gnn,diff_gnn_order,gl25" /people/dass304/.conda/envs/combopt/bin/python gnn_main.py -c configs/config_mkspan_default_gnn.yaml

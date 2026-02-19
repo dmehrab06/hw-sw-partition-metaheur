@@ -22,7 +22,8 @@ from meta_heuristic import (
     simulate_PSO, random_assignment, simulate_GL25,
     simulate_DBPSO, simulate_CLPSO, simulate_CCPSO,
     simulate_SHADE, simulate_JADE, simulate_ESA,
-    simulate_nondiff_GNN, simulate_diff_GNN, simulate_diff_GNN_order
+    simulate_nondiff_GNN, simulate_diff_GNN, simulate_diff_GNN_order,
+    simulate_gcps
 )
 
 from meta_heuristic.metaheuristic_registry import MethodRegistry
@@ -43,6 +44,7 @@ AVAILABLE_METHODS = {
     # 'non_diffgnn': simulate_nondiff_GNN,
     'diff_gnn': simulate_diff_GNN,
     'diff_gnn_order': simulate_diff_GNN_order,
+    'gcps': simulate_gcps,
     'pso': simulate_PSO,
     'dbpso': simulate_DBPSO,
     'clpso': simulate_CLPSO,

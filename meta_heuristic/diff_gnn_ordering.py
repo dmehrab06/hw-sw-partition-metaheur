@@ -57,18 +57,25 @@ if __name__ == "__main__":
 logger = LogManager.get_logger(__name__)
 
 _FAST_MODE_DEFAULTS = {
-    "iter": 250,
-    "verbose": 250,
-    "hidden_dim": 64,
+    "iter": 500,
+    "verbose": 500,
+    "hidden_dim": 256,
     "num_layers": 3,
     "dropout": 0.2,
-    "sinkhorn_iters": 8,
-    "order_refine_steps": 1,
-    "hard_eval_every": 50,
+    "feature_profile": "default_plus_paper",
+    "edge_weight_mode": "paper2_cosine",
+    "edge_weight_learner": "mlp",
+    "edge_mlp_hidden_dim": 16,
+    "edge_weight_min_scale": 0.5,
+    "edge_weight_max_scale": 1.5,
+    "sinkhorn_iters": 12,
+    "order_refine_steps": 2,
+    "hard_eval_every": 100,
     "gumbel_noise": False,
     "gumbel_scale": 0.0,
     "pairwise_mode": "rank_sigmoid",
-    "pairwise_temp": 0.7,
+    "pairwise_temp": 0.35,
+    "order_decode_weight": 0.45,
 }
 
 
@@ -186,8 +193,8 @@ def _differentiable_makespan_loss_with_order(
     node_list,
     beta_softmax=20.0,
     area_penalty_coeff=1e5,
-    entropy_coeff=1e-3,
-    usage_balance_coeff=0.5,
+    entropy_coeff=0.0,
+    usage_balance_coeff=0.0,
     target_hw_frac=None,
     partition_cost_coeff=0.0,
     order_tau=0.5,
@@ -198,7 +205,7 @@ def _differentiable_makespan_loss_with_order(
     order_refine_steps=2,
     order_eps=1e-6,
     perm_reg_coeff=1e-2,
-    perm_entropy_coeff=1e-3,
+    perm_entropy_coeff=0.0,
     pairwise_mode="rank_sigmoid",
     pairwise_temp=0.5,
 ):
@@ -368,13 +375,13 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
 
     beta_softmax = float(config.get("beta_softmax", 20.0))
     area_penalty_coeff = float(config.get("area_penalty_coeff", 1e5))
-    entropy_coeff = float(config.get("entropy_coeff", 1e-3))
-    usage_balance_coeff = float(config.get("usage_balance_coeff", 0.5))
+    entropy_coeff = float(config.get("entropy_coeff", 0.0))
+    usage_balance_coeff = float(config.get("usage_balance_coeff", 0.0))
     target_hw_frac = config.get("target_hw_frac", None)
     partition_cost_coeff = float(config.get("partition_cost_coeff", 1e-2))
 
-    perm_reg_coeff = float(config.get("perm_reg_coeff", 1e-2))
-    perm_entropy_coeff = float(config.get("perm_entropy_coeff", 1e-3))
+    perm_reg_coeff = float(config.get("perm_reg_coeff", 0.0))
+    perm_entropy_coeff = float(config.get("perm_entropy_coeff", 0.0))
     pairwise_mode = str(config.get("pairwise_mode", "rank_sigmoid")).lower()
     pairwise_temp = float(config.get("pairwise_temp", 0.5))
     paper_sigma = float(config.get("paper_sigma", 0.0))
@@ -876,11 +883,11 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
         logger.info("diff_gnn_order fast_mode enabled. Applied speed defaults for unset keys.")
 
     if "iter" not in diff_cfg and "epochs" not in diff_cfg:
-        diff_cfg["iter"] = 250
+        diff_cfg["iter"] = 500
     if "verbose" not in diff_cfg:
-        diff_cfg["verbose"] = 250
+        diff_cfg["verbose"] = 500
     if "hidden_dim" not in diff_cfg:
-        diff_cfg["hidden_dim"] = 64
+        diff_cfg["hidden_dim"] = 256
     if "num_layers" not in diff_cfg:
         diff_cfg["num_layers"] = 3
     if "dropout" not in diff_cfg:
@@ -890,6 +897,13 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
 
     if "iter" in diff_cfg and "epochs" not in diff_cfg:
         diff_cfg["epochs"] = diff_cfg["iter"]
+    diff_cfg.setdefault("feature_profile", "default_plus_paper")
+    diff_cfg.setdefault("edge_weight_mode", "paper2_cosine")
+    diff_cfg.setdefault("edge_weight_learner", "mlp")
+    diff_cfg.setdefault("edge_mlp_hidden_dim", 16)
+    diff_cfg.setdefault("edge_weight_min_scale", 0.5)
+    diff_cfg.setdefault("edge_weight_max_scale", 1.5)
+    diff_cfg.setdefault("order_decode_weight", 0.45)
     if "learn_edge_weight" not in diff_cfg and "learned_edge_weight" in diff_cfg:
         diff_cfg["learn_edge_weight"] = bool(diff_cfg.get("learned_edge_weight"))
     if "edge_weight_learner" not in diff_cfg and bool(diff_cfg.get("learn_edge_weight", False)):
@@ -912,8 +926,8 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
     # Speed patch defaults for ordering path (applies even when fast_mode is
     # explicitly disabled, unless the user already overrides each knob).
     if bool(diff_cfg.get("speed_patch", True)):
-        diff_cfg.setdefault("sinkhorn_iters", 8)
-        diff_cfg.setdefault("order_refine_steps", 1)
+        diff_cfg.setdefault("sinkhorn_iters", 12)
+        diff_cfg.setdefault("order_refine_steps", 2)
         diff_cfg.setdefault("gumbel_noise", False)
         diff_cfg.setdefault("gumbel_scale", 0.0)
 
@@ -926,8 +940,22 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
 
     post_cfg_raw = diff_cfg.get("postprocess", {})
     post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
-    post_cfg.setdefault("mode", "none")
+    # Queue-oriented robust defaults: stronger local search only at final decode.
+    post_cfg.setdefault("mode", "hybrid")
     post_cfg.setdefault("during_train", False)
+    post_cfg.setdefault("eval_mode", "taskgraph")
+    post_cfg.setdefault("max_iters", 120)
+    post_cfg.setdefault("enable_area_fill", True)
+    post_cfg.setdefault("fill_allow_worsen", 0.0)
+    post_cfg.setdefault("enable_swap", True)
+    post_cfg.setdefault("dls_steps", 2)
+    post_cfg.setdefault("dls_flip_eta", 0.35)
+    post_cfg.setdefault("dls_swap_eta", 0.18)
+    post_cfg.setdefault("dls_score_temp", 0.70)
+    post_cfg.setdefault("dls_comm_coeff", 0.02)
+    post_cfg.setdefault("dls_area_proj_iters", 4)
+    post_cfg.setdefault("dls_area_proj_strength", 6.0)
+    post_cfg.setdefault("dls_fill_decode", True)
     diff_cfg["postprocess"] = post_cfg
 
     # Lightweight defaults when users keep configs minimal.
@@ -951,15 +979,15 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
     # Ordering defaults
     diff_cfg.setdefault("order_tau_start", 1.0)
     diff_cfg.setdefault("order_tau_final", 0.2)
-    diff_cfg.setdefault("sinkhorn_iters", 8)
+    diff_cfg.setdefault("sinkhorn_iters", 12)
     diff_cfg.setdefault("gumbel_noise", False)
     diff_cfg.setdefault("gumbel_scale", 0.0)
     diff_cfg.setdefault("resource_logit_alpha", 2.0)
-    diff_cfg.setdefault("order_refine_steps", 1)
-    diff_cfg.setdefault("perm_reg_coeff", 1e-2)
-    diff_cfg.setdefault("perm_entropy_coeff", 1e-3)
+    diff_cfg.setdefault("order_refine_steps", 2)
+    diff_cfg.setdefault("perm_reg_coeff", 0.0)
+    diff_cfg.setdefault("perm_entropy_coeff", 0.0)
     diff_cfg.setdefault("pairwise_mode", "rank_sigmoid")
-    diff_cfg.setdefault("pairwise_temp", 0.7)
+    diff_cfg.setdefault("pairwise_temp", 0.35)
 
     if "seed" not in diff_cfg and "seed" in config:
         diff_cfg["seed"] = config.get("seed")
