@@ -15,6 +15,18 @@ opt-cost-type: "makespan"
 # opt-cost-type: "mip"
 # opt-cost-type: "default"
 
+mip:
+  solve-mode: "hybrid"
+  sw-constraint-mode: "adjacent"
+  use-reduced-sw-constraints: true
+  round-threshold: 0.5
+  verbose: false
+  preferred-solvers: ["HIGHS", "GUROBI", "SCIP", "GLPK_MI", "CBC", "ECOS_BB"]
+  time-limit-sec: 30
+  mip-gap: 0.15
+  node-limit: 20000
+  accept-nonoptimal: true
+
 visualization:
   enabled: true
   include_input_graph: true
@@ -102,16 +114,20 @@ diffgnn:
     final_legacy_lp_if_mip: true
     reuse_trained_final_cost: true
     speed_patch: true
-    hard_eval_every: 200
+    hard_eval_every: 100
     hard_eval_only_final: true
+    checkpoint_eval_when_final_only: true
     entropy_coeff: 0.0
     usage_balance_coeff: 0.0
     partition_cost_coeff: 0.0833333333
     postprocess:
       mode: "hybrid"
       during_train: false
-      eval_mode: "taskgraph"
+      eval_mode: "lssp"
       max_iters: 120
+      adaptive_max_iters: false
+      adaptive_large_n: 128
+      adaptive_large_cap: 10
       enable_area_fill: true
       fill_allow_worsen: 0.0
       enable_swap: true
@@ -133,35 +149,37 @@ diffgnn_order:
     dropout: 0.2
     model: "default"
     speed_patch: true
-    hard_eval_every: 200
+    hard_eval_every: 100
     hard_eval_only_final: true
+    checkpoint_eval_when_final_only: true
     fast_mode: true
-    feature_profile: "default_plus_paper"
-    edge_weight_mode: "paper2_cosine"
-    edge_weight_learner: "mlp"
-    edge_mlp_hidden_dim: 16
-    edge_weight_min_scale: 0.5
-    edge_weight_max_scale: 1.5
+    selection_metric: "queue"
+    selection_metric_train: "queue"
+    selection_metric_final: "queue"
+    final_legacy_lp_if_mip: true
+    feature_profile: "default"
+    edge_weight_mode: "auto"
+    edge_weight_learner: "none"
     sinkhorn_iters: 12
     order_refine_steps: 2
     gumbel_noise: false
     gumbel_scale: 0.0
     pairwise_mode: "rank_sigmoid"
     pairwise_temp: 0.35
-    order_decode_weight: 0.45
+    order_decode_weight: 0.0
     entropy_coeff: 0.0
     usage_balance_coeff: 0.0
-    partition_cost_coeff: 0.01
+    partition_cost_coeff: 0.0833333333
     perm_reg_coeff: 0.0
     perm_entropy_coeff: 0.0
-    selection_metric_train: "queue"
-    selection_metric_final: "queue"
-    final_legacy_lp_if_mip: true
     postprocess:
       mode: "hybrid"
       during_train: false
-      eval_mode: "taskgraph"
+      eval_mode: "lssp"
       max_iters: 120
+      adaptive_max_iters: false
+      adaptive_large_n: 128
+      adaptive_large_cap: 10
       enable_area_fill: true
       fill_allow_worsen: 0.0
       enable_swap: true

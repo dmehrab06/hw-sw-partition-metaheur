@@ -2,7 +2,7 @@
 # while staying close to the MIP objective.
 
 graph-file: "inputs/task_graph_topology/custom/paper_fig3_11node.dot"
-area-constraint: 0.5
+area-constraint: 0.40909091
 hw-scale-factor: 1.0
 hw-scale-variance: 0.1
 comm-scale-factor: 1.0
@@ -29,26 +29,33 @@ visualization:
 
 diffgnn:
   iter: 250
-  hidden_dim: 64
+  hidden_dim: 128
   num_layers: 3
   dropout: 0.2
   model: "default"
   device: "gpu"
   speed_patch: true
-  hard_eval_every: 50
+  feature_profile: "default_plus_paper"
+  edge_weight_mode: "paper2_cosine"
+  edge_weight_learner: "mlp"
+  edge_mlp_hidden_dim: 16
+  edge_weight_min_scale: 0.5
+  edge_weight_max_scale: 1.5
+  hard_eval_every: 10
   hard_eval_only_final: true
   selection_metric: "queue"
   selection_metric_train: "queue"
   selection_metric_final: "queue"
   final_legacy_lp_if_mip: true
   reuse_trained_final_cost: true
+  decode_speedup_weight: 0.45
   entropy_coeff: 0.0
   usage_balance_coeff: 0.0
-  partition_cost_coeff: 0.0833333333
+  partition_cost_coeff: 0.01
   postprocess:
     mode: "hybrid"
     during_train: false
-    eval_mode: "taskgraph"
+    eval_mode: "lssp"
     max_iters: 120
     enable_area_fill: true
     fill_allow_worsen: 0.0
@@ -64,7 +71,7 @@ diffgnn:
 
 diffgnn_order:
   iter: 500
-  hidden_dim: 256
+  hidden_dim: 128
   device: "gpu"
   fast_mode: true
   speed_patch: true
@@ -94,7 +101,7 @@ diffgnn_order:
   postprocess:
     mode: "hybrid"
     during_train: false
-    eval_mode: "taskgraph"
+    eval_mode: "lssp"
     max_iters: 120
     enable_area_fill: true
     fill_allow_worsen: 0.0

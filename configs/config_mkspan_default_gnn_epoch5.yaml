@@ -1,0 +1,181 @@
+graph-file: inputs/task_graph_topology/soda-benchmark-graphs/pytorch-graphs/squeeze_net_tosa.dot
+area-constraint: 0.5
+hw-scale-factor: 0.1
+hw-scale-variance: 0.5
+comm-scale-factor: 1.0
+seed: 42
+solver-tool: cvxpy
+solution-dir: makespan-opt-partitions
+result-file-prefix: makespan_opt_gnn
+output-dir: outputs
+taskgraph-dir: inputs/task_graph_complete
+taskgraph-pickle: inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default_gnn.pkl
+opt-cost-type: makespan
+
+mip:
+  solve-mode: hybrid
+  sw-constraint-mode: adjacent
+  use-reduced-sw-constraints: true
+  round-threshold: 0.5
+  verbose: false
+  preferred-solvers: [HIGHS, GUROBI, SCIP, GLPK_MI, CBC, ECOS_BB]
+  time-limit-sec: 30
+  mip-gap: 0.15
+  node-limit: 20000
+  accept-nonoptimal: true
+
+visualization:
+  enabled: true
+  include_input_graph: true
+  include_output_schedule: true
+  out_dir: outputs/final_visualizations/mkspan_default
+  input_dir: outputs/final_visualizations/mkspan_default/input
+  schedule_dir: outputs/final_visualizations/mkspan_default/schedule
+  strict_partitions: false
+random:
+  num_samples: 500
+  p: 0.5
+pso:
+  c1: 0.575
+  c2: 0.1
+  w: 1.05
+  n_particles: 500
+  iterations: 10
+  verbose: true
+dbpso:
+  c1: 0.575
+  c2: 0.1
+  w: 1.05
+  k: 4
+  p: 2
+  n_particles: 500
+  iterations: 10
+  verbose: true
+clpso:
+  c: 1
+  n_individuals: 500
+  iterations: 200
+  verbose: 500
+ccpso:
+  c: 1
+  n_individuals: 500
+  verbose: 500
+  iterations: 200
+  group_sizes:
+  - 5
+  - 10
+  - 20
+gl25:
+  iter: 2000
+  n_pop: 500
+  verbose: 500
+shade:
+  iter: 2000
+  n_individuals: 500
+  verbose: 500
+jade:
+  iter: 2000
+  n_individuals: 500
+  verbose: 500
+esa:
+  iter: 1000
+  verbose: 500
+non_diffgnn:
+  iter: 500
+  verbose: 500
+diffgnn:
+  iter: 1000
+  verbose: 1000
+  device: gpu
+  hidden_dim: 256
+  num_layers: 3
+  dropout: 0.2
+  model: default
+  selection_metric: queue
+  selection_metric_train: queue
+  selection_metric_final: queue
+  final_legacy_lp_if_mip: true
+  reuse_trained_final_cost: true
+  speed_patch: true
+  hard_eval_every: 200
+  hard_eval_only_final: true
+  checkpoint_eval_when_final_only: true
+  entropy_coeff: 0.0
+  usage_balance_coeff: 0.0
+  partition_cost_coeff: 0.0833333333
+  postprocess:
+    mode: hybrid
+    during_train: false
+    eval_mode: taskgraph
+    max_iters: 48
+    adaptive_max_iters: true
+    adaptive_large_n: 128
+    adaptive_large_cap: 48
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: true
+    dls_steps: 2
+    dls_flip_eta: 0.35
+    dls_swap_eta: 0.18
+    dls_score_temp: 0.7
+    dls_comm_coeff: 0.02
+    dls_area_proj_iters: 4
+    dls_area_proj_strength: 6.0
+    dls_fill_decode: true
+diffgnn_order:
+  iter: 5
+  verbose: 1
+  device: gpu
+  hidden_dim: 256
+  num_layers: 3
+  dropout: 0.2
+  model: default
+  speed_patch: true
+  hard_eval_every: 200
+  hard_eval_only_final: true
+  fast_mode: true
+  feature_profile: default_plus_paper
+  edge_weight_mode: paper2_cosine
+  edge_weight_learner: mlp
+  edge_mlp_hidden_dim: 16
+  edge_weight_min_scale: 0.5
+  edge_weight_max_scale: 1.5
+  sinkhorn_iters: 8
+  order_refine_steps: 1
+  gumbel_noise: false
+  gumbel_scale: 0.0
+  pairwise_mode: rank_sigmoid
+  pairwise_temp: 0.35
+  order_decode_weight: 0.25
+  entropy_coeff: 0.0
+  usage_balance_coeff: 0.0
+  partition_cost_coeff: 0.0833333333
+  perm_reg_coeff: 0.0
+  perm_entropy_coeff: 0.0
+  selection_metric_train: queue
+  selection_metric_final: queue
+  final_legacy_lp_if_mip: true
+  postprocess:
+    mode: hybrid
+    during_train: false
+    eval_mode: taskgraph
+    max_iters: 10
+    adaptive_max_iters: true
+    adaptive_large_n: 128
+    adaptive_large_cap: 10
+    enable_area_fill: true
+    fill_allow_worsen: 0.0
+    enable_swap: true
+    dls_steps: 2
+    dls_flip_eta: 0.35
+    dls_swap_eta: 0.18
+    dls_score_temp: 0.7
+    dls_comm_coeff: 0.02
+    dls_area_proj_iters: 4
+    dls_area_proj_strength: 6.0
+    dls_fill_decode: true
+  epochs: 5
+gcon:
+  iter: 500
+  verbose: 500
+  device: gpu

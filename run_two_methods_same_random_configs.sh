@@ -20,7 +20,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-COUNT="${COUNT:-10}"
+COUNT="${COUNT:-5}"
 CONFIG_PATTERN="${CONFIG_PATTERN:-configs/config_mkspan_area_*_hw_*_seed_*.yaml}"
 RUNNER_LOG_DIR="${RUNNER_LOG_DIR:-outputs/logs}"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"

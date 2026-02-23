@@ -1,0 +1,5 @@
+method,source_csv,column,n,mean_makespan,std_makespan,min_makespan,max_makespan
+diff_gnn,hw-sw-partition-metaheur/outputs/dff_gnn_5_results.csv,diff_gnn_makespan,5,4492.550844926472,1299.0049136529585,2672.3399639253157,6299.7605503544455
+diff_gnn_order,hw-sw-partition-metaheur/outputs/dff_gnn_order_5_results.csv,diff_gnn_order_makespan,5,4223.605814906412,1390.752783320605,2149.367484191261,6009.114241723592
+gl25,hw-sw-partition-metaheur/outputs/baseline_5_results.csv,gl25_makespan,5,5704.1626764469265,1912.0143326335174,3590.669575096641,8769.553212251987
+gcps,hw-sw-partition-metaheur/outputs/baseline_5_results.csv,gcps_makespan,5,6284.501620746249,1883.6649032714497,3681.549037959657,8305.193626444763

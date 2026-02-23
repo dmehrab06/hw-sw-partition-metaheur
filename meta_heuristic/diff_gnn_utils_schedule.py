@@ -32,17 +32,20 @@ _MKSPAN_DIFFGNN_DEFAULTS = {
     "iter": 1000,
     "verbose": 1000,
     "device": "gpu",
-    "hidden_dim": 64,
+    "hidden_dim": 256,
     "num_layers": 3,
     "dropout": 0.2,
     "model": "default",
     "selection_metric": "queue",
     "selection_metric_train": "queue",
-    "selection_metric_final": "legacy_lp",
+    "selection_metric_final": "queue",
     "final_legacy_lp_if_mip": True,
     "reuse_trained_final_cost": True,
     "speed_patch": True,
+    "hard_eval_every": 100,
     "hard_eval_only_final": True,
+    "checkpoint_eval_when_final_only": True,
+    "decode_speedup_weight": 0.0,
     "entropy_coeff": 0.0,
     "usage_balance_coeff": 0.0,
     "partition_cost_coeff": 0.0833333333,
@@ -51,8 +54,11 @@ _MKSPAN_DIFFGNN_DEFAULTS = {
 _MKSPAN_POSTPROCESS_DEFAULTS = {
     "mode": "hybrid",
     "during_train": False,
-    "eval_mode": "taskgraph",
+    "eval_mode": "lssp",
     "max_iters": 120,
+    "adaptive_max_iters": False,
+    "adaptive_large_n": 128,
+    "adaptive_large_cap": 10,
     "enable_area_fill": True,
     "fill_allow_worsen": 0.0,
     "enable_swap": True,
@@ -392,6 +398,116 @@ def _fill_hw_area_by_score(TG, x_binary, node_list, prefer_by_score=None):
                 break
 
     return arr
+
+
+def _minmax01(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size == 0:
+        return arr
+    vmin = float(np.min(arr))
+    vmax = float(np.max(arr))
+    vrng = vmax - vmin
+    if vrng <= 1e-12:
+        return np.full_like(arr, 0.5, dtype=float)
+    return (arr - vmin) / vrng
+
+
+def _heuristic_hw_preference(TG, node_list) -> np.ndarray:
+    """
+    Build a decode-time HW preference score in [0,1] using
+    speedup and area-efficiency heuristics:
+      speedup = sw - hw
+      efficiency = (sw - hw) / area
+    """
+    sw = np.asarray([float(TG.software_costs.get(n, 0.0)) for n in node_list], dtype=float)
+    hw = np.asarray([float(TG.hardware_costs.get(n, 0.0)) for n in node_list], dtype=float)
+    area = np.asarray([max(float(TG.hardware_area.get(n, 0.0)), 1e-6) for n in node_list], dtype=float)
+    speedup = sw - hw
+    efficiency = speedup / area
+    speedup_norm = _minmax01(speedup)
+    efficiency_norm = _minmax01(efficiency)
+    return np.clip(0.5 * speedup_norm + 0.5 * efficiency_norm, 0.0, 1.0)
+
+
+def _blend_decode_scores(base_probs: np.ndarray, heuristic_pref: np.ndarray, weight: float) -> np.ndarray:
+    w = float(max(0.0, min(1.0, weight)))
+    base = np.asarray(base_probs, dtype=float).ravel()
+    heur = np.asarray(heuristic_pref, dtype=float).ravel()
+    if heur.shape[0] != base.shape[0]:
+        heur = np.resize(heur, base.shape[0])
+    return (1.0 - w) * base + w * heur
+
+
+def _solution_to_array(solution: dict, node_list) -> np.ndarray:
+    return np.asarray([float(solution.get(n, 0)) for n in node_list], dtype=float)
+
+
+def _decode_repair_candidates(
+    TG,
+    base_probs: np.ndarray,
+    node_list,
+    decode_speedup_weight: float,
+    fill_decode: bool,
+):
+    """
+    Build multiple decode candidates and keep unique repaired assignments:
+      - placement-only score
+      - optional speedup/area-efficiency blended score
+    """
+    probs = np.asarray(base_probs, dtype=float).ravel()
+    score_candidates = [("placement", probs)]
+
+    w = float(max(0.0, min(1.0, decode_speedup_weight)))
+    if w > 0:
+        heuristic_pref = _heuristic_hw_preference(TG, node_list)
+        score_candidates.append((f"speed_w{w:.2f}", _blend_decode_scores(probs, heuristic_pref, w)))
+        if w > 0.2:
+            w_half = 0.5 * w
+            score_candidates.append((f"speed_w{w_half:.2f}", _blend_decode_scores(probs, heuristic_pref, w_half)))
+
+    candidates = []
+    seen = set()
+    n_nodes = len(node_list)
+    for label, score in score_candidates:
+        repaired = _repair_candidate(TG, probs, node_list, prefer_by_score=score)
+        if fill_decode:
+            repaired = _fill_hw_area_by_score(
+                TG,
+                repaired,
+                node_list=node_list,
+                prefer_by_score=score,
+            )
+        binary = (np.asarray(repaired, dtype=float).ravel() > 0.5).astype(int)
+        key = tuple(binary.tolist())
+        if key in seen:
+            continue
+        seen.add(key)
+        solution = {node_list[i]: int(binary[i]) for i in range(n_nodes)}
+        candidates.append((label, solution, binary.astype(float)))
+
+    if not candidates:
+        binary = (probs > 0.5).astype(int)
+        solution = {node_list[i]: int(binary[i]) for i in range(len(node_list))}
+        candidates.append(("fallback", solution, binary.astype(float)))
+
+    return candidates
+
+
+def _pick_best_candidate_by_metric(TG, candidates, metric: str):
+    best_label = "none"
+    best_solution = None
+    best_probs = None
+    best_cost = float("inf")
+
+    for label, solution, probs in candidates:
+        cost = _evaluate_discrete_solution(TG, solution, metric=metric)
+        if cost < best_cost:
+            best_cost = cost
+            best_label = label
+            best_solution = solution
+            best_probs = probs
+
+    return best_label, best_solution, best_probs, float(best_cost)
 
 
 def _resolve_regularizer_config(config, TG):
@@ -766,6 +882,8 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     seed = int(config.get("seed", 42))
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 5)))
     hard_eval_only_final = bool(config.get("hard_eval_only_final", True))
+    checkpoint_eval_when_final_only = bool(config.get("checkpoint_eval_when_final_only", True))
+    decode_speedup_weight = float(config.get("decode_speedup_weight", 0.0))
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
     logit_scale = float(config.get("logit_scale", 8.0 if regularizer_profile == "legacy" else 3.0))
     center_logits = bool(config.get("center_logits", True))
@@ -810,9 +928,10 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     random.seed(seed)
 
     model = model.to(device)
+    print(model)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     logger.info(
-        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, reg_profile=%s, selection_metric_train=%s, selection_metric_final=%s, post_mode=%s, post_during_train=%s, feature_profile=%s, edge_weight_mode=%s, paper_sigma=%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s, hard_train_outputs=%s, hard_eval_every=%d, hard_eval_only_final=%s",
+        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, reg_profile=%s, selection_metric_train=%s, selection_metric_final=%s, post_mode=%s, post_during_train=%s, feature_profile=%s, edge_weight_mode=%s, paper_sigma=%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s, hard_train_outputs=%s, hard_eval_every=%d, hard_eval_only_final=%s, checkpoint_eval_when_final_only=%s, decode_speedup_weight=%.2f",
         sampler,
         epochs,
         lr,
@@ -834,6 +953,8 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         str(hard_train_outputs),
         hard_eval_every,
         str(hard_eval_only_final),
+        str(checkpoint_eval_when_final_only),
+        decode_speedup_weight,
     )
     edge_weight_learner = str(
         config.get(
@@ -938,7 +1059,11 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
 
         # hard_eval_every = 1 # sid: remove this later
         # occasional hard evaluation to get discrete assignment
-        run_hard_eval = (ep == epochs) or ((not hard_eval_only_final) and (ep % hard_eval_every == 0))
+        run_hard_eval = (
+            (ep == epochs)
+            or ((not hard_eval_only_final) and (ep % hard_eval_every == 0))
+            or (hard_eval_only_final and checkpoint_eval_when_final_only and (ep % hard_eval_every == 0))
+        )
         if run_hard_eval:
             model.eval()
             with torch.no_grad():
@@ -969,17 +1094,20 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                         lssp_fill_eta=dls_lssp_fill_eta,
                     )
                     hard_probs = hard_probs_t_refined.detach().cpu().numpy().astype(float)
-                hard_probs_repaired = _repair_candidate(TG, hard_probs, node_list, prefer_by_score=hard_probs)
-                if use_dls_train and dls_fill_decode:
-                    hard_probs_repaired = _fill_hw_area_by_score(
-                        TG,
-                        hard_probs_repaired,
-                        node_list=node_list,
-                        prefer_by_score=hard_probs,
-                    )
-                solution = {node_list[i]: int(1 if hard_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
+                decode_candidates = _decode_repair_candidates(
+                    TG,
+                    hard_probs,
+                    node_list=node_list,
+                    decode_speedup_weight=decode_speedup_weight,
+                    fill_decode=bool(use_dls_train and dls_fill_decode),
+                )
+                _, solution, decoded_probs, current_sched_cost = _pick_best_candidate_by_metric(
+                    TG,
+                    decode_candidates,
+                    metric=selection_metric_train,
+                )
                 if use_lssp_eval:
-                    solution, _ = improve_with_lssp_local_search(
+                    solution_post, _ = improve_with_lssp_local_search(
                         TG,
                         solution,
                         max_iters=post_max_iters,
@@ -988,12 +1116,16 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                         fill_allow_worsen=post_fill_allow_worsen,
                         enable_swap=post_enable_swap,
                     )
-                current_sched_cost = _evaluate_discrete_solution(TG, solution, metric=selection_metric_train)
+                    post_cost = _evaluate_discrete_solution(TG, solution_post, metric=selection_metric_train)
+                    if post_cost <= current_sched_cost:
+                        solution = solution_post
+                        decoded_probs = _solution_to_array(solution_post, node_list)
+                        current_sched_cost = post_cost
 
                 if current_sched_cost < best_sched_cost:
                     best_sched_cost = current_sched_cost
                     best_assign = solution.copy()
-                    best_probs = hard_probs.copy()
+                    best_probs = np.asarray(decoded_probs, dtype=float).copy()
 
         if ep % max(1, epochs // 10) == 0 or ep <= 5:
             logger.info(
@@ -1037,15 +1169,25 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                 lssp_fill_eta=dls_lssp_fill_eta,
             )
             final_probs = final_probs_t_refined.detach().cpu().numpy().astype(float)
-        final_probs_repaired = _repair_candidate(TG, final_probs, node_list, prefer_by_score=final_probs)
-        if use_dls_final and dls_fill_decode:
-            final_probs_repaired = _fill_hw_area_by_score(
-                TG,
-                final_probs_repaired,
-                node_list=node_list,
-                prefer_by_score=final_probs,
-            )
-        final_solution = {node_list[i]: int(1 if final_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
+        final_decode_candidates = _decode_repair_candidates(
+            TG,
+            final_probs,
+            node_list=node_list,
+            decode_speedup_weight=decode_speedup_weight,
+            fill_decode=bool(use_dls_final and dls_fill_decode),
+        )
+        final_choice_label, final_solution, final_probs_repaired, final_sched_cost_train = _pick_best_candidate_by_metric(
+            TG,
+            final_decode_candidates,
+            metric=selection_metric_train,
+        )
+        logger.info(
+            "DiffGNN final decode selected candidate=%s from %d candidates (metric=%s cost=%.6f)",
+            final_choice_label,
+            len(final_decode_candidates),
+            selection_metric_train,
+            final_sched_cost_train,
+        )
         if use_lssp_final:
             post_t0 = time.perf_counter()
             logger.info(
@@ -1073,12 +1215,15 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                 post_info["eval_mode"],
             )
             logger.info("DiffGNN final postprocess elapsed: %.3fs", time.perf_counter() - post_t0)
-        final_sched_cost_train = _evaluate_discrete_solution(TG, final_solution, metric=selection_metric_train)
+            post_cost = _evaluate_discrete_solution(TG, final_solution, metric=selection_metric_train)
+            if post_cost <= final_sched_cost_train:
+                final_sched_cost_train = post_cost
+                final_probs_repaired = _solution_to_array(final_solution, node_list)
 
     # choose best between tracked best and final
     if best_assign is None or final_sched_cost_train < best_sched_cost:
         best_assign = final_solution
-        best_probs = final_probs
+        best_probs = np.asarray(final_probs_repaired, dtype=float)
         best_sched_cost = final_sched_cost_train
 
     if selection_metric_final == selection_metric_train:

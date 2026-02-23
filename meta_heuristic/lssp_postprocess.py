@@ -1,4 +1,5 @@
 import math
+import time
 from typing import Dict, Tuple
 
 import networkx as nx
@@ -130,20 +131,30 @@ def improve_with_lssp_local_search(
     1) Greedy area-fill by SW->HW flips (uses cost + speedup tie-breakers).
     2) Local 1-flip / swap improvement under area constraint.
     """
+    t0 = time.perf_counter()
     part = _normalize_partition(partition)
     budget = _budget(TG)
+    eval_calls = 0
+    stage1_iters = 0
+    stage2_iters = 0
 
     def _flip(base: Dict[str, int], node: str, value: int) -> Dict[str, int]:
         out = dict(base)
         out[node] = int(value)
         return out
 
-    cur_cost = _cost(TG, part, eval_mode)
+    def _cost_count(p: Dict[str, int]) -> float:
+        nonlocal eval_calls
+        eval_calls += 1
+        return _cost(TG, p, eval_mode)
+
+    cur_cost = _cost_count(part)
     improved = False
 
     # Stage 1: consume unused HW area with useful flips when possible.
     if enable_area_fill:
         for _ in range(max(1, max_iters // 2)):
+            stage1_iters += 1
             cur_area = _hardware_area(TG, part)
             remain = budget - cur_area
             if remain <= 1e-9:
@@ -160,7 +171,7 @@ def improve_with_lssp_local_search(
                 cand = _flip(part, n, 1)
                 if TG.violates(cand):
                     continue
-                c = _cost(TG, cand, eval_mode)
+                c = _cost_count(cand)
                 speedup = float(TG.software_costs[n] - TG.hardware_costs[n])
                 delta = c - cur_cost
                 # Prefer lower cost delta, then better speedup.
@@ -174,11 +185,12 @@ def improve_with_lssp_local_search(
             if best_key[0] > float(fill_allow_worsen):
                 break
             part = best
-            cur_cost = _cost(TG, part, eval_mode)
+            cur_cost = _cost_count(part)
             improved = True
 
     # Stage 2: local search by 1-flip and swap.
     for _ in range(max_iters):
+        stage2_iters += 1
         best_part = None
         best_cost = cur_cost
 
@@ -187,7 +199,7 @@ def improve_with_lssp_local_search(
             cand = _flip(part, n, 1 - part[n])
             if TG.violates(cand):
                 continue
-            c = _cost(TG, cand, eval_mode)
+            c = _cost_count(cand)
             if c + 1e-9 < best_cost:
                 best_cost = c
                 best_part = cand
@@ -202,7 +214,7 @@ def improve_with_lssp_local_search(
                     cand[s] = 1
                     if TG.violates(cand):
                         continue
-                    c = _cost(TG, cand, eval_mode)
+                    c = _cost_count(cand)
                     if c + 1e-9 < best_cost:
                         best_cost = c
                         best_part = cand
@@ -213,11 +225,18 @@ def improve_with_lssp_local_search(
         cur_cost = best_cost
         improved = True
 
+    elapsed = time.perf_counter() - t0
+    total_iters = stage1_iters + stage2_iters
     return part, {
         "cost": float(cur_cost),
         "hw_area": float(_hardware_area(TG, part)),
         "budget": float(budget),
         "improved": bool(improved),
         "eval_mode": str(eval_mode),
+        "elapsed_sec": float(elapsed),
+        "eval_calls": int(eval_calls),
+        "stage1_iters": int(stage1_iters),
+        "stage2_iters": int(stage2_iters),
+        "avg_eval_ms": float((elapsed / eval_calls) * 1000.0) if eval_calls > 0 else 0.0,
+        "avg_iter_ms": float((elapsed / total_iters) * 1000.0) if total_iters > 0 else 0.0,
     }
-

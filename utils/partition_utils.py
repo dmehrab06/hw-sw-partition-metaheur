@@ -12,7 +12,7 @@ import cvxpy as cp
 import pickle
 import random
 import pydot
-from typing import Dict, Tuple
+from typing import Any, Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -22,6 +22,7 @@ if __name__ == "__main__":
     sys.path.append(parent_dir)
 
 from utils.logging_utils import LogManager
+from utils.scheduler_utils import compute_dag_makespan
 from meta_heuristic.task_graph import TaskGraph
 
 # Set up logging
@@ -197,155 +198,453 @@ class ScheduleConstPartitionSolver:
         
         logger.info("Problem matrices and vectors created successfully")
     
-    def solve_optimization(self, A_max: float, big_M: float = 1000, use_reduced_sw_constraints=True) -> Dict:
+    def solve_optimization(
+        self,
+        A_max: float,
+        big_M: float = 1000,
+        use_reduced_sw_constraints: bool = True,
+        solver_cfg: Dict[str, Any] = None,
+    ) -> Dict:
         """
-        Solve the hardware-software partitioning optimization problem
-        
-        Args:
-            A_max: Maximum hardware area constraint
-            big_M: Big-M constant for logical constraints
-            use_reduced_sw_constraints: flag to reduce SW sequence constraints through topological ordering
-            
-        Returns:
-            Dictionary containing solution details
+        Solve the HW/SW partitioning problem.
+
+        Modes (configured via solver_cfg["solve-mode"]):
+        - exact: MILP only
+        - hybrid: MILP first, fallback to relaxed+rounding if no incumbent
+        - relaxed: LP relaxation + rounding/repair (fast approximation)
         """
         if self.S_source is None:
             raise ValueError("Problem matrices not created. Load a graph first.")
-        
-        logger.info(f"Solving optimization with A_max = {A_max}")
-        
-        # Decision variables
-        x = cp.Variable(self.n_nodes, boolean=True)  # partition assignment
-        z = cp.Variable(self.n_edges, boolean=True)  # communication variables
-        t = cp.Variable(self.n_nodes, nonneg=True)   # start times
-        f = cp.Variable(self.n_nodes, nonneg=True)   # finish times
-        T = cp.Variable(nonneg=True)                 # makespan
-        
-        # Objective: minimize makespan
+
+        cfg = self._normalize_solver_cfg(solver_cfg, use_reduced_sw_constraints)
+        solve_mode = str(cfg.get("solve-mode", "exact")).lower()
+        sw_constraint_mode = str(cfg.get("sw-constraint-mode", "pairwise_topo")).lower()
+        round_threshold = float(cfg.get("round-threshold", 0.5))
+
+        if solve_mode not in {"exact", "hybrid", "relaxed"}:
+            logger.warning(f"Unknown solve mode '{solve_mode}', falling back to hybrid")
+            solve_mode = "hybrid"
+
+        logger.info(
+            f"Solving partition optimization: mode={solve_mode}, A_max={A_max:.4f}, "
+            f"sw_constraints={sw_constraint_mode}, reduced_sw={cfg['use-reduced-sw-constraints']}"
+        )
+
+        if solve_mode in {"exact", "hybrid"}:
+            raw = self._solve_cvxpy_model(
+                A_max=A_max,
+                big_M=big_M,
+                use_reduced_sw_constraints=cfg["use-reduced-sw-constraints"],
+                sw_constraint_mode=sw_constraint_mode,
+                solver_cfg=cfg,
+                relax_integrality=False,
+            )
+            if raw is not None and raw.get("x") is not None and raw.get("T") is not None:
+                status = str(raw.get("status", "unknown"))
+                if status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE} or cfg.get("accept-nonoptimal", True):
+                    return self._finalize_solution(
+                        x_values=raw["x"],
+                        t_values=raw["t"],
+                        f_values=raw["f"],
+                        z_values=raw["z"],
+                        makespan_value=raw["T"],
+                        A_max=A_max,
+                        status=status,
+                    )
+
+            if solve_mode == "exact":
+                logger.error("Exact MILP did not return an acceptable solution")
+                return None
+
+            logger.warning("Hybrid mode fallback: MILP had no usable incumbent, switching to relaxed rounding")
+
+        raw_relaxed = self._solve_cvxpy_model(
+            A_max=A_max,
+            big_M=big_M,
+            use_reduced_sw_constraints=cfg["use-reduced-sw-constraints"],
+            sw_constraint_mode=sw_constraint_mode,
+            solver_cfg=cfg,
+            relax_integrality=True,
+        )
+
+        if raw_relaxed is not None and raw_relaxed.get("x") is not None:
+            x_candidate = self._round_and_repair_assignment(
+                x_relaxed=raw_relaxed["x"],
+                A_max=A_max,
+                threshold=round_threshold,
+            )
+            status = f"{raw_relaxed.get('status', 'unknown')}_relaxed_rounded"
+            return self._solution_from_assignment(x_candidate, A_max, status=status)
+
+        logger.warning("Relaxed solve failed, using greedy area-constrained fallback assignment")
+        x_candidate = self._greedy_assignment(A_max)
+        return self._solution_from_assignment(x_candidate, A_max, status="greedy_fallback")
+
+    def _normalize_solver_cfg(self, solver_cfg: Dict[str, Any], use_reduced_sw_constraints: bool) -> Dict[str, Any]:
+        defaults = {
+            "solve-mode": "exact",
+            "verbose": False,
+            "preferred-solvers": ["GUROBI", "HIGHS", "SCIP", "GLPK_MI", "CBC", "ECOS_BB"],
+            "time-limit-sec": None,
+            "mip-gap": None,
+            "node-limit": None,
+            "accept-nonoptimal": True,
+            "sw-constraint-mode": "pairwise_topo",
+            "round-threshold": 0.5,
+            "use-reduced-sw-constraints": use_reduced_sw_constraints,
+        }
+
+        user_cfg: Dict[str, Any] = {}
+        if solver_cfg is not None:
+            if isinstance(solver_cfg, dict):
+                user_cfg = dict(solver_cfg)
+            else:
+                try:
+                    user_cfg = {str(k): solver_cfg[k] for k in solver_cfg.keys()}
+                except Exception:
+                    try:
+                        user_cfg = dict(solver_cfg)
+                    except Exception:
+                        user_cfg = {}
+
+        cfg = dict(defaults)
+        cfg.update(user_cfg)
+
+        preferred = cfg.get("preferred-solvers", defaults["preferred-solvers"])
+        try:
+            cfg["preferred-solvers"] = [str(s) for s in preferred]
+        except Exception:
+            cfg["preferred-solvers"] = defaults["preferred-solvers"]
+
+        cfg["verbose"] = bool(cfg.get("verbose", False))
+        cfg["accept-nonoptimal"] = bool(cfg.get("accept-nonoptimal", True))
+        cfg["use-reduced-sw-constraints"] = bool(cfg.get("use-reduced-sw-constraints", use_reduced_sw_constraints))
+        return cfg
+
+    def _build_solver_kwargs(self, solver_name: str, solver_cfg: Dict[str, Any], relax_integrality: bool) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {"verbose": bool(solver_cfg.get("verbose", False))}
+        if relax_integrality:
+            return kwargs
+
+        time_limit = solver_cfg.get("time-limit-sec", None)
+        mip_gap = solver_cfg.get("mip-gap", None)
+        node_limit = solver_cfg.get("node-limit", None)
+
+        if solver_name == "GUROBI":
+            if time_limit is not None:
+                kwargs["TimeLimit"] = float(time_limit)
+            if mip_gap is not None:
+                kwargs["MIPGap"] = float(mip_gap)
+            if node_limit is not None:
+                kwargs["NodeLimit"] = int(node_limit)
+        elif solver_name == "SCIP":
+            scip_params = {}
+            if time_limit is not None:
+                scip_params["limits/time"] = float(time_limit)
+            if mip_gap is not None:
+                scip_params["limits/gap"] = float(mip_gap)
+            if node_limit is not None:
+                scip_params["limits/nodes"] = int(node_limit)
+            if scip_params:
+                kwargs["scip_params"] = scip_params
+        elif solver_name == "HIGHS":
+            highs_options = {}
+            if time_limit is not None:
+                highs_options["time_limit"] = float(time_limit)
+            if mip_gap is not None:
+                highs_options["mip_rel_gap"] = float(mip_gap)
+            if node_limit is not None:
+                highs_options["mip_max_nodes"] = int(node_limit)
+            if highs_options:
+                kwargs["highs_options"] = highs_options
+        elif solver_name == "CBC":
+            if time_limit is not None:
+                kwargs["maximumSeconds"] = float(time_limit)
+
+        return kwargs
+
+    def _solve_problem_with_preferred_solvers(
+        self,
+        problem: cp.Problem,
+        solver_cfg: Dict[str, Any],
+        relax_integrality: bool,
+    ) -> str:
+        preferred = solver_cfg.get("preferred-solvers", [])
+        installed = set(cp.installed_solvers())
+        last_err = None
+
+        for solver_name in preferred:
+            if solver_name not in installed:
+                continue
+
+            solver_attr = getattr(cp, solver_name, None)
+            if solver_attr is None:
+                continue
+
+            kwargs = self._build_solver_kwargs(solver_name, solver_cfg, relax_integrality)
+            try:
+                logger.info(f"[cvxpy] Trying solver: {solver_name} with options={kwargs}")
+                problem.solve(solver=solver_attr, **kwargs)
+                return solver_name
+            except Exception as err_with_opts:
+                last_err = err_with_opts
+                # Retry once without any solver-specific options.
+                try:
+                    logger.info(f"[cvxpy] Retrying solver {solver_name} without solver-specific options")
+                    problem.solve(solver=solver_attr, verbose=bool(solver_cfg.get("verbose", False)))
+                    return solver_name
+                except Exception as err_no_opts:
+                    last_err = err_no_opts
+                    logger.warning(f"[cvxpy] Solver {solver_name} failed: {err_no_opts}")
+                    continue
+
+        raise RuntimeError(
+            f"No solver succeeded. Installed={sorted(installed)}; preferred={preferred}; last_err={last_err}"
+        )
+
+    def _solve_cvxpy_model(
+        self,
+        A_max: float,
+        big_M: float,
+        use_reduced_sw_constraints: bool,
+        sw_constraint_mode: str,
+        solver_cfg: Dict[str, Any],
+        relax_integrality: bool,
+    ) -> Dict[str, Any]:
+        if relax_integrality:
+            x = cp.Variable(self.n_nodes)
+            z = cp.Variable(self.n_edges)
+        else:
+            x = cp.Variable(self.n_nodes, boolean=True)
+            z = cp.Variable(self.n_edges, boolean=True)
+
+        t = cp.Variable(self.n_nodes, nonneg=True)
+        f = cp.Variable(self.n_nodes, nonneg=True)
+        T = cp.Variable(nonneg=True)
         objective = cp.Minimize(T)
-        
-        # Constraints
         constraints = []
-        
-        # 1. Hardware area constraint
+
+        if relax_integrality:
+            constraints.append(x >= 0)
+            constraints.append(x <= 1)
+            constraints.append(z >= 0)
+            constraints.append(z <= 1)
+
         constraints.append(self.a.T @ (1 - x) <= A_max)
-        
-        # 2. Execution time definition
         constraints.append(f == t + cp.multiply(self.h, 1 - x) + cp.multiply(self.s, x))
-        
-        # 3. Precedence constraints with communication
         constraints.append(self.S_source @ f + cp.multiply(self.c, z) <= self.S_target @ t)
-        
-        # 4. Communication cost variables (different partition detection)
         constraints.append(z >= self.S_source @ x - self.S_target @ x)
         constraints.append(z >= self.S_target @ x - self.S_source @ x)
         constraints.append(z <= self.S_source @ x + self.S_target @ x)
         constraints.append(z <= 2 - self.S_source @ x - self.S_target @ x)
-        
-        # 5. Sequential execution of software nodes
+
+        Y = None
+        use_reduced_sw_constraints = False
         if use_reduced_sw_constraints:
-            # Use topological ordering to reduce constraints
             topo_order = list(nx.topological_sort(self.graph))
             topo_indices = [self.node_to_index[node] for node in topo_order]
-            
-            logger.info(f"Topological order: {topo_order}")
-            # Constrain all topological pairs (i before j), not only adjacent nodes.
-            # This preserves a single software order consistent with global topological order.
-            for a in range(len(topo_indices) - 1):
-                i = topo_indices[a]
-                for b in range(a + 1, len(topo_indices)):
-                    j = topo_indices[b]
 
-                    # If both nodes are software, node i must complete before node j starts.
-                    # This is relaxed away when either node is hardware via big-M terms.
+            if sw_constraint_mode in {"adjacent", "adjacent_topo", "consecutive"}:
+                for pos in range(len(topo_indices) - 1):
+                    i = topo_indices[pos]
+                    j = topo_indices[pos + 1]
                     constraints.append(f[i] <= t[j] + big_M * (1 - x[i]) + big_M * (1 - x[j]))
+            else:
+                for a in range(len(topo_indices) - 1):
+                    i = topo_indices[a]
+                    for b in range(a + 1, len(topo_indices)):
+                        j = topo_indices[b]
+                        constraints.append(f[i] <= t[j] + big_M * (1 - x[i]) + big_M * (1 - x[j]))
         else:
-            # Original O(n²) approach with binary ordering variables
-            Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering
-            
-            logger.info(f"Adding {self.n_nodes*(self.n_nodes-1)} software sequencing constraints (full pairwise)")
+            if relax_integrality:
+                Y = cp.Variable((self.n_nodes, self.n_nodes))
+                constraints.append(Y >= 0)
+                constraints.append(Y <= 1)
+            else:
+                Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)
+
             for i in range(self.n_nodes):
                 for j in range(self.n_nodes):
-                    if i != j:
+                    # if i == j: #rounak
+                        # continue 
+                    if i<j:
                         constraints.append(f[i] <= t[j] + big_M * (1 - Y[i, j]) + big_M * (2 - x[i] - x[j]))
                         constraints.append(f[j] <= t[i] + big_M * Y[i, j] + big_M * (2 - x[i] - x[j]))
                         constraints.append(Y[i, j] <= x[i])
                         constraints.append(Y[i, j] <= x[j])
-        
-        # 6. Makespan definition
+
         for i in range(self.n_nodes):
             constraints.append(T >= f[i])
-        
-        # Solve the problem
+
         problem = cp.Problem(objective, constraints)
-        # problem.solve(solver=cp.SCIP, verbose=True)
-        # problem.solve(solver=cp.GUROBI, verbose=True)
 
-        # import cvxpy as cp
-        preferred = ["GUROBI", "HIGHS", "GLPK_MI", "ECOS_BB", "SCIP", "CBC"]
-        installed = set(cp.installed_solvers())
-        last_err = None
-        for s in preferred:
-            if s in installed:
-                try:
-                    print(f"[cvxpy] Trying solver: {s}")
-                    problem.solve(solver=getattr(cp, s), verbose=True)
-                    break
-                except Exception as e:
-                    last_err = e
-                    print(f"[cvxpy] Solver {s} failed: {e}")
-                    continue
-        else:
-            raise RuntimeError(
-                f"No MILP solver succeeded. Installed: {sorted(installed)}; last_err={last_err}")
-
-        
-        if problem.status != cp.OPTIMAL:
-            logger.error(f"Optimization failed with status: {problem.status}")
+        try:
+            solver_used = self._solve_problem_with_preferred_solvers(problem, solver_cfg, relax_integrality)
+            logger.info(f"[cvxpy] Solver used: {solver_used}; status={problem.status}")
+        except Exception as err:
+            logger.warning(f"CVXPY solve failed: {err}")
             return None
-        
-        # Store solution
-        self.x_sol = x.value.round().astype(int)
-        self.t_sol = t.value
-        self.f_sol = f.value
-        self.z_sol = z.value.round().astype(int)
-        self.T_sol = T.value
-        if not use_reduced_sw_constraints:
-            self.Y_sol = Y.value.round().astype(int)
+
+        if x.value is None:
+            return {
+                "status": problem.status,
+                "x": None,
+                "z": None,
+                "t": None,
+                "f": None,
+                "T": None,
+            }
+
+        result = {
+            "status": problem.status,
+            "x": np.array(x.value).reshape(-1),
+            "z": np.array(z.value).reshape(-1) if z.value is not None else None,
+            "t": np.array(t.value).reshape(-1) if t.value is not None else None,
+            "f": np.array(f.value).reshape(-1) if f.value is not None else None,
+            "T": float(T.value) if T.value is not None else None,
+        }
+        if Y is not None and Y.value is not None:
+            result["Y"] = np.array(Y.value)
+        return result
+
+    def _round_and_repair_assignment(self, x_relaxed: np.ndarray, A_max: float, threshold: float = 0.5) -> np.ndarray:
+        x = (np.array(x_relaxed).reshape(-1) >= threshold).astype(int)
+        area_used = float(np.sum(self.a * (1 - x)))
+
+        if area_used > A_max:
+            hw_idx = [i for i in range(self.n_nodes) if x[i] == 0]
+            hw_idx.sort(key=lambda i: ((self.s[i] - self.h[i]) / max(self.a[i], 1e-9), self.s[i] - self.h[i]))
+            for i in hw_idx:
+                x[i] = 1
+                area_used -= float(self.a[i])
+                if area_used <= A_max + 1e-9:
+                    break
+
+        if area_used < A_max:
+            sw_idx = [i for i in range(self.n_nodes) if x[i] == 1]
+            sw_idx.sort(
+                key=lambda i: ((self.s[i] - self.h[i]) / max(self.a[i], 1e-9), self.s[i] - self.h[i]),
+                reverse=True,
+            )
+            for i in sw_idx:
+                benefit = float(self.s[i] - self.h[i])
+                if benefit <= 0:
+                    continue
+                if area_used + float(self.a[i]) <= A_max + 1e-9:
+                    x[i] = 0
+                    area_used += float(self.a[i])
+
+        return x
+
+    def _greedy_assignment(self, A_max: float) -> np.ndarray:
+        x = np.ones(self.n_nodes, dtype=int)  # start with all software
+        area_used = 0.0
+        candidates = list(range(self.n_nodes))
+        candidates.sort(
+            key=lambda i: ((self.s[i] - self.h[i]) / max(self.a[i], 1e-9), self.s[i] - self.h[i]),
+            reverse=True,
+        )
+        for i in candidates:
+            if self.s[i] <= self.h[i]:
+                continue
+            area_i = float(self.a[i])
+            if area_used + area_i <= A_max + 1e-9:
+                x[i] = 0
+                area_used += area_i
+        return x
+
+    def _finalize_solution(
+        self,
+        x_values: np.ndarray,
+        t_values: np.ndarray,
+        f_values: np.ndarray,
+        z_values: np.ndarray,
+        makespan_value: float,
+        A_max: float,
+        status: str,
+    ) -> Dict[str, Any]:
+        x_arr = np.array(x_values, dtype=float).reshape(-1)
+        self.x_sol = np.rint(np.clip(x_arr, 0, 1)).astype(int)
+
+        if t_values is None:
+            self.t_sol = np.zeros(self.n_nodes, dtype=float)
         else:
-            self.Y_sol = None  # Not used in reduced formulation
-        
-        # Convert solution back to node IDs
+            self.t_sol = np.array(t_values, dtype=float).reshape(-1)
+
+        if f_values is None:
+            exec_times = np.where(self.x_sol == 0, self.h, self.s)
+            self.f_sol = self.t_sol + exec_times
+        else:
+            self.f_sol = np.array(f_values, dtype=float).reshape(-1)
+
+        if z_values is None:
+            self.z_sol = np.array(
+                [int(self.x_sol[self.node_to_index[u]] != self.x_sol[self.node_to_index[v]]) for (u, v) in self.edge_list],
+                dtype=int,
+            )
+        else:
+            z_arr = np.array(z_values, dtype=float).reshape(-1)
+            self.z_sol = np.rint(np.clip(z_arr, 0, 1)).astype(int)
+
+        self.T_sol = float(makespan_value) if makespan_value is not None else float(np.max(self.f_sol))
+        self.Y_sol = None
+
         hw_nodes = [self.node_list[i] for i in range(self.n_nodes) if self.x_sol[i] == 0]
         sw_nodes = [self.node_list[i] for i in range(self.n_nodes) if self.x_sol[i] == 1]
-        
-        # Sort by start times
         hw_sequence = sorted(hw_nodes, key=lambda node: self.t_sol[self.node_to_index[node]])
         sw_sequence = sorted(sw_nodes, key=lambda node: self.t_sol[self.node_to_index[node]])
-        
-        # Create start/finish time dictionaries with node IDs
-        start_times_dict = {self.node_list[i]: self.t_sol[i] for i in range(self.n_nodes)}
-        finish_times_dict = {self.node_list[i]: self.f_sol[i] for i in range(self.n_nodes)}
-        
+
+        start_times_dict = {self.node_list[i]: float(self.t_sol[i]) for i in range(self.n_nodes)}
+        finish_times_dict = {self.node_list[i]: float(self.f_sol[i]) for i in range(self.n_nodes)}
+        total_hw_area = float(np.sum(self.a * (1 - self.x_sol)))
+
         solution = {
-            'status': problem.status,
-            'makespan': self.T_sol,
-            'hardware_nodes': hw_nodes,
-            'software_nodes': sw_nodes,
-            'hardware_sequence': hw_sequence,
-            'software_sequence': sw_sequence,
-            'start_times': start_times_dict,
-            'finish_times': finish_times_dict,
-            'total_hardware_area': np.sum(self.a * (1 - self.x_sol)),
-            'area_constraint': A_max
+            "status": status,
+            "makespan": self.T_sol,
+            "hardware_nodes": hw_nodes,
+            "software_nodes": sw_nodes,
+            "hardware_sequence": hw_sequence,
+            "software_sequence": sw_sequence,
+            "start_times": start_times_dict,
+            "finish_times": finish_times_dict,
+            "total_hardware_area": total_hw_area,
+            "area_constraint": A_max,
         }
-        
-        logger.info(f"Optimization successful! Makespan = {self.T_sol:.2f}")
-        logger.info(f"Hardware nodes: {hw_nodes}")
-        logger.info(f"Software nodes: {sw_nodes}")
-        logger.info(f"Total hardware area used: {solution['total_hardware_area']:.2f} / {A_max}")
-        
+
+        logger.info(f"Optimization finished (status={status}) makespan={self.T_sol:.4f}")
+        logger.info(f"Hardware nodes: {len(hw_nodes)} | Software nodes: {len(sw_nodes)}")
+        logger.info(f"Total hardware area used: {total_hw_area:.4f} / {A_max:.4f}")
         return solution
+
+    def _solution_from_assignment(self, x_assignment: np.ndarray, A_max: float, status: str) -> Dict[str, Any]:
+        x_assignment = np.array(x_assignment, dtype=int).reshape(-1)
+        graph_nodes = list(self.graph.nodes())
+        graph_order_assignment = [int(x_assignment[self.node_to_index[node]]) for node in graph_nodes]
+
+        try:
+            makespan, start_times_graph = compute_dag_makespan(self.graph, graph_order_assignment)
+            t_values = np.array([start_times_graph[node] for node in self.node_list], dtype=float)
+        except Exception as err:
+            logger.warning(f"Failed to compute LP schedule for rounded assignment: {err}")
+            t_values = np.zeros(self.n_nodes, dtype=float)
+            exec_times = np.where(x_assignment == 0, self.h, self.s)
+            makespan = float(np.max(exec_times))
+
+        exec_times = np.where(x_assignment == 0, self.h, self.s)
+        f_values = t_values + exec_times
+        z_values = np.array(
+            [int(x_assignment[self.node_to_index[u]] != x_assignment[self.node_to_index[v]]) for (u, v) in self.edge_list],
+            dtype=int,
+        )
+        return self._finalize_solution(
+            x_values=x_assignment,
+            t_values=t_values,
+            f_values=f_values,
+            z_values=z_values,
+            makespan_value=makespan,
+            A_max=A_max,
+            status=status,
+        )
     
     def _compute_hierarchical_layout(self):
         """Compute hierarchical layout for DAG visualization"""

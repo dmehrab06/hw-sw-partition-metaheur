@@ -12,6 +12,23 @@ PYTHON="${PYTHON:-/people/dass304/.conda/envs/combopt/bin/python}"
 SOLVER_TOOL="${SOLVER_TOOL:-cvxpy}"
 CONFIG_GLOB="${CONFIG_GLOB:-$CONFIG_DIR/config_mkspan_default_gnn.yaml}"
 
+# Fast-mode defaults (can be overridden via env).
+# Set FAST_MIP=0 to run configs exactly as-is.
+FAST_MIP="${FAST_MIP:-1}"
+MIP_SOLVE_MODE="${MIP_SOLVE_MODE:-hybrid}"
+MIP_SW_CONSTRAINT_MODE="${MIP_SW_CONSTRAINT_MODE:-adjacent}"
+MIP_USE_REDUCED_SW="${MIP_USE_REDUCED_SW:-true}"
+MIP_TIME_LIMIT_SEC="${MIP_TIME_LIMIT_SEC:-30}"
+MIP_GAP="${MIP_GAP:-0.15}"
+MIP_NODE_LIMIT="${MIP_NODE_LIMIT:-20000}"
+MIP_ACCEPT_NONOPTIMAL="${MIP_ACCEPT_NONOPTIMAL:-true}"
+MIP_VERBOSE="${MIP_VERBOSE:-false}"
+
+# Extra wall-clock guard for each config run.
+# 0 disables external timeout.
+RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-120}"
+TIMEOUT_KILL_AFTER_SEC="${TIMEOUT_KILL_AFTER_SEC:-15}"
+
 cd "$ROOT"
 
 mapfile -t CONFIGS < <(ls $CONFIG_GLOB 2>/dev/null | sort || true)
@@ -21,18 +38,80 @@ if [[ ${#CONFIGS[@]} -eq 0 ]]; then
 fi
 
 echo "Running MIP solver (${SOLVER_TOOL}) on ${#CONFIGS[@]} configs"
+echo "FAST_MIP=$FAST_MIP, RUN_TIMEOUT_SEC=$RUN_TIMEOUT_SEC"
+if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
+  echo "Fast MIP settings: mode=$MIP_SOLVE_MODE, sw=$MIP_SW_CONSTRAINT_MODE, tlimit=${MIP_TIME_LIMIT_SEC}s, gap=$MIP_GAP, nodes=$MIP_NODE_LIMIT"
+fi
 
 for config in "${CONFIGS[@]}"; do
   config_base="$(basename "$config" .yaml)"
   log_file="$OUTDIR/mip_eval_${config_base}.log"
+  tmp_cfg=""
+  run_config="$config"
 
   echo "---- [MIP] $config_base ----"
-  "$PYTHON" milp_eval.py -c "$config" -t "$SOLVER_TOOL" >"$log_file" 2>&1 || {
-    echo "MIP solver failed for $config (see $log_file)"
-    continue
-  }
+  if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
+    tmp_cfg="$(mktemp "$OUTDIR/${config_base}.fast_mip.XXXXXX.yaml")"
+    "$PYTHON" - <<'PY' "$config" "$tmp_cfg"
+import os
+import sys
+from omegaconf import OmegaConf
 
-  mapfile -t cfg_vals < <("$PYTHON" - <<'PY' "$config" "$ROOT"
+src = sys.argv[1]
+dst = sys.argv[2]
+
+def as_bool(v, default=False):
+    if v is None:
+        return default
+    s = str(v).strip().lower()
+    if s in {"1", "true", "yes", "on"}:
+        return True
+    if s in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+cfg = OmegaConf.load(src)
+mip = dict(cfg.get("mip", {}))
+
+mip["solve-mode"] = os.getenv("MIP_SOLVE_MODE", "hybrid")
+mip["sw-constraint-mode"] = os.getenv("MIP_SW_CONSTRAINT_MODE", "adjacent")
+mip["use-reduced-sw-constraints"] = as_bool(os.getenv("MIP_USE_REDUCED_SW", "true"), True)
+mip["time-limit-sec"] = float(os.getenv("MIP_TIME_LIMIT_SEC", "30"))
+mip["mip-gap"] = float(os.getenv("MIP_GAP", "0.15"))
+mip["node-limit"] = int(float(os.getenv("MIP_NODE_LIMIT", "20000")))
+mip["accept-nonoptimal"] = as_bool(os.getenv("MIP_ACCEPT_NONOPTIMAL", "true"), True)
+mip["verbose"] = as_bool(os.getenv("MIP_VERBOSE", "false"), False)
+
+cfg["mip"] = mip
+OmegaConf.save(config=cfg, f=dst)
+PY
+    run_config="$tmp_cfg"
+  fi
+
+  run_cmd=( "$PYTHON" milp_eval.py -c "$run_config" -t "$SOLVER_TOOL" )
+  rc=0
+  set +e
+  if command -v timeout >/dev/null 2>&1 && [[ "$RUN_TIMEOUT_SEC" =~ ^[0-9]+$ ]] && (( RUN_TIMEOUT_SEC > 0 )); then
+    timeout --signal=TERM --kill-after="${TIMEOUT_KILL_AFTER_SEC}s" "${RUN_TIMEOUT_SEC}s" "${run_cmd[@]}" >"$log_file" 2>&1
+    rc=$?
+  else
+    "${run_cmd[@]}" >"$log_file" 2>&1
+    rc=$?
+  fi
+  set -e
+
+  if (( rc == 124 || rc == 137 )); then
+    echo "MIP timed out for $config after ${RUN_TIMEOUT_SEC}s (see $log_file)"
+    [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
+    continue
+  fi
+  if (( rc != 0 )); then
+    echo "MIP solver failed for $config (exit=$rc, see $log_file)"
+    [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
+    continue
+  fi
+
+  mapfile -t cfg_vals < <("$PYTHON" - <<'PY' "$run_config" "$ROOT"
 from omegaconf import OmegaConf
 from pathlib import Path
 import sys
@@ -49,9 +128,28 @@ PY
   solution_dir="${cfg_vals[0]}"
   result_prefix="${cfg_vals[1]}"
 
-  partition_pkl=$(ls -t "$solution_dir"/*assignment-mip.pkl 2>/dev/null | head -n1 || true)
+  mapfile -t cfg_key < <("$PYTHON" - <<'PY' "$config"
+from omegaconf import OmegaConf
+import sys
+cfg = OmegaConf.load(sys.argv[1])
+print(f"{float(cfg.get('area-constraint', 0.0)):.2f}")
+print(f"{float(cfg.get('hw-scale-factor', 0.0)):.1f}")
+print(f"{float(cfg.get('hw-scale-variance', 0.0)):.2f}")
+print(str(cfg.get('seed', 42)))
+PY
+)
+  area_key="${cfg_key[0]}"
+  hw_key="${cfg_key[1]}"
+  hwvar_key="${cfg_key[2]}"
+  seed_key="${cfg_key[3]}"
+
+  partition_pkl=$(ls -t "$solution_dir"/*area-"$area_key"_hwscale-"$hw_key"_hwvar-"$hwvar_key"_seed-"$seed_key"_assignment-mip.pkl 2>/dev/null | head -n1 || true)
+  if [[ -z "$partition_pkl" ]]; then
+    partition_pkl=$(ls -t "$solution_dir"/*assignment-mip.pkl 2>/dev/null | head -n1 || true)
+  fi
   if [[ -z "$partition_pkl" ]]; then
     echo "No assignment-mip.pkl found in $solution_dir (skipping CSV row)"
+    [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
     continue
   fi
 
@@ -212,6 +310,8 @@ if out_csv.exists():
 else:
     result_df.to_csv(out_csv, mode='a', index=False, header=True)
 PY
+
+  [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
 
 done
 

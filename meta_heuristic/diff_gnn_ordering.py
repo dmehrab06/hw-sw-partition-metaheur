@@ -65,7 +65,9 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "dropout": 0.2,
     "model": "default",
     "speed_patch": True,
+    "hard_eval_every": 100,
     "hard_eval_only_final": True,
+    "checkpoint_eval_when_final_only": True,
     "fast_mode": True,
     "feature_profile": "default_plus_paper",
     "edge_weight_mode": "paper2_cosine",
@@ -87,15 +89,18 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "perm_entropy_coeff": 0.0,
     "selection_metric": "queue",
     "selection_metric_train": "queue",
-    "selection_metric_final": "legacy_lp",
+    "selection_metric_final": "queue",
     "final_legacy_lp_if_mip": True,
 }
 
 _MKSPAN_POSTPROCESS_DEFAULTS = {
     "mode": "hybrid",
     "during_train": False,
-    "eval_mode": "taskgraph",
+    "eval_mode": "lssp",
     "max_iters": 120,
+    "adaptive_max_iters": False,
+    "adaptive_large_n": 128,
+    "adaptive_large_cap": 10,
     "enable_area_fill": True,
     "fill_allow_worsen": 0.0,
     "enable_swap": True,
@@ -236,6 +241,79 @@ def _order_aware_repair_scores(hard_probs: np.ndarray, prio_hw: np.ndarray, prio
     order_pref = 1.0 / (1.0 + np.exp(-prio_delta))
     base = np.asarray(hard_probs, dtype=float)
     return (1.0 - w) * base + w * order_pref
+
+
+def _solution_to_array(solution: dict, node_list) -> np.ndarray:
+    return np.asarray([float(solution.get(n, 0)) for n in node_list], dtype=float)
+
+
+def _decode_repair_candidates(
+    TG,
+    base_probs: np.ndarray,
+    node_list,
+    prio_hw: np.ndarray | None,
+    prio_sw: np.ndarray | None,
+    order_decode_weight: float,
+    fill_decode: bool,
+):
+    """
+    Build multiple discrete decode candidates and keep unique assignments.
+    This prevents ordered decode from missing better partition-first repairs.
+    """
+    probs = np.asarray(base_probs, dtype=float).ravel()
+    score_candidates = [("placement", probs)]
+
+    if prio_hw is not None and prio_sw is not None:
+        w = float(max(0.0, min(1.0, order_decode_weight)))
+        if w > 0:
+            score_candidates.append((f"order_w{w:.2f}", _order_aware_repair_scores(probs, prio_hw, prio_sw, w)))
+            if w > 0.2:
+                w_half = 0.5 * w
+                score_candidates.append((f"order_w{w_half:.2f}", _order_aware_repair_scores(probs, prio_hw, prio_sw, w_half)))
+
+    candidates = []
+    seen = set()
+    n_nodes = len(node_list)
+    for label, score in score_candidates:
+        repaired = _repair_candidate(TG, probs, node_list, prefer_by_score=score)
+        if fill_decode:
+            repaired = _fill_hw_area_by_score(
+                TG,
+                repaired,
+                node_list=node_list,
+                prefer_by_score=score,
+            )
+        binary = (np.asarray(repaired, dtype=float).ravel() > 0.5).astype(int)
+        key = tuple(binary.tolist())
+        if key in seen:
+            continue
+        seen.add(key)
+        solution = {node_list[i]: int(binary[i]) for i in range(n_nodes)}
+        candidates.append((label, solution, binary.astype(float)))
+
+    if not candidates:
+        binary = (probs > 0.5).astype(int)
+        solution = {node_list[i]: int(binary[i]) for i in range(len(node_list))}
+        candidates.append(("fallback", solution, binary.astype(float)))
+
+    return candidates
+
+
+def _pick_best_candidate_by_metric(TG, candidates, metric: str):
+    best_label = "none"
+    best_solution = None
+    best_probs = None
+    best_cost = float("inf")
+
+    for label, solution, probs in candidates:
+        cost = _evaluate_discrete_solution(TG, solution, metric=metric)
+        if cost < best_cost:
+            best_cost = cost
+            best_label = label
+            best_solution = solution
+            best_probs = probs
+
+    return best_label, best_solution, best_probs, float(best_cost)
 
 
 def _differentiable_makespan_loss_with_order(
@@ -431,7 +509,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     entropy_coeff = float(config.get("entropy_coeff", 0.0))
     usage_balance_coeff = float(config.get("usage_balance_coeff", 0.0))
     target_hw_frac = config.get("target_hw_frac", None)
-    partition_cost_coeff = float(config.get("partition_cost_coeff", 1e-2))
+    partition_cost_coeff = float(config.get("partition_cost_coeff", 0.0833333333))
 
     perm_reg_coeff = float(config.get("perm_reg_coeff", 0.0))
     perm_entropy_coeff = float(config.get("perm_entropy_coeff", 0.0))
@@ -443,6 +521,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     seed = int(config.get("seed", 42))
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 5)))
     hard_eval_only_final = bool(config.get("hard_eval_only_final", True))
+    checkpoint_eval_when_final_only = bool(config.get("checkpoint_eval_when_final_only", True))
     selection_metric_train = str(config.get("selection_metric_train", config.get("selection_metric", "queue"))).lower()
     selection_metric_final = str(config.get("selection_metric_final", selection_metric_train)).lower()
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
@@ -466,6 +545,9 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     use_lssp_final = post_mode in {"lssp", "hybrid"}
     post_eval_mode = str(post_cfg.get("eval_mode", config.get("lssp_postprocess_eval", "taskgraph"))).lower()
     post_max_iters = int(post_cfg.get("max_iters", config.get("lssp_postprocess_max_iters", 64)))
+    adaptive_post_max_iters = bool(post_cfg.get("adaptive_max_iters", config.get("adaptive_post_max_iters", True)))
+    adaptive_post_large_n = int(post_cfg.get("adaptive_large_n", config.get("adaptive_post_large_n", 128)))
+    adaptive_post_large_cap = int(post_cfg.get("adaptive_large_cap", config.get("adaptive_post_large_cap", 48)))
     post_enable_area_fill = bool(post_cfg.get("enable_area_fill", config.get("lssp_postprocess_area_fill", True)))
     post_fill_allow_worsen = float(post_cfg.get("fill_allow_worsen", config.get("lssp_postprocess_fill_allow_worsen", 0.0)))
     post_enable_swap = bool(post_cfg.get("enable_swap", config.get("lssp_postprocess_enable_swap", True)))
@@ -481,6 +563,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     dls_lssp_pri_coeff = float(post_cfg.get("dls_lssp_pri_coeff", config.get("dls_lssp_pri_coeff", 0.35)))
     dls_lssp_beta = float(post_cfg.get("dls_lssp_beta", config.get("dls_lssp_beta", 8.0)))
     dls_lssp_fill_eta = float(post_cfg.get("dls_lssp_fill_eta", config.get("dls_lssp_fill_eta", 0.20)))
+    if adaptive_post_max_iters and len(node_list) >= adaptive_post_large_n and post_max_iters > adaptive_post_large_cap:
+        logger.info(
+            "DiffGNNOrder adaptive postprocess cap: max_iters %d -> %d for N=%d",
+            post_max_iters,
+            adaptive_post_large_cap,
+            len(node_list),
+        )
+        post_max_iters = adaptive_post_large_cap
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -515,9 +605,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         selection_metric_final,
     )
     logger.info(
-        "DiffGNNOrder hard eval: every=%d hard_eval_only_final=%s",
+        "DiffGNNOrder hard eval: every=%d hard_eval_only_final=%s checkpoint_eval_when_final_only=%s",
         hard_eval_every,
         str(hard_eval_only_final),
+        str(checkpoint_eval_when_final_only),
     )
     edge_weight_learner = str(
         config.get(
@@ -640,7 +731,11 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         tau = max(tau_final, tau_start - (ep / max(1, epochs)) * (tau_start - tau_final))
         order_tau = max(order_tau_final, order_tau_start - (ep / max(1, epochs)) * (order_tau_start - order_tau_final))
 
-        run_hard_eval = (ep == epochs) or ((not hard_eval_only_final) and (ep % hard_eval_every == 0))
+        run_hard_eval = (
+            (ep == epochs)
+            or ((not hard_eval_only_final) and (ep % hard_eval_every == 0))
+            or (hard_eval_only_final and checkpoint_eval_when_final_only and (ep % hard_eval_every == 0))
+        )
         if run_hard_eval:
             model.eval()
             with torch.no_grad():
@@ -681,23 +776,24 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         lssp_fill_eta=dls_lssp_fill_eta,
                     )
                     hard_probs = hard_probs_t_refined.detach().cpu().numpy().astype(float)
-                decode_scores = _order_aware_repair_scores(
-                    hard_probs=hard_probs,
-                    prio_hw=prio_hw_eval.detach().cpu().numpy().astype(float),
-                    prio_sw=prio_sw_eval.detach().cpu().numpy().astype(float),
-                    weight=order_decode_weight,
+                prio_hw_np = prio_hw_eval.detach().cpu().numpy().astype(float)
+                prio_sw_np = prio_sw_eval.detach().cpu().numpy().astype(float)
+                decode_candidates = _decode_repair_candidates(
+                    TG,
+                    hard_probs,
+                    node_list=node_list,
+                    prio_hw=prio_hw_np,
+                    prio_sw=prio_sw_np,
+                    order_decode_weight=order_decode_weight,
+                    fill_decode=bool(use_dls_train and dls_fill_decode),
                 )
-                hard_probs_repaired = _repair_candidate(TG, hard_probs, node_list, prefer_by_score=decode_scores)
-                if use_dls_train and dls_fill_decode:
-                    hard_probs_repaired = _fill_hw_area_by_score(
-                        TG,
-                        hard_probs_repaired,
-                        node_list=node_list,
-                        prefer_by_score=decode_scores,
-                    )
-                solution = {node_list[i]: int(1 if hard_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
+                _, solution, decoded_probs, current_sched_cost = _pick_best_candidate_by_metric(
+                    TG,
+                    decode_candidates,
+                    metric=selection_metric_train,
+                )
                 if use_lssp_eval:
-                    solution, _ = improve_with_lssp_local_search(
+                    solution_post, _ = improve_with_lssp_local_search(
                         TG,
                         solution,
                         max_iters=post_max_iters,
@@ -706,17 +802,20 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         fill_allow_worsen=post_fill_allow_worsen,
                         enable_swap=post_enable_swap,
                     )
-
-                current_sched_cost = _evaluate_discrete_solution(
-                    TG,
-                    solution,
-                    metric=selection_metric_train,
-                )
+                    post_cost = _evaluate_discrete_solution(
+                        TG,
+                        solution_post,
+                        metric=selection_metric_train,
+                    )
+                    if post_cost <= current_sched_cost:
+                        solution = solution_post
+                        decoded_probs = _solution_to_array(solution_post, node_list)
+                        current_sched_cost = post_cost
 
                 if current_sched_cost < best_sched_cost:
                     best_sched_cost = current_sched_cost
                     best_assign = solution.copy()
-                    best_probs = hard_probs.copy()
+                    best_probs = np.asarray(decoded_probs, dtype=float).copy()
 
         if ep % max(1, epochs // 10) == 0 or ep <= 5:
             logger.info(
@@ -771,21 +870,29 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 lssp_fill_eta=dls_lssp_fill_eta,
             )
             final_probs = final_probs_t_refined.detach().cpu().numpy().astype(float)
-        final_decode_scores = _order_aware_repair_scores(
-            hard_probs=final_probs,
-            prio_hw=prio_hw.detach().cpu().numpy().astype(float),
-            prio_sw=prio_sw.detach().cpu().numpy().astype(float),
-            weight=order_decode_weight,
+        prio_hw_np = prio_hw.detach().cpu().numpy().astype(float)
+        prio_sw_np = prio_sw.detach().cpu().numpy().astype(float)
+        final_decode_candidates = _decode_repair_candidates(
+            TG,
+            final_probs,
+            node_list=node_list,
+            prio_hw=prio_hw_np,
+            prio_sw=prio_sw_np,
+            order_decode_weight=order_decode_weight,
+            fill_decode=bool(use_dls_final and dls_fill_decode),
         )
-        final_probs_repaired = _repair_candidate(TG, final_probs, node_list, prefer_by_score=final_decode_scores)
-        if use_dls_final and dls_fill_decode:
-            final_probs_repaired = _fill_hw_area_by_score(
-                TG,
-                final_probs_repaired,
-                node_list=node_list,
-                prefer_by_score=final_decode_scores,
-            )
-        final_solution = {node_list[i]: int(1 if final_probs_repaired[i] > 0.5 else 0) for i in range(len(node_list))}
+        final_choice_label, final_solution, final_probs_repaired, final_sched_cost_train = _pick_best_candidate_by_metric(
+            TG,
+            final_decode_candidates,
+            metric=selection_metric_train,
+        )
+        logger.info(
+            "DiffGNNOrder final decode selected candidate=%s from %d candidates (metric=%s cost=%.6f)",
+            final_choice_label,
+            len(final_decode_candidates),
+            selection_metric_train,
+            final_sched_cost_train,
+        )
         if use_lssp_final:
             post_t0 = time.perf_counter()
             logger.info(
@@ -805,24 +912,32 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 enable_swap=post_enable_swap,
             )
             logger.info(
-                "DiffGNNOrder final postprocess: improved=%s cost=%.3f hw_area=%.3f/%.3f (%s)",
+                "DiffGNNOrder final postprocess: improved=%s cost=%.3f hw_area=%.3f/%.3f (%s) elapsed=%.3fs eval_calls=%d stage1_iters=%d stage2_iters=%d avg_eval=%.3fms avg_iter=%.3fms",
                 str(post_info["improved"]),
                 post_info["cost"],
                 post_info["hw_area"],
                 post_info["budget"],
                 post_info["eval_mode"],
+                float(post_info.get("elapsed_sec", 0.0)),
+                int(post_info.get("eval_calls", 0)),
+                int(post_info.get("stage1_iters", 0)),
+                int(post_info.get("stage2_iters", 0)),
+                float(post_info.get("avg_eval_ms", 0.0)),
+                float(post_info.get("avg_iter_ms", 0.0)),
             )
             logger.info("DiffGNNOrder final postprocess elapsed: %.3fs", time.perf_counter() - post_t0)
-
-        final_sched_cost_train = _evaluate_discrete_solution(
-            TG,
-            final_solution,
-            metric=selection_metric_train,
-        )
+            post_cost = _evaluate_discrete_solution(
+                TG,
+                final_solution,
+                metric=selection_metric_train,
+            )
+            if post_cost <= final_sched_cost_train:
+                final_sched_cost_train = post_cost
+                final_probs_repaired = _solution_to_array(final_solution, node_list)
 
     if best_assign is None or final_sched_cost_train < best_sched_cost:
         best_assign = final_solution
-        best_probs = final_probs
+        best_probs = np.asarray(final_probs_repaired, dtype=float)
         best_sched_cost = final_sched_cost_train
 
     if selection_metric_final == selection_metric_train:
@@ -997,7 +1112,7 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
     ):
         diff_cfg["entropy_coeff"] = 0.0
         diff_cfg["usage_balance_coeff"] = 0.0
-        diff_cfg["partition_cost_coeff"] = 1e-2
+        diff_cfg["partition_cost_coeff"] = 0.0833333333
         diff_cfg["perm_reg_coeff"] = 0.0
         diff_cfg["perm_entropy_coeff"] = 0.0
 
