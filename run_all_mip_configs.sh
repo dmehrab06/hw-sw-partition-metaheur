@@ -3,14 +3,28 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$ROOT/configs"
-OUTDIR="$ROOT/outputs/logs"
+OUTDIR="${OUTDIR:-$ROOT/outputs/logs}"
 mkdir -p "$OUTDIR"
 
 export PYTHONNOUSERSITE=1
 
 PYTHON="${PYTHON:-/people/dass304/.conda/envs/combopt/bin/python}"
 SOLVER_TOOL="${SOLVER_TOOL:-cvxpy}"
+MIP_EVAL_PY="${MIP_EVAL_PY:-mip_eval.py}"
 CONFIG_GLOB="${CONFIG_GLOB:-$CONFIG_DIR/config_mkspan_default_gnn.yaml}"
+
+if [[ -f "$MIP_EVAL_PY" ]]; then
+  MIP_EVAL_ENTRY="$MIP_EVAL_PY"
+elif [[ -f "$ROOT/$MIP_EVAL_PY" ]]; then
+  MIP_EVAL_ENTRY="$ROOT/$MIP_EVAL_PY"
+elif [[ -f "$ROOT/mip_eval.py" ]]; then
+  MIP_EVAL_ENTRY="$ROOT/mip_eval.py"
+elif [[ -f "$ROOT/milp_eval.py" ]]; then
+  MIP_EVAL_ENTRY="$ROOT/milp_eval.py"
+else
+  echo "Cannot find MIP evaluator script. Checked: $MIP_EVAL_PY, $ROOT/mip_eval.py, $ROOT/milp_eval.py"
+  exit 1
+fi
 
 # Fast-mode defaults (can be overridden via env).
 # Set FAST_MIP=0 to run configs exactly as-is.
@@ -39,6 +53,7 @@ fi
 
 echo "Running MIP solver (${SOLVER_TOOL}) on ${#CONFIGS[@]} configs"
 echo "FAST_MIP=$FAST_MIP, RUN_TIMEOUT_SEC=$RUN_TIMEOUT_SEC"
+echo "MIP evaluator: $(basename "$MIP_EVAL_ENTRY")"
 if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
   echo "Fast MIP settings: mode=$MIP_SOLVE_MODE, sw=$MIP_SW_CONSTRAINT_MODE, tlimit=${MIP_TIME_LIMIT_SEC}s, gap=$MIP_GAP, nodes=$MIP_NODE_LIMIT"
 fi
@@ -88,7 +103,7 @@ PY
     run_config="$tmp_cfg"
   fi
 
-  run_cmd=( "$PYTHON" milp_eval.py -c "$run_config" -t "$SOLVER_TOOL" )
+  run_cmd=( "$PYTHON" "$MIP_EVAL_ENTRY" -c "$run_config" -t "$SOLVER_TOOL" )
   rc=0
   set +e
   if command -v timeout >/dev/null 2>&1 && [[ "$RUN_TIMEOUT_SEC" =~ ^[0-9]+$ ]] && (( RUN_TIMEOUT_SEC > 0 )); then

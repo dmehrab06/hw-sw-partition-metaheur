@@ -250,3 +250,72 @@ flowchart TD
   POST --> OUT["Final ordered partition and final metric"]
 
 ```
+
+## With software ordering only
+
+```mermaid
+flowchart TD
+  G["Input DAG + node/edge features"]
+
+  subgraph N["diff_gnn_order network"]
+    H["Graph encoder (optional edge MLP)"]
+    P["Placement logits z"]
+    OS["SW order scores q_s"]
+    G --> H
+    H --> P
+    H --> OS
+  end
+
+  %% -------- Training path --------
+  P --> RB["Relaxed binary assignment -> p_i (HW probability)"]
+  RB --> DLS["DLS refine probabilities"]
+  DLS --> PR["refined p_i"]
+
+  OS --> SSW["Sinkhorn (SW)"]
+  SSW --> BSW["Pairwise-before B_sw(j,i)"]
+
+  PR --> BRES["Resource precedence B_res = B_sw(j,i) * (1-p_j)*(1-p_i)"]
+  BSW --> BRES
+
+  subgraph DEP["Dependency clock"]
+    D1["pred arrival terms"]
+    DMAX["dep_ready_i = softmax_beta(pred terms)"]
+    D1 --> DMAX
+  end
+
+  subgraph QUE["Queue clock"]
+    Q1["previous finish terms"]
+    Q2["B_res(j,i)"]
+    QMAX["queue_ready_i = softmax_beta(finish + alpha*log(B_res))"]
+    Q1 --> QMAX
+    Q2 --> QMAX
+  end
+
+  BRES --> Q2
+  DMAX --> ST["start_i = softmax_beta(dep_ready_i, queue_ready_i)"]
+  QMAX --> ST
+
+  PR --> DUR["duration_i = p_i*hw_i + (1-p_i)*sw_i"]
+  ST --> FIN["finish_i = start_i + duration_i"]
+  DUR --> FIN
+
+  FIN --> MS["soft makespan = softmax_beta(all finish_i)"]
+
+  PR --> LOSS["Loss = soft makespan + area penalty + cut/usage/entropy + SW permutation regularizer"]
+  SSW --> LOSS
+  MS --> LOSS
+
+  LOSS -. "backprop" .-> H
+  LOSS -. "backprop" .-> P
+  LOSS -. "backprop" .-> OS
+
+  %% -------- Final decode path --------
+  P --> HD["Hard decode (0/1)"]
+  HD --> DLSF["DLS refine (final)"]
+  DLSF --> DEC["Decode candidates + repair to area budget + pick best"]
+  OS -. "optional order-aware decode weight" .-> DEC
+
+  DEC --> POST["Optional LSSP postprocess"]
+  POST --> OUT["Final partition + final metric"]
+
+```

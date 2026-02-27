@@ -887,7 +887,9 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
     logit_scale = float(config.get("logit_scale", 8.0 if regularizer_profile == "legacy" else 3.0))
     center_logits = bool(config.get("center_logits", True))
-    paper_sigma = float(config.get("paper_sigma", 0.0))
+    # Paper-prior blending is opt-in. Keep disabled by default unless explicitly enabled.
+    paper_sigma_enabled = bool(config.get("paper_sigma_enabled", config.get("paper_blend_enabled", False)))
+    paper_sigma = float(config.get("paper_sigma", 0.0)) if paper_sigma_enabled else 0.0
     paper_sigma = max(0.0, min(1.0, paper_sigma))
     # choose whether to make training assignments hard 0/1 (straight-through) or soft (sigmoid)
     hard_train_outputs = bool(config.get("hard_train_outputs", sampler != "soft"))
@@ -931,7 +933,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     print(model)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     logger.info(
-        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, reg_profile=%s, selection_metric_train=%s, selection_metric_final=%s, post_mode=%s, post_during_train=%s, feature_profile=%s, edge_weight_mode=%s, paper_sigma=%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s, hard_train_outputs=%s, hard_eval_every=%d, hard_eval_only_final=%s, checkpoint_eval_when_final_only=%s, decode_speedup_weight=%.2f",
+        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, reg_profile=%s, selection_metric_train=%s, selection_metric_final=%s, post_mode=%s, post_during_train=%s, feature_profile=%s, edge_weight_mode=%s, paper_sigma_enabled=%s, paper_sigma=%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s, hard_train_outputs=%s, hard_eval_every=%d, hard_eval_only_final=%s, checkpoint_eval_when_final_only=%s, decode_speedup_weight=%.2f",
         sampler,
         epochs,
         lr,
@@ -944,6 +946,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         str(post_during_train),
         str(config.get("feature_profile", "default")),
         str(config.get("edge_weight_mode", "auto")),
+        str(paper_sigma_enabled),
         paper_sigma,
         entropy_coeff,
         usage_balance_coeff,

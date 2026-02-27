@@ -77,6 +77,7 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "edge_weight_max_scale": 1.5,
     "sinkhorn_iters": 12,
     "order_refine_steps": 2,
+    "use_hw_ordering": False,
     "gumbel_noise": False,
     "gumbel_scale": 0.0,
     "pairwise_mode": "rank_sigmoid",
@@ -128,6 +129,7 @@ _FAST_MODE_DEFAULTS = {
     "edge_weight_max_scale": 1.5,
     "sinkhorn_iters": 12,
     "order_refine_steps": 2,
+    "use_hw_ordering": False,
     "hard_eval_only_final": True,
     "gumbel_noise": False,
     "gumbel_scale": 0.0,
@@ -339,11 +341,13 @@ def _differentiable_makespan_loss_with_order(
     perm_entropy_coeff=0.0,
     pairwise_mode="rank_sigmoid",
     pairwise_temp=0.5,
+    use_hw_ordering=False,
 ):
     """
     Differentiable loss with soft placement + soft ordering:
       - Placement uses relaxed p_hw.
-      - Ordering uses Gumbel-Sinkhorn soft permutations for HW and SW lanes.
+      - Ordering uses Gumbel-Sinkhorn soft permutations for SW lane.
+      - HW lane ordering is optional and disabled by default (use_hw_ordering=False).
       - Makespan surrogate combines DAG precedence and resource precedence.
     """
     device = probs_tensor.device
@@ -360,14 +364,8 @@ def _differentiable_makespan_loss_with_order(
 
     exec_time = probs_tensor * hw_times + (1.0 - probs_tensor) * sw_times
 
-    # Soft permutations and pairwise "before" probabilities per resource lane.
-    P_hw = _soft_permutation_from_priority(
-        prio_hw,
-        temperature=order_tau,
-        sinkhorn_iters=sinkhorn_iters,
-        add_gumbel=bool(gumbel_noise),
-        gumbel_scale=gumbel_scale,
-    )
+    # Soft permutation and pairwise "before" probabilities.
+    # SW ordering stays active; HW ordering is optional.
     P_sw = _soft_permutation_from_priority(
         prio_sw,
         temperature=order_tau,
@@ -375,14 +373,27 @@ def _differentiable_makespan_loss_with_order(
         add_gumbel=bool(gumbel_noise),
         gumbel_scale=gumbel_scale,
     )
+    P_hw = None
+    if bool(use_hw_ordering):
+        P_hw = _soft_permutation_from_priority(
+            prio_hw,
+            temperature=order_tau,
+            sinkhorn_iters=sinkhorn_iters,
+            add_gumbel=bool(gumbel_noise),
+            gumbel_scale=gumbel_scale,
+        )
 
     mode = str(pairwise_mode).lower()
     if mode == "exact":
-        before_hw = _pairwise_before_from_perm(P_hw)
         before_sw = _pairwise_before_from_perm(P_sw)
+        before_hw = _pairwise_before_from_perm(P_hw) if P_hw is not None else torch.zeros_like(before_sw)
     elif mode in ("rank", "rank_sigmoid", "fast"):
-        before_hw = _pairwise_before_from_expected_rank(P_hw, temperature=pairwise_temp)
         before_sw = _pairwise_before_from_expected_rank(P_sw, temperature=pairwise_temp)
+        before_hw = (
+            _pairwise_before_from_expected_rank(P_hw, temperature=pairwise_temp)
+            if P_hw is not None
+            else torch.zeros_like(before_sw)
+        )
     else:
         raise ValueError(f"Unsupported pairwise_mode '{pairwise_mode}'. Use 'rank_sigmoid' or 'exact'.")
 
@@ -390,7 +401,9 @@ def _differentiable_makespan_loss_with_order(
     p_sw = 1.0 - probs_tensor
     gate_sw = p_sw.unsqueeze(1) * p_sw.unsqueeze(0)
 
-    before_resource = (before_hw * gate_hw) + (before_sw * gate_sw)
+    before_resource = before_sw * gate_sw
+    if bool(use_hw_ordering):
+        before_resource = before_resource + (before_hw * gate_hw)
     if N > 0:
         eye = torch.eye(N, dtype=dtype, device=device)
         before_resource = before_resource * (1.0 - eye)
@@ -460,8 +473,12 @@ def _differentiable_makespan_loss_with_order(
             comm_cost = comm_cost + torch.abs(pu - pv) * float(c)
     expected_partition_cost = exec_cost + comm_cost
 
-    perm_reg = _doubly_stochastic_penalty(P_hw) + _doubly_stochastic_penalty(P_sw)
-    perm_entropy = _entropy_rows_cols(P_hw) + _entropy_rows_cols(P_sw)
+    if P_hw is None:
+        perm_reg = _doubly_stochastic_penalty(P_sw)
+        perm_entropy = _entropy_rows_cols(P_sw)
+    else:
+        perm_reg = _doubly_stochastic_penalty(P_hw) + _doubly_stochastic_penalty(P_sw)
+        perm_entropy = _entropy_rows_cols(P_hw) + _entropy_rows_cols(P_sw)
 
     loss = (
         makespan_soft
@@ -503,6 +520,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     gumbel_scale = float(config.get("gumbel_scale", 1.0))
     resource_logit_alpha = float(config.get("resource_logit_alpha", 2.0))
     order_refine_steps = int(config.get("order_refine_steps", 2))
+    use_hw_ordering = bool(config.get("use_hw_ordering", False))
 
     beta_softmax = float(config.get("beta_softmax", 20.0))
     area_penalty_coeff = float(config.get("area_penalty_coeff", 1e5))
@@ -515,7 +533,9 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     perm_entropy_coeff = float(config.get("perm_entropy_coeff", 0.0))
     pairwise_mode = str(config.get("pairwise_mode", "rank_sigmoid")).lower()
     pairwise_temp = float(config.get("pairwise_temp", 0.5))
-    paper_sigma = float(config.get("paper_sigma", 0.0))
+    # Paper-prior blending is opt-in. Keep disabled by default unless explicitly enabled.
+    paper_sigma_enabled = bool(config.get("paper_sigma_enabled", config.get("paper_blend_enabled", False)))
+    paper_sigma = float(config.get("paper_sigma", 0.0)) if paper_sigma_enabled else 0.0
     paper_sigma = max(0.0, min(1.0, paper_sigma))
 
     seed = int(config.get("seed", 42))
@@ -529,6 +549,9 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     center_logits = bool(config.get("center_logits", True))
     hard_train_outputs = bool(config.get("hard_train_outputs", sampler != "soft"))
     order_decode_weight = float(config.get("order_decode_weight", 0.25))
+    if not use_hw_ordering:
+        # Avoid using untrained HW-order head in decode-time scoring.
+        order_decode_weight = 0.0
     post_cfg_raw = config.get("postprocess", {})
     post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
     post_enabled = bool(post_cfg.get("enabled", config.get("lssp_postprocess_enabled", False)))
@@ -580,7 +603,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     logger.info(
-        "DiffGNNOrder training: sampler=%s epochs=%d lr=%.2e tau=%.2f->%.2f order_tau=%.2f->%.2f sinkhorn=%d gumbel=%s alpha=%.2f pairwise_mode=%s pairwise_temp=%.2f post_mode=%s post_during_train=%s feature_profile=%s edge_weight_mode=%s paper_sigma=%.2f",
+        "DiffGNNOrder training: sampler=%s epochs=%d lr=%.2e tau=%.2f->%.2f order_tau=%.2f->%.2f sinkhorn=%d gumbel=%s alpha=%.2f use_hw_ordering=%s pairwise_mode=%s pairwise_temp=%.2f post_mode=%s post_during_train=%s feature_profile=%s edge_weight_mode=%s paper_sigma_enabled=%s paper_sigma=%.2f",
         sampler,
         epochs,
         lr,
@@ -591,12 +614,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         sinkhorn_iters,
         str(gumbel_noise),
         resource_logit_alpha,
+        str(use_hw_ordering),
         pairwise_mode,
         pairwise_temp,
         post_mode,
         str(post_during_train),
         str(config.get("feature_profile", "default")),
         str(config.get("edge_weight_mode", "auto")),
+        str(paper_sigma_enabled),
         paper_sigma,
     )
     logger.info(
@@ -683,6 +708,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         if paper_sigma > 0 and paper_hgp is not None:
             probs = (1.0 - paper_sigma) * probs + paper_sigma * paper_hgp.to(probs.device, probs.dtype)
             probs = probs.clamp(0.0, 1.0)
+
         if use_dls_train and dls_steps > 0:
             probs = _dls_refine_probs(
                 TG,
@@ -723,6 +749,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             perm_entropy_coeff=perm_entropy_coeff,
             pairwise_mode=pairwise_mode,
             pairwise_temp=pairwise_temp,
+            use_hw_ordering=use_hw_ordering,
         )
 
         loss.backward()
@@ -776,8 +803,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         lssp_fill_eta=dls_lssp_fill_eta,
                     )
                     hard_probs = hard_probs_t_refined.detach().cpu().numpy().astype(float)
-                prio_hw_np = prio_hw_eval.detach().cpu().numpy().astype(float)
-                prio_sw_np = prio_sw_eval.detach().cpu().numpy().astype(float)
+                if use_hw_ordering:
+                    prio_hw_np = prio_hw_eval.detach().cpu().numpy().astype(float)
+                    prio_sw_np = prio_sw_eval.detach().cpu().numpy().astype(float)
+                else:
+                    prio_hw_np = None
+                    prio_sw_np = None
                 decode_candidates = _decode_repair_candidates(
                     TG,
                     hard_probs,
@@ -870,8 +901,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 lssp_fill_eta=dls_lssp_fill_eta,
             )
             final_probs = final_probs_t_refined.detach().cpu().numpy().astype(float)
-        prio_hw_np = prio_hw.detach().cpu().numpy().astype(float)
-        prio_sw_np = prio_sw.detach().cpu().numpy().astype(float)
+        if use_hw_ordering:
+            prio_hw_np = prio_hw.detach().cpu().numpy().astype(float)
+            prio_sw_np = prio_sw.detach().cpu().numpy().astype(float)
+        else:
+            prio_hw_np = None
+            prio_sw_np = None
         final_decode_candidates = _decode_repair_candidates(
             TG,
             final_probs,

@@ -153,6 +153,7 @@ diffgnn_order:
     hard_eval_only_final: true
     checkpoint_eval_when_final_only: true
     fast_mode: true
+    use_hw_ordering: true
     selection_metric: "queue"
     selection_metric_train: "queue"
     selection_metric_final: "queue"
