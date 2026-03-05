@@ -77,7 +77,7 @@ class ScheduleConstPartitionSolver:
             logger.error(f"An error occurred while loading the graph data: {e}")
             raise
         
-        self.populate_graph_with_attributes(data)
+        self.load_graph_with_pickle_data(data)
         self.n_nodes = len(self.graph.nodes())
         self.n_edges = self.graph.number_of_edges()
         self.edge_list = list(self.graph.edges())
@@ -87,14 +87,14 @@ class ScheduleConstPartitionSolver:
         logger.info(f"Created DAG with {self.n_nodes} nodes and {self.n_edges} edges")
         return self.graph
     
-    # def populate_graph_with_attributes(self, data):
-    #     self.graph = data.graph
-    #     # node/edge attributes
-    #     nx.set_node_attributes(self.graph, data.hardware_area, 'area_cost')
-    #     nx.set_node_attributes(self.graph, data.hardware_costs, 'hardware_time')
-    #     nx.set_node_attributes(self.graph, data.software_costs, 'software_time')
-    #     nx.set_edge_attributes(self.graph, data.communication_costs, 'communication_cost')
-    #     return
+    def load_graph_with_pickle_data(self, data):
+        self.graph = data.graph
+        # node/edge attributes
+        nx.set_node_attributes(self.graph, data.hardware_area, 'area_cost')
+        nx.set_node_attributes(self.graph, data.hardware_costs, 'hardware_time')
+        nx.set_node_attributes(self.graph, data.software_costs, 'software_time')
+        nx.set_edge_attributes(self.graph, data.communication_costs, 'communication_cost')
+        return
 
     def populate_graph_with_attributes(self, graph, hardware_area, hardware_costs, software_costs, communication_costs):
 
@@ -209,13 +209,12 @@ class ScheduleConstPartitionSolver:
         
         logger.info("Problem matrices and vectors created successfully")
     
-    def solve_optimization(self, A_max: float, big_M: float = 1000, partition_assignment:dict=None) -> Dict:
+    def solve_optimization(self, A_max: float, partition_assignment:dict=None) -> Dict:
         """
         Solve the hardware-software partitioning optimization problem
         
         Args:
             A_max: Maximum hardware area constraint
-            big_M: Big-M constant for logical constraints
             use_reduced_sw_constraints: flag to reduce SW sequence constraints through topological ordering
             partition_assignment (dict): dictionary of partition assignments, if only solving scheduling problem. Default is None 
             
@@ -259,15 +258,48 @@ class ScheduleConstPartitionSolver:
         
         # 5. Sequential execution of software nodes
         Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering
+        big_M = np.sum(self.s)
         
-        logger.info(f"Adding {self.n_nodes*(self.n_nodes-1)} software sequencing constraints (full pairwise)")
+        topo_order = list(nx.topological_sort(self.graph))
+        
+        # reachable[i] is a boolean array: reachable[i][j] = True means node i can reach node j
+        # We use uint8 for memory efficiency
+        reachable = np.zeros((self.n_nodes, self.n_nodes), dtype=np.uint8)
+
+        # Process in reverse topological order so that when we handle node i,
+        # all its successors are already fully computed
+        for node in reversed(topo_order):
+            i = self.node_to_index[node]
+            reachable[i, i] = 1  # every node reaches itself
+            for successor in self.graph.successors(node):
+                j = self.node_to_index[successor]
+                # i can reach j directly, and also everything j can reach
+                reachable[i] |= reachable[j]
+                reachable[i, j] = 1
+
+
+        pairwise_constraints = 0
         for i in range(self.n_nodes):
             for j in range(self.n_nodes):
                 if i < j:
-                    constraints.append(f[i] <= t[j] + big_M * (1 - Y[i, j]) + big_M * (2 - x[i] - x[j]))
-                    constraints.append(f[j] <= t[i] + big_M * Y[i, j] + big_M * (2 - x[i] - x[j]))
-                    constraints.append(Y[i, j] <= x[i])
-                    constraints.append(Y[i, j] <= x[j])
+                    i_reaches_j = bool(reachable[i, j])
+                    j_reaches_i = bool(reachable[j, i])
+                    if i_reaches_j:
+                        constraints.append(Y[i,j] == 1)
+                        pairwise_constraints += 1
+                    elif j_reaches_i:
+                        constraints.append(Y[i,j] == 0)
+                        pairwise_constraints += 1
+                    else:
+                        constraints.append(f[i] <= t[j] + big_M * (1 - Y[i, j]) + big_M * (2 - x[i] - x[j]))
+                        constraints.append(f[j] <= t[i] + big_M * Y[i, j] + big_M * (2 - x[i] - x[j]))
+                        constraints.append(Y[i, j] <= x[i])
+                        constraints.append(Y[i, j] <= x[j])
+                        pairwise_constraints += 4
+                else:
+                    constraints.append(Y[i,j]==0)
+        print(f"Added {pairwise_constraints} constraints after topological sort reducing from {self.n_nodes*(self.n_nodes-1)*2}")
+        logger.info(f"Adding {pairwise_constraints} software sequencing constraints (full pairwise)")
         
         # 6. Makespan definition
         for i in range(self.n_nodes):
