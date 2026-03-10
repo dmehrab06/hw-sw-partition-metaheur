@@ -36,6 +36,7 @@ report.log*
 !configs/*.yaml
 #!*partitions/*.pkl
 !inputs/task_graph_complete/*.pkl
+!arato-opt-partitions/*.pkl
 
 # DS_Store
 *.DS_Store
