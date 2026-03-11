@@ -319,7 +319,7 @@ class ScheduleConstPartitionSolver:
         
         # Solve the problem
         problem = cp.Problem(objective, constraints)
-        problem.solve(solver=cp.SCIP, verbose=True)
+        problem.solve(solver=cp.XPRESS, verbose=True)
         
         if problem.status != cp.OPTIMAL:
             logger.error(f"Optimization failed with status: {problem.status}")
