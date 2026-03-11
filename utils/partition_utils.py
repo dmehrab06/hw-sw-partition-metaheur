@@ -54,6 +54,7 @@ class ScheduleConstPartitionSolver:
             self.n_edges = self.graph.number_of_edges()
             self.edge_list = list(self.graph.edges())
             self._create_problem_matrices()
+            logger.info("Loaded graph and created problem matrices successfully")
         
         # Solution
         self.x_sol = None  # partition assignment
@@ -76,7 +77,7 @@ class ScheduleConstPartitionSolver:
             logger.error(f"An error occurred while loading the graph data: {e}")
             raise
         
-        self.populate_graph_with_attributes(data)
+        self.load_graph_with_pickle_data(data)
         self.n_nodes = len(self.graph.nodes())
         self.n_edges = self.graph.number_of_edges()
         self.edge_list = list(self.graph.edges())
@@ -86,7 +87,7 @@ class ScheduleConstPartitionSolver:
         logger.info(f"Created DAG with {self.n_nodes} nodes and {self.n_edges} edges")
         return self.graph
     
-    def populate_graph_with_attributes(self, data):
+    def load_graph_with_pickle_data(self, data):
         self.graph = data.graph
         # node/edge attributes
         nx.set_node_attributes(self.graph, data.hardware_area, 'area_cost')
@@ -94,6 +95,35 @@ class ScheduleConstPartitionSolver:
         nx.set_node_attributes(self.graph, data.software_costs, 'software_time')
         nx.set_edge_attributes(self.graph, data.communication_costs, 'communication_cost')
         return
+
+    def populate_graph_with_attributes(self, graph, hardware_area, hardware_costs, software_costs, communication_costs):
+
+        self.graph = graph
+        # node/edge attributes
+        nx.set_node_attributes(self.graph, hardware_area, 'area_cost')
+        nx.set_node_attributes(self.graph, hardware_costs, 'hardware_time')
+        nx.set_node_attributes(self.graph, software_costs, 'software_time')
+        nx.set_edge_attributes(self.graph, communication_costs, 'communication_cost')
+        return
+    
+    def load_networkx_graph_with_torch_feats(self, graph, hardware_areas, hardware_costs, software_costs, communication_costs):
+
+        hardware_areas_dict = {i: hwa for i, hwa in enumerate(hardware_areas.tolist())}
+        hardware_costs_dict = {i: hwc for i, hwc in enumerate(hardware_costs.tolist())}
+        software_costs_dict = {i: swc for i, swc in enumerate(software_costs.tolist())}
+        communication_costs_dict = {e: cc for (e, cc) in zip(list(graph.edges),communication_costs.tolist())}
+
+        self.populate_graph_with_attributes(graph, hardware_areas_dict, hardware_costs_dict, software_costs_dict, communication_costs_dict)
+
+        # The above function assigns global class var self.graph
+        self.n_nodes = len(self.graph.nodes())
+        self.n_edges = self.graph.number_of_edges()
+        self.edge_list = list(self.graph.edges())
+
+        # Create problem vectors
+        self._create_problem_matrices()
+        logger.info(f"Created DAG with {self.n_nodes} nodes and {self.n_edges} edges")
+        return self.graph
         
     def load_pydot_graph(self, pydot_file, k=1.5, l=0.2, mu=0.5, A_max=100) -> nx.DiGraph:
         """
@@ -179,13 +209,12 @@ class ScheduleConstPartitionSolver:
         
         logger.info("Problem matrices and vectors created successfully")
     
-    def solve_optimization(self, A_max: float, big_M: float = 1000, use_reduced_sw_constraints=True, partition_assignment:dict=None) -> Dict:
+    def solve_optimization(self, A_max: float, partition_assignment:dict=None) -> Dict:
         """
         Solve the hardware-software partitioning optimization problem
         
         Args:
             A_max: Maximum hardware area constraint
-            big_M: Big-M constant for logical constraints
             use_reduced_sw_constraints: flag to reduce SW sequence constraints through topological ordering
             partition_assignment (dict): dictionary of partition assignments, if only solving scheduling problem. Default is None 
             
@@ -228,31 +257,49 @@ class ScheduleConstPartitionSolver:
         constraints.append(z <= 2 - self.S_source @ x - self.S_target @ x)
         
         # 5. Sequential execution of software nodes
-        if use_reduced_sw_constraints:
-            # Use topological ordering to reduce constraints
-            topo_order = list(nx.topological_sort(self.graph))
-            topo_indices = [self.node_to_index[node] for node in topo_order]
-            
-            logger.info(f"Topological order: {topo_order}")
-            # Only constrain consecutive nodes in topological order
-            for k in range(len(topo_indices) - 1):
-                i, j = topo_indices[k], topo_indices[k + 1]
-                
-                # If both nodes are software, node i must complete before node j starts
-                # This constraint is active only when both x[i] = 1 and x[j] = 1 (both software)
-                constraints.append(f[i] <= t[j] + big_M * (1 - x[i]) + big_M * (1 - x[j]))
-        else:
-            # Original O(n²) approach with binary ordering variables
-            Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering
-            
-            logger.info(f"Adding {self.n_nodes*(self.n_nodes-1)} software sequencing constraints (full pairwise)")
-            for i in range(self.n_nodes):
-                for j in range(self.n_nodes):
-                    if i != j:
+        Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)  # software ordering
+        big_M = np.sum(self.s)
+        
+        topo_order = list(nx.topological_sort(self.graph))
+        
+        # reachable[i] is a boolean array: reachable[i][j] = True means node i can reach node j
+        # We use uint8 for memory efficiency
+        reachable = np.zeros((self.n_nodes, self.n_nodes), dtype=np.uint8)
+
+        # Process in reverse topological order so that when we handle node i,
+        # all its successors are already fully computed
+        for node in reversed(topo_order):
+            i = self.node_to_index[node]
+            reachable[i, i] = 1  # every node reaches itself
+            for successor in self.graph.successors(node):
+                j = self.node_to_index[successor]
+                # i can reach j directly, and also everything j can reach
+                reachable[i] |= reachable[j]
+                reachable[i, j] = 1
+
+
+        pairwise_constraints = 0
+        for i in range(self.n_nodes):
+            for j in range(self.n_nodes):
+                if i < j:
+                    i_reaches_j = bool(reachable[i, j])
+                    j_reaches_i = bool(reachable[j, i])
+                    if i_reaches_j:
+                        constraints.append(Y[i,j] == 1)
+                        pairwise_constraints += 1
+                    elif j_reaches_i:
+                        constraints.append(Y[i,j] == 0)
+                        pairwise_constraints += 1
+                    else:
                         constraints.append(f[i] <= t[j] + big_M * (1 - Y[i, j]) + big_M * (2 - x[i] - x[j]))
                         constraints.append(f[j] <= t[i] + big_M * Y[i, j] + big_M * (2 - x[i] - x[j]))
                         constraints.append(Y[i, j] <= x[i])
                         constraints.append(Y[i, j] <= x[j])
+                        pairwise_constraints += 4
+                else:
+                    constraints.append(Y[i,j]==0)
+        print(f"Added {pairwise_constraints} constraints after topological sort reducing from {self.n_nodes*(self.n_nodes-1)*2}")
+        logger.info(f"Adding {pairwise_constraints} software sequencing constraints (full pairwise)")
         
         # 6. Makespan definition
         for i in range(self.n_nodes):
@@ -272,7 +319,7 @@ class ScheduleConstPartitionSolver:
         
         # Solve the problem
         problem = cp.Problem(objective, constraints)
-        problem.solve(solver=cp.SCIP, verbose=True)
+        problem.solve(solver=cp.XPRESS, verbose=True)
         
         if problem.status != cp.OPTIMAL:
             logger.error(f"Optimization failed with status: {problem.status}")
@@ -284,10 +331,7 @@ class ScheduleConstPartitionSolver:
         self.f_sol = f.value
         self.z_sol = z.value.round().astype(int)
         self.T_sol = T.value
-        if not use_reduced_sw_constraints:
-            self.Y_sol = Y.value.round().astype(int)
-        else:
-            self.Y_sol = None  # Not used in reduced formulation
+        self.Y_sol = Y.value.round().astype(int)
         
         # Convert solution back to node IDs
         hw_nodes = [self.node_list[i] for i in range(self.n_nodes) if self.x_sol[i] == 0]
@@ -320,6 +364,121 @@ class ScheduleConstPartitionSolver:
         logger.info(f"Total hardware area used: {solution['total_hardware_area']:.2f} / {A_max}")
         
         return solution
+    
+    def _get_software_constraint_pairs(self):
+        """
+        Get the minimal set of node pairs that need software sequencing constraints.
+        
+        Key insight: We ONLY need constraints for nodes that are "incomparable" in the DAG,
+        meaning they have NO dependency relationship between them. These are the nodes that
+        could potentially be ready to execute at the same time.
+        
+        Why this is minimal:
+        - If A->B (direct or transitive), precedence constraints handle ordering
+        - If neither A->B nor B->A, they could be ready simultaneously
+        - For software execution, we must impose sequential ordering on such pairs
+        
+        Returns:
+            List of tuples (i, j) where i < j (incomparable node pairs)
+        """
+        # Compute transitive closure to find all reachability relationships
+        transitive_closure = nx.transitive_closure_dag(self.graph)
+        
+        constraint_pairs = []
+        
+        # Check all pairs of nodes
+        for i in range(self.n_nodes):
+            for j in range(i + 1, self.n_nodes):
+                node_i = self.node_list[i]
+                node_j = self.node_list[j]
+                
+                # Check if there's a dependency path in either direction
+                i_reaches_j = transitive_closure.has_edge(node_i, node_j)
+                j_reaches_i = transitive_closure.has_edge(node_j, node_i)
+                
+                # If NO dependency exists in either direction, they are incomparable
+                # These nodes could potentially execute simultaneously
+                if not i_reaches_j and not j_reaches_i:
+                    constraint_pairs.append((i, j))
+        
+        if constraint_pairs:
+            print(f"\nSoftware sequencing constraint analysis:")
+            print(f"  Incomparable node pairs (need sequencing): {len(constraint_pairs)}")
+            print(f"  Total possible pairs: {self.n_nodes*(self.n_nodes-1)//2}")
+            print(f"  Reduction: {100*(1-len(constraint_pairs)/(self.n_nodes*(self.n_nodes-1)//2)):.1f}%")
+            
+            # Show some examples if verbose
+            if len(constraint_pairs) <= 10:
+                print(f"  Incomparable pairs: {[(self.node_list[i], self.node_list[j]) for i, j in constraint_pairs]}")
+            
+            # Calculate how many pairs have dependencies
+            dependent_pairs = self.n_nodes*(self.n_nodes-1)//2 - len(constraint_pairs)
+            print(f"  Pairs with dependencies (handled by precedence): {dependent_pairs}")
+        else:
+            print(f"\nNo software sequencing constraints needed (all nodes have dependencies)")
+        
+        return constraint_pairs
+    
+    def _get_software_constraint_pairs_with_levels(self):
+        """
+        Find constraint pairs by analyzing nodes at the same DAG level.
+        
+        Nodes at the same level (same distance from sources) have no dependencies between
+        them and could execute simultaneously. We need constraints between all such pairs.
+        
+        This is equivalent to finding incomparable pairs but may be more intuitive.
+        
+        Returns:
+            List of tuples (i, j) where i < j
+        """
+        # Compute levels (longest path from any source)
+        levels = {}
+        
+        # Find all source nodes
+        sources = [node for node in self.graph.nodes() if self.graph.in_degree(node) == 0]
+        
+        # Initialize sources at level 0
+        for source in sources:
+            levels[source] = 0
+        
+        # Use topological order to compute levels
+        for node in nx.topological_sort(self.graph):
+            if node not in levels:
+                # Level is max level of predecessors + 1
+                pred_levels = [levels[pred] for pred in self.graph.predecessors(node)]
+                levels[node] = max(pred_levels) + 1 if pred_levels else 0
+        
+        # Group nodes by level
+        level_groups = {}
+        for node, level in levels.items():
+            if level not in level_groups:
+                level_groups[level] = []
+            level_groups[level].append(node)
+        
+        # Generate constraints for all pairs within each level
+        constraint_pairs = []
+        
+        for level, nodes in level_groups.items():
+            if len(nodes) > 1:
+                # All pairs within this level need sequencing constraints
+                node_indices = [self.node_to_index[node] for node in nodes]
+                for k in range(len(node_indices)):
+                    for m in range(k + 1, len(node_indices)):
+                        i, j = node_indices[k], node_indices[m]
+                        if i > j:
+                            i, j = j, i  # Ensure i < j
+                        constraint_pairs.append((i, j))
+        
+        print(f"\nLevel-based software sequencing analysis:")
+        print(f"  Number of levels: {len(level_groups)}")
+        print(f"  Nodes per level: {[len(nodes) for nodes in level_groups.values()]}")
+        print(f"  Constraint pairs needed: {len(constraint_pairs)}")
+        
+        for level, nodes in sorted(level_groups.items()):
+            if len(nodes) > 1:
+                print(f"    Level {level}: {len(nodes)} nodes → {len(nodes)*(len(nodes)-1)//2} constraints")
+        
+        return constraint_pairs
     
     def _compute_hierarchical_layout(self):
         """Compute hierarchical layout for DAG visualization"""

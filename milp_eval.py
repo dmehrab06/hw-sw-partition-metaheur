@@ -18,7 +18,8 @@ from utils.parser_utils import parse_arguments
 def main():
     config = parse_arguments()
 
-    LogManager.initialize(f"logs/run_milp_optimizer_area-{config['area-constraint']:.2f}_hw-{config['hw-scale-factor']:.1f}_seed-{config['seed']}.log")
+    log_file = f"logs/mip_runs/run_milp_optimizer_area-{config['area-constraint']:.2f}_hw-{config['hw-scale-factor']:.1f}_seed-{config['seed']}.log"
+    LogManager.initialize(log_file)
     logger = LogManager.get_logger(__name__)
 
     # Create solver instance
