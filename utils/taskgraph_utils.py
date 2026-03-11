@@ -1,9 +1,20 @@
 import pickle
 import os
+import sys
 from pathlib import Path
-import logging
 
-logger = logging.getLogger(__name__)
+if __name__ == "__main__":
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sys.path.append(parent_dir)
+
+from utils.logging_utils import LogManager
+
+# Set up logging
+if __name__ == "__main__":
+    LogManager.initialize("logs/task_graph_utils.log")
+
+logger = LogManager.get_logger(__name__)
 
 def load_taskgraph(filepath):
     """Load a saved TaskGraph instance from pickle file"""

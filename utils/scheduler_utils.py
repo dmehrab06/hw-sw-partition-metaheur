@@ -1133,11 +1133,23 @@ def main():
     makespan, start_times = compute_execution_time_milp(graph, partition)
     logger.info(f"MILP solution for makespan computed in scheduler utils: makepan={makespan}")
     return
+
+def zakaria_test():
+    from utils.taskgraph_utils import load_taskgraph, get_taskgraph_metadata
+    pickle_graph = "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_arato_area_0.9_hw_0.1_seed_0.pkl"
+    data = load_taskgraph(pickle_graph)
+
+    solver = ScheduleConstPartitionSolver()
+    solver.load_pickle_graph(pickle_graph)
+
+    soln_partition_file = 'arato-opt-partitions/taskgraph-squeeze_net_tosa_area-0.90_hwscale-0.1_hwvar-0.50_comm-1.00_seed-0_assignment-gl25.pkl'
+    soln_parition = load_taskgraph(soln_partition_file)
+    sol = solver.solve_optimization(A_max=sum(list(data.hardware_area.values())), partition_assignment=soln_parition)
     
 
 # Example usage and comparison
 if __name__ == "__main__":
-    main()
+    zakaria_test()
 
     # import pickle
     # graph_file = "inputs/task_graph_complete/taskgraph-squeeze_net_tosa-instance-config-config_mkspan_default.pkl"
