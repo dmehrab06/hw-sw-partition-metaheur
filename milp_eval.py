@@ -60,7 +60,7 @@ def main():
     
     # Solve optimization with area constraint
     A_max = np.sum(solver.a) * config['area-constraint']
-    time_limit = 7.5*3600
+    time_limit = 3600
 
     wall_start = time.perf_counter()
     solution = solver.solve_optimization(A_max=A_max, time_limit_sec=time_limit)
@@ -73,9 +73,11 @@ def main():
     for n in solution['software_nodes']:
         partition_assignment[n] = 0
     
+    solution["partition_assignment"] = partition_assignment,
+    solution["wall_time"] = wall_time
     
     from pathlib import Path
-    import pickle
+    import json
     area_constraint_str = f"{config['area-constraint']:.2f}"
     hwscale_str = f"{config['hw-scale-factor']:.1f}"
     hwvar_str = f"{config['hw-scale-variance']:.2f}"
@@ -88,10 +90,9 @@ def main():
         os.chmod(dir, 0o777)
 
     logger.info(f"Saving partitions as pickle file in {output_dir}")
-    solution["partition_assignment"] = partition_assignment,
-    solution["wall_time"] = wall_time
-    with open(f"{output_dir}/taskgraph-squeeze_net_tosa_area-{area_constraint_str}_hwscale-{hwscale_str}_hwvar-{hwvar_str}_seed-{seed_str}_assignment-mip.pkl",'wb') as f:
-        pickle.dump(solution,f)
+    
+    with open(f"{output_dir}/taskgraph-squeeze_net_tosa_area-{area_constraint_str}_hwscale-{hwscale_str}_hwvar-{hwvar_str}_seed-{seed_str}_assignment-mip.json",'w') as f:
+        json.dump(solution,f,indent=2)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 USERNAME=$(whoami)
 
-for area in 0.3 0.5; do
+for area in 0.1; do
     for hw in 0.1 0.3 0.5 0.7 0.9; do
         for seed in 0 1 2 3; do
             config=configs/mip_config/config_mip_area_${area}_hw_${hw}_seed_${seed}.yaml
@@ -32,11 +32,10 @@ for area in 0.3 0.5; do
                 echo "#SBATCH -p slurm" >> run_cvxpy.sbatch
                 echo "#SBATCH --ntasks-per-node=1" >> run_cvxpy.sbatch
                 echo "#SBATCH --mem=64G" >> run_cvxpy.sbatch
-                echo "#SBATCH -t 07:40:00" >> run_cvxpy.sbatch
+                echo "#SBATCH -t 2:00:00" >> run_cvxpy.sbatch
                 echo "#SBATCH --job-name=run_cvxpy_mip" >> run_cvxpy.sbatch
                 echo "module load python/miniforge25.3.0" >> run_cvxpy.sbatch
                 echo "source /share/apps/python/miniforge25.3.0/etc/profile.d/conda.sh" >> run_cvxpy.sbatch
-                echo "module load xpress/9.8.0" >> run_cvxpy.sbatch
                 echo "conda run -n encode python milp_eval.py -c ${config} -t cvxpy-scip" >> run_cvxpy.sbatch
             fi
             

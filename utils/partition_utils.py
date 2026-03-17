@@ -33,7 +33,11 @@ class ScheduleConstPartitionSolver:
     Schedule Constrained Hardware-Software Partitioning Solver using MILP formulation
     """
     
-    def __init__(self, graph:nx.DiGraph=None):
+    def __init__(self, graph:nx.DiGraph=None, solver="scip"):
+        # initialize solver
+        self.solver = solver
+        
+        # initialize graph
         if not graph:
             self.graph = None
             self.n_nodes = 0
@@ -209,7 +213,7 @@ class ScheduleConstPartitionSolver:
         
         logger.info("Problem matrices and vectors created successfully")
     
-    def solve_optimization(self, A_max: float, partition_assignment:dict=None) -> Dict:
+    def solve_optimization(self, A_max: float, partition_assignment:dict=None, time_limit_sec=7.5*3600) -> Dict:
         """
         Solve the hardware-software partitioning optimization problem
         
@@ -319,9 +323,15 @@ class ScheduleConstPartitionSolver:
         
         # Solve the problem
         problem = cp.Problem(objective, constraints)
-        problem.solve(solver=cp.SCIP, verbose=True)
+        if self.solver == "xpress":
+            problem.solve(solver=cp.XPRESS, verbose=True, solver_opts={"SOLTIMELIMIT": time_limit_sec})
+        elif self.solver == "scip":
+            problem.solve(solver=cp.SCIP, verbose=True, scip_params={"limits/time": time_limit_sec})
+        else:
+            logger.error(f"Unknown solver error: {self.solver}")
+            raise NotImplementedError(f"Unknown solver: {self.solver}")
         
-        if problem.status != cp.OPTIMAL:
+        if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
             logger.error(f"Optimization failed with status: {problem.status}")
             return None
         

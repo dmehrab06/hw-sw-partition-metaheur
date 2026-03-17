@@ -46,7 +46,7 @@ def parse_arguments() -> DictConfig:
                        help='Random seed for reproducibility')
     
     # Add solver tool argument
-    parser.add_argument('-t', '--solver-tool', type=str, choices=['cvxpy', 'cuopt'], default='cvxpy',
+    parser.add_argument('-t', '--solver-tool', type=str, choices=['cvxpy-xpress', 'cvxpy-scip', 'cuopt'], default='cvxpy',
                        help='Solver tool to use for optimization')
     
     args = parser.parse_args()
