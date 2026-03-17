@@ -6,6 +6,7 @@ Implements the incidence matrix formulation for DAG partitioning
 import os
 import random
 import numpy as np
+import time
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -23,13 +24,15 @@ def main():
     logger = LogManager.get_logger(__name__)
 
     # Create solver instance
-    if config['solver-tool'] == 'cvxpy':
-        solver = ScheduleConstPartitionSolver()
+    if config['solver-tool'] == 'cvxpy-xpress':
+        solver = ScheduleConstPartitionSolver(solver="xpress")
+    elif config['solver-tool'] == 'cvxpy-scip':
+        solver = ScheduleConstPartitionSolver(solver="scip")
     elif config['solver-tool'] == 'cuopt':
         solver = CuOptScheduleConstPartitionSolver()
     else:
-        logger.error(f"Unsupported solver tool: {config['solver-tool']}")
-        raise NotImplementedError(f"Unsupported solver tool: {config['solver-tool']}")
+        logger.error(f"Unsupported solver tool: {config['solver-tool']}. Solving with SCIP")
+        solver = ScheduleConstPartitionSolver(solver="scip")
     
     # Set random seeds for reproducibility
     random.seed(config['seed'])
@@ -57,8 +60,11 @@ def main():
     
     # Solve optimization with area constraint
     A_max = np.sum(solver.a) * config['area-constraint']
-    solution = solver.solve_optimization(A_max=A_max)
-    
+    time_limit = 3600
+
+    wall_start = time.perf_counter()
+    solution = solver.solve_optimization(A_max=A_max, time_limit_sec=time_limit)
+    wall_time = time.perf_counter() - wall_start
     
 
     partition_assignment = {}
@@ -67,12 +73,11 @@ def main():
     for n in solution['software_nodes']:
         partition_assignment[n] = 0
     
-    # Compute execution time
-    makespan,_ = compute_dag_execution_time(graph, partition_assignment, verbose=False)
-    logger.info(f"Execution time: {makespan}")
+    solution["partition_assignment"] = partition_assignment,
+    solution["wall_time"] = wall_time
     
     from pathlib import Path
-    import pickle
+    import json
     area_constraint_str = f"{config['area-constraint']:.2f}"
     hwscale_str = f"{config['hw-scale-factor']:.1f}"
     hwvar_str = f"{config['hw-scale-variance']:.2f}"
@@ -85,8 +90,9 @@ def main():
         os.chmod(dir, 0o777)
 
     logger.info(f"Saving partitions as pickle file in {output_dir}")
-    with open(f"{output_dir}/taskgraph-squeeze_net_tosa_area-{area_constraint_str}_hwscale-{hwscale_str}_hwvar-{hwvar_str}_seed-{seed_str}_assignment-mip.pkl",'wb') as f:
-        pickle.dump(partition_assignment,f)
+    
+    with open(f"{output_dir}/taskgraph-squeeze_net_tosa_area-{area_constraint_str}_hwscale-{hwscale_str}_hwvar-{hwvar_str}_seed-{seed_str}_assignment-mip.json",'w') as f:
+        json.dump(solution,f,indent=2)
 
 
 if __name__ == "__main__":
