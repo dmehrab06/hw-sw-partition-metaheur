@@ -105,6 +105,11 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     "enable_area_fill": True,
     "fill_allow_worsen": 0.0,
     "enable_swap": True,
+    "search_strategy": "critical",
+    "candidate_top_k": 16,
+    "critical_slack_frac": 0.05,
+    "candidate_include_neighbors": True,
+    "candidate_include_cut_endpoints": True,
     "dls_steps": 2,
     "dls_flip_eta": 0.35,
     "dls_swap_eta": 0.18,
@@ -574,6 +579,15 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     post_enable_area_fill = bool(post_cfg.get("enable_area_fill", config.get("lssp_postprocess_area_fill", True)))
     post_fill_allow_worsen = float(post_cfg.get("fill_allow_worsen", config.get("lssp_postprocess_fill_allow_worsen", 0.0)))
     post_enable_swap = bool(post_cfg.get("enable_swap", config.get("lssp_postprocess_enable_swap", True)))
+    post_search_strategy = str(post_cfg.get("search_strategy", config.get("lssp_postprocess_search_strategy", "critical"))).lower()
+    post_candidate_top_k = int(post_cfg.get("candidate_top_k", config.get("lssp_postprocess_candidate_top_k", 16)))
+    post_critical_slack_frac = float(post_cfg.get("critical_slack_frac", config.get("lssp_postprocess_critical_slack_frac", 0.05)))
+    post_candidate_include_neighbors = bool(
+        post_cfg.get("candidate_include_neighbors", config.get("lssp_postprocess_candidate_include_neighbors", True))
+    )
+    post_candidate_include_cut_endpoints = bool(
+        post_cfg.get("candidate_include_cut_endpoints", config.get("lssp_postprocess_candidate_include_cut_endpoints", True))
+    )
     dls_steps = int(post_cfg.get("dls_steps", config.get("dls_steps", 2 if use_dls_final else 0)))
     dls_flip_eta = float(post_cfg.get("dls_flip_eta", config.get("dls_flip_eta", 0.35)))
     dls_swap_eta = float(post_cfg.get("dls_swap_eta", config.get("dls_swap_eta", 0.18)))
@@ -667,7 +681,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         )
     if use_lssp_final:
         logger.info(
-            "DiffGNNOrder final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s",
+            "DiffGNNOrder final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s search=%s top_k=%d slack_frac=%.3f",
             post_eval_mode,
             str(post_during_train),
             str(post_during_eval),
@@ -675,6 +689,9 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             str(post_enable_area_fill),
             post_fill_allow_worsen,
             str(post_enable_swap),
+            post_search_strategy,
+            post_candidate_top_k,
+            post_critical_slack_frac,
         )
 
     best_sched_cost = float("inf")
@@ -832,6 +849,11 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         enable_area_fill=post_enable_area_fill,
                         fill_allow_worsen=post_fill_allow_worsen,
                         enable_swap=post_enable_swap,
+                        search_strategy=post_search_strategy,
+                        candidate_top_k=post_candidate_top_k,
+                        critical_slack_frac=post_critical_slack_frac,
+                        candidate_include_neighbors=post_candidate_include_neighbors,
+                        candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
                     )
                     post_cost = _evaluate_discrete_solution(
                         TG,
@@ -945,9 +967,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 enable_area_fill=post_enable_area_fill,
                 fill_allow_worsen=post_fill_allow_worsen,
                 enable_swap=post_enable_swap,
+                search_strategy=post_search_strategy,
+                candidate_top_k=post_candidate_top_k,
+                critical_slack_frac=post_critical_slack_frac,
+                candidate_include_neighbors=post_candidate_include_neighbors,
+                candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
             )
             logger.info(
-                "DiffGNNOrder final postprocess: improved=%s cost=%.3f hw_area=%.3f/%.3f (%s) elapsed=%.3fs eval_calls=%d stage1_iters=%d stage2_iters=%d avg_eval=%.3fms avg_iter=%.3fms",
+                "DiffGNNOrder final postprocess: improved=%s cost=%.3f hw_area=%.3f/%.3f (%s) elapsed=%.3fs eval_calls=%d stage1_iters=%d stage2_iters=%d avg_eval=%.3fms avg_iter=%.3fms search=%s avg_pool=%.1f avg_selected=%.1f",
                 str(post_info["improved"]),
                 post_info["cost"],
                 post_info["hw_area"],
@@ -959,6 +986,9 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 int(post_info.get("stage2_iters", 0)),
                 float(post_info.get("avg_eval_ms", 0.0)),
                 float(post_info.get("avg_iter_ms", 0.0)),
+                str(post_info.get("search_strategy", post_search_strategy)),
+                float(post_info.get("avg_candidate_pool", 0.0)),
+                float(post_info.get("avg_selected_candidates", 0.0)),
             )
             logger.info("DiffGNNOrder final postprocess elapsed: %.3fs", time.perf_counter() - post_t0)
             post_cost = _evaluate_discrete_solution(

@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1910" height="760" viewBox="0 0 1910 760" role="img" aria-label="Makespan Comparison on Shared 15-Config Run">
+<rect x="0" y="0" width="1910" height="760" fill="#ffffff"/>
+<text x="85.00" y="36.00" fill="#111111" font-size="24" font-family="sans-serif" font-weight="700">Makespan Comparison on Shared 15-Config Run</text>
+<text x="85.00" y="62.00" fill="#4b5563" font-size="13" font-family="sans-serif">Methods: Diff-GNN, Diff-GNN+Order, GCPS, GL25</text>
+<line x1="85" y1="580.00" x2="1880" y2="580.00" stroke="#e5e7eb" stroke-width="1"/>
+<text x="75.00" y="584.00" fill="#4b5563" font-size="12" font-family="sans-serif" text-anchor="end">0.00</text>
+<line x1="85" y1="498.33" x2="1880" y2="498.33" stroke="#e5e7eb" stroke-width="1"/>
+<text x="75.00" y="502.33" fill="#4b5563" font-size="12" font-family="sans-serif" text-anchor="end">3,333</text>
+<line x1="85" y1="416.67" x2="1880" y2="416.67" stroke="#e5e7eb" stroke-width="1"/>
+<text x="75.00" y="420.67" fill="#4b5563" font-size="12" font-family="sans-serif" text-anchor="end">6,667</text>
+<line x1="85" y1="335.00" x2="1880" y2="335.00" stroke="#e5e7eb" stroke-width="1"/>
+<text x="75.00" y="339.00" fill="#4b5563" font-size="12" font-family="sans-serif" text-anchor="end">10,000</text>
+<line x1="85" y1="253.33" x2="1880" y2="253.33" stroke="#e5e7eb" stroke-width="1"/>
+<text x="75.00" y="257.33" fill="#4b5563" font-size="12" font-family="sans-serif" text-anchor="end">13,333</text>
+<line x1="85" y1="171.67" x2="1880" y2="171.67" stroke="#e5e7eb" stroke-width="1"/>
+<text x="75.00" y="175.67" fill="#4b5563" font-size="12" font-family="sans-serif" text-anchor="end">16,667</text>
+<line x1="85" y1="90.00" x2="1880" y2="90.00" stroke="#e5e7eb" stroke-width="1"/>
+<text x="75.00" y="94.00" fill="#4b5563" font-size="12" font-family="sans-serif" text-anchor="end">20,000</text>
+<line x1="85" y1="90" x2="85" y2="580" stroke="#111111" stroke-width="1.2"/>
+<line x1="85" y1="580" x2="1880" y2="580" stroke="#111111" stroke-width="1.2"/>
+<rect x="1530" y="24" width="14" height="14" fill="#1f77b4" rx="2"/>
+<text x="1550.00" y="36.00" fill="#111111" font-size="12" font-family="sans-serif">Diff-GNN</text>
+<rect x="1614" y="24" width="14" height="14" fill="#ff7f0e" rx="2"/>
+<text x="1634.00" y="36.00" fill="#111111" font-size="12" font-family="sans-serif">Diff-GNN+Order</text>
+<rect x="1698" y="24" width="14" height="14" fill="#2ca02c" rx="2"/>
+<text x="1718.00" y="36.00" fill="#111111" font-size="12" font-family="sans-serif">GCPS</text>
+<rect x="1782" y="24" width="14" height="14" fill="#d62728" rx="2"/>
+<text x="1802.00" y="36.00" fill="#111111" font-size="12" font-family="sans-serif">GL25</text>
+<rect x="100.83" y="402.34" width="20.00" height="177.66" fill="#1f77b4"><title>config_mkspan_area_0.1_hw_0.3_seed_1 | Diff-GNN | makespan=7,251</title></rect>
+<rect x="122.83" y="402.34" width="20.00" height="177.66" fill="#ff7f0e"><title>config_mkspan_area_0.1_hw_0.3_seed_1 | Diff-GNN+Order | makespan=7,251</title></rect>
+<rect x="144.83" y="365.15" width="20.00" height="214.85" fill="#2ca02c"><title>config_mkspan_area_0.1_hw_0.3_seed_1 | GCPS | makespan=8,770</title></rect>
+<rect x="166.83" y="365.15" width="20.00" height="214.85" fill="#d62728"><title>config_mkspan_area_0.1_hw_0.3_seed_1 | GL25 | makespan=8,770</title></rect>
+<text x="144.83" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C1</text>
+<rect x="220.50" y="431.73" width="20.00" height="148.27" fill="#1f77b4"><title>config_mkspan_area_0.3_hw_0.1_seed_1 | Diff-GNN | makespan=6,052</title></rect>
+<rect x="242.50" y="436.16" width="20.00" height="143.84" fill="#ff7f0e"><title>config_mkspan_area_0.3_hw_0.1_seed_1 | Diff-GNN+Order | makespan=5,871</title></rect>
+<rect x="264.50" y="368.43" width="20.00" height="211.57" fill="#2ca02c"><title>config_mkspan_area_0.3_hw_0.1_seed_1 | GCPS | makespan=8,636</title></rect>
+<rect x="286.50" y="365.15" width="20.00" height="214.85" fill="#d62728"><title>config_mkspan_area_0.3_hw_0.1_seed_1 | GL25 | makespan=8,770</title></rect>
+<text x="264.50" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C2</text>
+<rect x="340.17" y="426.28" width="20.00" height="153.72" fill="#1f77b4"><title>config_mkspan_area_0.3_hw_0.9_seed_2 | Diff-GNN | makespan=6,274</title></rect>
+<rect x="362.17" y="449.32" width="20.00" height="130.68" fill="#ff7f0e"><title>config_mkspan_area_0.3_hw_0.9_seed_2 | Diff-GNN+Order | makespan=5,334</title></rect>
+<rect x="384.17" y="368.05" width="20.00" height="211.95" fill="#2ca02c"><title>config_mkspan_area_0.3_hw_0.9_seed_2 | GCPS | makespan=8,651</title></rect>
+<rect x="406.17" y="360.92" width="20.00" height="219.08" fill="#d62728"><title>config_mkspan_area_0.3_hw_0.9_seed_2 | GL25 | makespan=8,942</title></rect>
+<text x="384.17" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C3</text>
+<rect x="459.83" y="506.65" width="20.00" height="73.35" fill="#1f77b4"><title>config_mkspan_area_0.7_hw_0.3_seed_3 | Diff-GNN | makespan=2,994</title></rect>
+<rect x="481.83" y="506.31" width="20.00" height="73.69" fill="#ff7f0e"><title>config_mkspan_area_0.7_hw_0.3_seed_3 | Diff-GNN+Order | makespan=3,008</title></rect>
+<rect x="503.83" y="461.65" width="20.00" height="118.35" fill="#2ca02c"><title>config_mkspan_area_0.7_hw_0.3_seed_3 | GCPS | makespan=4,831</title></rect>
+<rect x="525.83" y="466.98" width="20.00" height="113.02" fill="#d62728"><title>config_mkspan_area_0.7_hw_0.3_seed_3 | GL25 | makespan=4,613</title></rect>
+<text x="503.83" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C4</text>
+<rect x="579.50" y="495.06" width="20.00" height="84.94" fill="#1f77b4"><title>config_mkspan_area_0.7_hw_0.3_seed_1 | Diff-GNN | makespan=3,467</title></rect>
+<rect x="601.50" y="507.89" width="20.00" height="72.11" fill="#ff7f0e"><title>config_mkspan_area_0.7_hw_0.3_seed_1 | Diff-GNN+Order | makespan=2,943</title></rect>
+<rect x="623.50" y="459.39" width="20.00" height="120.61" fill="#2ca02c"><title>config_mkspan_area_0.7_hw_0.3_seed_1 | GCPS | makespan=4,923</title></rect>
+<rect x="645.50" y="482.00" width="20.00" height="98.00" fill="#d62728"><title>config_mkspan_area_0.7_hw_0.3_seed_1 | GL25 | makespan=4,000</title></rect>
+<text x="623.50" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C5</text>
+<rect x="699.17" y="534.32" width="20.00" height="45.68" fill="#1f77b4"><title>config_mkspan_area_0.9_hw_0.3_seed_1 | Diff-GNN | makespan=1,864</title></rect>
+<rect x="721.17" y="543.79" width="20.00" height="36.21" fill="#ff7f0e"><title>config_mkspan_area_0.9_hw_0.3_seed_1 | Diff-GNN+Order | makespan=1,478</title></rect>
+<rect x="743.17" y="521.47" width="20.00" height="58.53" fill="#2ca02c"><title>config_mkspan_area_0.9_hw_0.3_seed_1 | GCPS | makespan=2,389</title></rect>
+<rect x="765.17" y="484.76" width="20.00" height="95.24" fill="#d62728"><title>config_mkspan_area_0.9_hw_0.3_seed_1 | GL25 | makespan=3,887</title></rect>
+<text x="743.17" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C6</text>
+<rect x="818.83" y="405.91" width="20.00" height="174.09" fill="#1f77b4"><title>config_mkspan_area_0.3_hw_0.9_seed_1 | Diff-GNN | makespan=7,106</title></rect>
+<rect x="840.83" y="424.62" width="20.00" height="155.38" fill="#ff7f0e"><title>config_mkspan_area_0.3_hw_0.9_seed_1 | Diff-GNN+Order | makespan=6,342</title></rect>
+<rect x="862.83" y="365.15" width="20.00" height="214.85" fill="#2ca02c"><title>config_mkspan_area_0.3_hw_0.9_seed_1 | GCPS | makespan=8,770</title></rect>
+<rect x="884.83" y="365.15" width="20.00" height="214.85" fill="#d62728"><title>config_mkspan_area_0.3_hw_0.9_seed_1 | GL25 | makespan=8,770</title></rect>
+<text x="862.83" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C7</text>
+<rect x="938.50" y="559.22" width="20.00" height="20.78" fill="#1f77b4"><title>config_mkspan_area_0.9_hw_0.1_seed_2 | Diff-GNN | makespan=848</title></rect>
+<rect x="960.50" y="564.80" width="20.00" height="15.20" fill="#ff7f0e"><title>config_mkspan_area_0.9_hw_0.1_seed_2 | Diff-GNN+Order | makespan=621</title></rect>
+<rect x="982.50" y="541.60" width="20.00" height="38.40" fill="#2ca02c"><title>config_mkspan_area_0.9_hw_0.1_seed_2 | GCPS | makespan=1,567</title></rect>
+<rect x="1004.50" y="513.93" width="20.00" height="66.07" fill="#d62728"><title>config_mkspan_area_0.9_hw_0.1_seed_2 | GL25 | makespan=2,697</title></rect>
+<text x="982.50" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C8</text>
+<rect x="1058.17" y="422.86" width="20.00" height="157.14" fill="#1f77b4"><title>config_mkspan_area_0.3_hw_0.3_seed_0 | Diff-GNN | makespan=6,414</title></rect>
+<rect x="1080.17" y="428.55" width="20.00" height="151.45" fill="#ff7f0e"><title>config_mkspan_area_0.3_hw_0.3_seed_0 | Diff-GNN+Order | makespan=6,182</title></rect>
+<rect x="1102.17" y="348.06" width="20.00" height="231.94" fill="#2ca02c"><title>config_mkspan_area_0.3_hw_0.3_seed_0 | GCPS | makespan=9,467</title></rect>
+<rect x="1124.17" y="348.06" width="20.00" height="231.94" fill="#d62728"><title>config_mkspan_area_0.3_hw_0.3_seed_0 | GL25 | makespan=9,467</title></rect>
+<text x="1102.17" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C9</text>
+<rect x="1177.83" y="505.38" width="20.00" height="74.62" fill="#1f77b4"><title>config_mkspan_area_0.9_hw_0.5_seed_0 | Diff-GNN | makespan=3,046</title></rect>
+<rect x="1199.83" y="507.60" width="20.00" height="72.40" fill="#ff7f0e"><title>config_mkspan_area_0.9_hw_0.5_seed_0 | Diff-GNN+Order | makespan=2,955</title></rect>
+<rect x="1221.83" y="497.10" width="20.00" height="82.90" fill="#2ca02c"><title>config_mkspan_area_0.9_hw_0.5_seed_0 | GCPS | makespan=3,384</title></rect>
+<rect x="1243.83" y="457.97" width="20.00" height="122.03" fill="#d62728"><title>config_mkspan_area_0.9_hw_0.5_seed_0 | GL25 | makespan=4,981</title></rect>
+<text x="1221.83" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C10</text>
+<rect x="1297.50" y="462.07" width="20.00" height="117.93" fill="#1f77b4"><title>config_mkspan_area_0.7_hw_0.7_seed_0 | Diff-GNN | makespan=4,814</title></rect>
+<rect x="1319.50" y="476.12" width="20.00" height="103.88" fill="#ff7f0e"><title>config_mkspan_area_0.7_hw_0.7_seed_0 | Diff-GNN+Order | makespan=4,240</title></rect>
+<rect x="1341.50" y="389.51" width="20.00" height="190.49" fill="#2ca02c"><title>config_mkspan_area_0.7_hw_0.7_seed_0 | GCPS | makespan=7,775</title></rect>
+<rect x="1363.50" y="449.13" width="20.00" height="130.87" fill="#d62728"><title>config_mkspan_area_0.7_hw_0.7_seed_0 | GL25 | makespan=5,342</title></rect>
+<text x="1341.50" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C11</text>
+<rect x="1417.17" y="430.98" width="20.00" height="149.02" fill="#1f77b4"><title>config_mkspan_area_0.3_hw_0.9_seed_3 | Diff-GNN | makespan=6,082</title></rect>
+<rect x="1439.17" y="426.14" width="20.00" height="153.86" fill="#ff7f0e"><title>config_mkspan_area_0.3_hw_0.9_seed_3 | Diff-GNN+Order | makespan=6,280</title></rect>
+<rect x="1461.17" y="354.24" width="20.00" height="225.76" fill="#2ca02c"><title>config_mkspan_area_0.3_hw_0.9_seed_3 | GCPS | makespan=9,215</title></rect>
+<rect x="1483.17" y="354.24" width="20.00" height="225.76" fill="#d62728"><title>config_mkspan_area_0.3_hw_0.9_seed_3 | GL25 | makespan=9,215</title></rect>
+<text x="1461.17" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C12</text>
+<rect x="1536.83" y="385.88" width="20.00" height="194.12" fill="#1f77b4"><title>config_mkspan_area_0.1_hw_0.1_seed_0 | Diff-GNN | makespan=7,923</title></rect>
+<rect x="1558.83" y="385.88" width="20.00" height="194.12" fill="#ff7f0e"><title>config_mkspan_area_0.1_hw_0.1_seed_0 | Diff-GNN+Order | makespan=7,923</title></rect>
+<rect x="1580.83" y="348.06" width="20.00" height="231.94" fill="#2ca02c"><title>config_mkspan_area_0.1_hw_0.1_seed_0 | GCPS | makespan=9,467</title></rect>
+<rect x="1602.83" y="348.06" width="20.00" height="231.94" fill="#d62728"><title>config_mkspan_area_0.1_hw_0.1_seed_0 | GL25 | makespan=9,467</title></rect>
+<text x="1580.83" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C13</text>
+<rect x="1656.50" y="475.42" width="20.00" height="104.58" fill="#1f77b4"><title>config_mkspan_area_0.5_hw_0.1_seed_0 | Diff-GNN | makespan=4,269</title></rect>
+<rect x="1678.50" y="488.60" width="20.00" height="91.40" fill="#ff7f0e"><title>config_mkspan_area_0.5_hw_0.1_seed_0 | Diff-GNN+Order | makespan=3,730</title></rect>
+<rect x="1700.50" y="398.23" width="20.00" height="181.77" fill="#2ca02c"><title>config_mkspan_area_0.5_hw_0.1_seed_0 | GCPS | makespan=7,419</title></rect>
+<rect x="1722.50" y="459.83" width="20.00" height="120.17" fill="#d62728"><title>config_mkspan_area_0.5_hw_0.1_seed_0 | GL25 | makespan=4,905</title></rect>
+<text x="1700.50" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C14</text>
+<rect x="1776.17" y="447.12" width="20.00" height="132.88" fill="#1f77b4"><title>config_mkspan_area_0.7_hw_0.9_seed_1 | Diff-GNN | makespan=5,424</title></rect>
+<rect x="1798.17" y="452.35" width="20.00" height="127.65" fill="#ff7f0e"><title>config_mkspan_area_0.7_hw_0.9_seed_1 | Diff-GNN+Order | makespan=5,210</title></rect>
+<rect x="1820.17" y="374.95" width="20.00" height="205.05" fill="#2ca02c"><title>config_mkspan_area_0.7_hw_0.9_seed_1 | GCPS | makespan=8,369</title></rect>
+<rect x="1842.17" y="433.53" width="20.00" height="146.47" fill="#d62728"><title>config_mkspan_area_0.7_hw_0.9_seed_1 | GL25 | makespan=5,978</title></rect>
+<text x="1820.17" y="598.00" fill="#111111" font-size="11" font-family="sans-serif" text-anchor="middle">C15</text>
+<text x="955.00" y="650.00" fill="#111111" font-size="13" font-family="sans-serif" text-anchor="middle" font-weight="700">Config index</text>
+<g transform="translate(22,335.0) rotate(-90)"><text x="0.00" y="0.00" fill="#111111" font-size="13" font-family="sans-serif" text-anchor="middle" font-weight="700">Makespan</text></g>
+<text x="85.00" y="682.00" fill="#4b5563" font-size="12" font-family="sans-serif">Config mapping is in the merged CSV: config_index -&gt; Config.</text>
+<text x="85.00" y="704.00" fill="#4b5563" font-size="12" font-family="sans-serif">MIP is omitted here because the matching 20260226_070718 MIP run timed out on all 15 configs.</text>
+</svg>

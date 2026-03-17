@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="768" viewBox="0 0 1280 768">
+<rect x="0" y="0" width="1280" height="768" fill="#ffffff"/>
+<line x1="85" y1="623.00" x2="1265" y2="623.00" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<line x1="85" y1="574.42" x2="1265" y2="574.42" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="579.42" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">1000</text>
+<line x1="85" y1="525.83" x2="1265" y2="525.83" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="530.83" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">2000</text>
+<line x1="85" y1="477.25" x2="1265" y2="477.25" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="482.25" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">3000</text>
+<line x1="85" y1="428.67" x2="1265" y2="428.67" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="433.67" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">4000</text>
+<line x1="85" y1="380.08" x2="1265" y2="380.08" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="385.08" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">5000</text>
+<line x1="85" y1="331.50" x2="1265" y2="331.50" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="336.50" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">6000</text>
+<line x1="85" y1="282.92" x2="1265" y2="282.92" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="287.92" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">7000</text>
+<line x1="85" y1="234.33" x2="1265" y2="234.33" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="239.33" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">8000</text>
+<line x1="85" y1="185.75" x2="1265" y2="185.75" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="190.75" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">9000</text>
+<line x1="85" y1="137.17" x2="1265" y2="137.17" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="142.17" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">10000</text>
+<line x1="85" y1="88.58" x2="1265" y2="88.58" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="93.58" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">11000</text>
+<line x1="85" y1="40.00" x2="1265" y2="40.00" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="73.00" y="45.00" fill="#222222" font-size="12" font-family="sans-serif" text-anchor="end">12000</text>
+<rect x="85" y="40" width="1180" height="583" fill="none" stroke="#444444" stroke-width="1.2"/>
+<line x1="203.00" y1="389.25" x2="203.00" y2="406.31" stroke="#555555" stroke-width="2"/>
+<line x1="203.00" y1="546.36" x2="203.00" y2="598.52" stroke="#555555" stroke-width="2"/>
+<line x1="173.50" y1="389.25" x2="232.50" y2="389.25" stroke="#555555" stroke-width="2"/>
+<line x1="173.50" y1="598.52" x2="232.50" y2="598.52" stroke="#555555" stroke-width="2"/>
+<rect x="144.00" y="406.31" width="118.00" height="140.05" fill="#d6a5a5" fill-opacity="0.65" stroke="#8c8c8c" stroke-width="2"/>
+<line x1="144.00" y1="465.33" x2="262.00" y2="465.33" stroke="#f39c12" stroke-width="2"/>
+<g transform="translate(203.00,663.00) rotate(-33)"><text x="0.00" y="0.00" fill="#222222" font-size="15" font-family="sans-serif" text-anchor="end">mip</text></g>
+<line x1="439.00" y1="238.07" x2="439.00" y2="320.28" stroke="#555555" stroke-width="2"/>
+<line x1="439.00" y1="478.16" x2="439.00" y2="592.85" stroke="#555555" stroke-width="2"/>
+<line x1="409.50" y1="238.07" x2="468.50" y2="238.07" stroke="#555555" stroke-width="2"/>
+<line x1="409.50" y1="592.85" x2="468.50" y2="592.85" stroke="#555555" stroke-width="2"/>
+<rect x="380.00" y="320.28" width="118.00" height="157.87" fill="#8fbc8f" fill-opacity="0.65" stroke="#8c8c8c" stroke-width="2"/>
+<line x1="380.00" y1="369.88" x2="498.00" y2="369.88" stroke="#f39c12" stroke-width="2"/>
+<g transform="translate(439.00,663.00) rotate(-33)"><text x="0.00" y="0.00" fill="#222222" font-size="15" font-family="sans-serif" text-anchor="end">diff_gnn_with_order</text></g>
+<line x1="675.00" y1="238.07" x2="675.00" y2="314.79" stroke="#555555" stroke-width="2"/>
+<line x1="675.00" y1="464.79" x2="675.00" y2="581.80" stroke="#555555" stroke-width="2"/>
+<line x1="645.50" y1="238.07" x2="704.50" y2="238.07" stroke="#555555" stroke-width="2"/>
+<line x1="645.50" y1="581.80" x2="704.50" y2="581.80" stroke="#555555" stroke-width="2"/>
+<rect x="616.00" y="314.79" width="118.00" height="150.01" fill="#87a9c7" fill-opacity="0.65" stroke="#8c8c8c" stroke-width="2"/>
+<line x1="616.00" y1="359.50" x2="734.00" y2="359.50" stroke="#f39c12" stroke-width="2"/>
+<g transform="translate(675.00,663.00) rotate(-33)"><text x="0.00" y="0.00" fill="#222222" font-size="15" font-family="sans-serif" text-anchor="end">diff_gnn_without_order</text></g>
+<line x1="911.00" y1="163.07" x2="911.00" y2="192.76" stroke="#555555" stroke-width="2"/>
+<line x1="911.00" y1="391.80" x2="911.00" y2="491.98" stroke="#555555" stroke-width="2"/>
+<line x1="881.50" y1="163.07" x2="940.50" y2="163.07" stroke="#555555" stroke-width="2"/>
+<line x1="881.50" y1="491.98" x2="940.50" y2="491.98" stroke="#555555" stroke-width="2"/>
+<rect x="852.00" y="192.76" width="118.00" height="199.04" fill="#d3d3d3" fill-opacity="0.65" stroke="#8c8c8c" stroke-width="2"/>
+<line x1="852.00" y1="332.55" x2="970.00" y2="332.55" stroke="#f39c12" stroke-width="2"/>
+<g transform="translate(911.00,663.00) rotate(-33)"><text x="0.00" y="0.00" fill="#222222" font-size="15" font-family="sans-serif" text-anchor="end">gl25_org</text></g>
+<line x1="1147.00" y1="163.07" x2="1147.00" y2="196.95" stroke="#555555" stroke-width="2"/>
+<line x1="1147.00" y1="386.07" x2="1147.00" y2="546.85" stroke="#555555" stroke-width="2"/>
+<line x1="1117.50" y1="163.07" x2="1176.50" y2="163.07" stroke="#555555" stroke-width="2"/>
+<line x1="1117.50" y1="546.85" x2="1176.50" y2="546.85" stroke="#555555" stroke-width="2"/>
+<rect x="1088.00" y="196.95" width="118.00" height="189.12" fill="#c8c8c8" fill-opacity="0.65" stroke="#8c8c8c" stroke-width="2"/>
+<line x1="1088.00" y1="216.39" x2="1206.00" y2="216.39" stroke="#f39c12" stroke-width="2"/>
+<g transform="translate(1147.00,663.00) rotate(-33)"><text x="0.00" y="0.00" fill="#222222" font-size="15" font-family="sans-serif" text-anchor="end">gcps_org</text></g>
+<polyline points="203.00,472.66 439.00,398.32 675.00,383.88 911.00,299.75 1147.00,287.35" fill="none" stroke="#111111" stroke-width="2"/>
+<circle cx="203.00" cy="472.66" r="4.5" fill="#000000"/>
+<text x="215.00" y="476.66" fill="#333333" font-size="12" font-family="sans-serif">3094.5</text>
+<circle cx="439.00" cy="398.32" r="4.5" fill="#000000"/>
+<text x="451.00" y="402.32" fill="#333333" font-size="12" font-family="sans-serif">4624.5</text>
+<circle cx="675.00" cy="383.88" r="4.5" fill="#000000"/>
+<text x="687.00" y="387.88" fill="#333333" font-size="12" font-family="sans-serif">4921.8</text>
+<circle cx="911.00" cy="299.75" r="4.5" fill="#000000"/>
+<text x="923.00" y="303.75" fill="#333333" font-size="12" font-family="sans-serif">6653.4</text>
+<circle cx="1147.00" cy="287.35" r="4.5" fill="#000000"/>
+<text x="1159.00" y="291.35" fill="#333333" font-size="12" font-family="sans-serif">6908.8</text>
+<text x="640.00" y="32.00" fill="#111111" font-size="26" font-family="sans-serif" text-anchor="middle">MIP vs DiffGNN (With/Without Order) vs Baseline Methods (Sorted by Mean)</text>
+<text x="28.00" y="384.00" fill="#111111" font-size="16" font-family="sans-serif" text-anchor="middle" transform="rotate(-90, 28, 384.00)">Makespan (lower is better)</text>
+<line x1="1130" y1="56" x2="1165" y2="56" stroke="#111111" stroke-width="2"/>
+<circle cx="1148" cy="56" r="4.5" fill="#000000"/>
+<text x="1178.00" y="60.00" fill="#111111" font-size="14" font-family="sans-serif">Mean</text>
+</svg>
