@@ -1,0 +1,27 @@
+\section{Related Work}
+\subsection{Exact and Metaheuristic HW/SW Partitioning}
+Classical HW/SW partitioning has long been formulated as a constrained combinatorial optimization problem. Exact approaches, including mixed-integer linear programming, dynamic programming, and branch-and-bound, provide strong baselines when the graph is small and the constraint model is carefully specified. However, multiple surveys and empirical studies report that these exact methods scale poorly with graph size or with the richness of the scheduling model \cite{arato2005,hou2019}. Once precedence, communication, and resource constraints are modeled together, exact optimization becomes valuable mainly as a gold standard on smaller instances.
+
+This limitation explains the long-standing use of metaheuristics. Genetic algorithms, simulated annealing, tabu search, particle swarm optimization, differential evolution, and hybrid methods all appear in the HW/SW partitioning literature because they can search larger spaces without full enumeration \cite{kennedy1995,kennedy1997,liang2006,liyao2012,tanabe2013,zhang2009,garcia2008,siarry1997}. The internal draft in this repository follows that tradition by comparing MIP against PSO, DBPSO, CLPSO, CCPSO, SHADE, JADE, GL25, ESA, random assignment, and a greedy heuristic. A useful point from that draft is that the performance of a metaheuristic depends strongly on the evaluation objective: an algorithm that performs well under a coarse proxy cost may not perform equally well when solutions are reevaluated by a scheduling heuristic.
+
+\subsection{Graph-Neural Approaches to Partitioning}
+Graph neural networks (GNNs) are a natural fit for partitioning because the input is already a graph and the output is a node-level decision. The 2021 work of Zheng \textit{et al.} introduced GCPS, a graph-convolution-based partitioner that used node features such as hardware gain and gain per area, cosine-weighted edges, and schedule feedback through list scheduling \cite{zheng2021}. Their central claim was that graph convolution can accelerate the search for large-scale partitions while maintaining or improving quality relative to metaheuristics.
+
+That paper still relied on a training loop whose schedule awareness was partly indirect: the GCN output was converted to labels, a scheduler was run, and the result fed back into training. The current repository goes further by differentiating through surrogate scheduling terms. Instead of treating the partitioner as a heuristic classifier followed by a black-box schedule evaluator, it constructs a continuous objective whose terms are meant to approximate longest-path timing, communication penalties, area usage, and optionally resource ordering.
+
+More broadly, GCN-style models inherit their graph reasoning capability from semi-supervised node classification work such as Kipf and Welling's graph convolutional network \cite{kipf2017}. The use of Sinkhorn normalization and soft permutations in the ordered variant also connects the repository implementation to differentiable ranking and matching methods, especially Gumbel-Sinkhorn relaxations \cite{mena2018}. The novelty in the present context is not the individual components in isolation, but their combination for HW/SW partitioning with schedule-aware decoding.
+
+\subsection{Scheduling-Aware Evaluation}
+The 2025/2026 internal draft is important even though it is not yet a polished paper, because it clarifies the experiment vocabulary used in the repository. It defines a synthetic benchmark model over neural-network-derived DAGs, specifies parameters such as hardware scale factor $k$, hardware variance $l$, communication scale $\mu$, and area ratio $\alpha$, and discusses several scheduling heuristics: OPTM, communication-aware (CA), critical-path list scheduling (CPL), event-driven (ED), and shortest-processing-time (SPT). The repository code contains corresponding scheduling implementations and a queue-style evaluator that is even more tightly integrated with the differentiable methods than the older GCPS pipeline.
+
+This leads to a practical lesson for paper writing. In this problem domain, ``better partitioning'' is ambiguous unless the evaluation protocol is stated explicitly. A partition may reduce total partition cost while worsening makespan, or match a MIP partition on one metric but differ on another. For that reason, the present draft treats schedule-aware evaluation not as a minor implementation detail, but as part of the method definition.
+
+\subsection{Position of This Work}
+Relative to prior work, the present draft occupies a middle ground:
+\begin{itemize}
+\item it inherits the graph-feature and schedule-aware intuition of GCPS \cite{zheng2021},
+\item it adopts the benchmark and heuristic language of the internal experiment draft,
+\item and it documents a newer differentiable pipeline in which placement and ordering are optimized jointly.
+\end{itemize}
+
+The most distinctive aspect is the comparison between the repository's two GNN variants. The baseline \texttt{diff\_gnn} learns only placement scores, whereas \texttt{diff\_gnn\_order} adds explicit order heads and a resource-aware surrogate. This comparison is narrower than a full benchmark paper, but it is well suited to a method-centric manuscript and to the user's goal of building a paper template that can later be rewritten by hand.

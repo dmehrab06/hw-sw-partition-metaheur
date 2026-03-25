@@ -1,0 +1,132 @@
+\section{Proposed Method}
+This section describes the repository implementation as a two-level method family. We first present the baseline differentiable graph partitioner, then the ordered extension, and finally summarize the difference between the two. Throughout, the emphasis is on how the implementation actually behaves rather than on a cleaned-up idealization.
+
+\subsection{Baseline: Differentiable Placement Without Explicit Ordering}
+\subsubsection{Graph Encoding}
+The baseline pipeline begins by converting a \texttt{TaskGraph} instance into a \texttt{torch\_geometric} graph through \texttt{\_build\_torchgeo\_data}. The default experimental profile used in the repository is not the original two-feature GCPS encoding. Instead, it often uses \texttt{default\_plus\_paper}, which concatenates:
+\begin{itemize}
+\item normalized software cost, hardware cost, hardware area, graph degree, hardware speedup proxy, area constraint, and hardware scale factor; and
+\item z-scored paper-inspired descriptors $HG$ and $HGP$.
+\end{itemize}
+This hybrid feature design is important because it preserves the intuition of the 2021 paper while adding implementation-specific context that the older formulation did not encode directly.
+
+Edges are also richer than in a vanilla adjacency matrix. The code can use no edge weights, communication-based weights, cosine similarity, or a learned per-edge transformation. In the configurations most relevant to the repository's differentiable runs, an edge MLP receives a three-dimensional edge attribute vector composed of normalized communication cost, absolute gain difference, and absolute gain-per-area difference. The resulting edge scaling modifies message passing and therefore changes which neighbors influence each node's final embedding.
+
+\subsubsection{Placement Network}
+The baseline model in \texttt{diff\_gnn\_models.py} is a multi-layer GCN ending in a single partition head. Let $z_i$ denote the hardware logit for node $i$. The model converts these logits into a relaxed hardware probability
+\begin{equation}
+p_i = \sigma\!\left(\frac{\gamma z_i}{\tau}\right),
+\label{eq:relaxed_prob}
+\end{equation}
+where $\tau$ is a temperature parameter and $\gamma$ is an optional logit scaling factor. The code also supports straight-through hard outputs during training, but soft probabilities are the common default.
+
+\subsubsection{Differentiable Makespan Surrogate}
+The baseline loss approximates makespan by a soft longest-path dynamic program over the DAG. Define the relaxed execution and communication terms as in (\ref{eq:relaxed_exec}) and (\ref{eq:relaxed_comm}). The baseline surrogate can be summarized as
+\begin{equation}
+\begin{aligned}
+\mathcal{L}_{\text{base}} ={}&
+\widetilde{T}_{\text{path}}(p)
++ \lambda_a [A(p)-A_{\max}]_{+} \\
+&+ \lambda_u (\bar{p}-\rho)^2
++ \lambda_e \Phi(p)
++ \lambda_c \widetilde{C}(p),
+\end{aligned}
+\label{eq:baseline_loss}
+\end{equation}
+where $A(p)=\sum_i a_i p_i$, $\bar{p}$ is the average hardware usage, $\rho$ is a target hardware fraction, $\Phi(p)$ is an entropy-like binarization term, and $\widetilde{C}(p)$ is the expected partition cost. In the implementation, the soft longest-path term is realized by repeated \texttt{logsumexp} operations over predecessor states.
+
+Although the baseline objective is differentiable, the final solution must still be discrete. The repository therefore uses a decode-and-repair stage:
+\begin{enumerate}
+\item threshold the relaxed probabilities,
+\item repair area violations by greedily removing low-priority hardware nodes,
+\item optionally refill unused area with strong hardware candidates,
+\item optionally apply differentiable local search (DLS) and a list-scheduling-style postprocess.
+\end{enumerate}
+This stage is not cosmetic. In practice, it closes much of the gap between a smooth surrogate and the actual discrete schedule metric.
+
+\subsection{Ordered Extension: Joint Placement and Scheduling Preference}
+\subsubsection{Additional Heads and Soft Permutations}
+The ordered model keeps the same graph encoder but replaces the single output head with three heads:
+\begin{itemize}
+\item a partition head that predicts hardware affinity,
+\item a software-order head producing a priority score for software execution,
+\item and a hardware-order head producing a priority score for hardware execution.
+\end{itemize}
+The software-order head is always active. The hardware-order head is optional and, notably, disabled in the current default configuration through \texttt{use\_hw\_ordering=False}. This is an important implementation detail that a final paper should mention explicitly rather than hiding in an appendix.
+
+Priority vectors are converted into soft permutations through Sinkhorn normalization. For the software lane,
+\begin{equation}
+P^{\text{sw}} = \text{Sinkhorn}\!\left(\frac{\phi^{\text{sw}}}{\tau_o}\right),
+\label{eq:sinkhorn}
+\end{equation}
+where $\phi^{\text{sw}}$ denotes software-order logits and $\tau_o$ is an ordering temperature. Optional Gumbel perturbations can be added, but the fast configurations used in the repository generally disable them.
+
+\subsubsection{Pairwise-Order Approximation}
+The code supports two ways to infer pairwise precedence from the soft permutation: an ``exact'' matrix expression and a cheaper expected-rank sigmoid approximation. The common setting is \texttt{pairwise\_mode=rank\_sigmoid}, which computes a pairwise ``before'' probability matrix from expected task ranks. This reduces cost while preserving a notion of relative order. If $B^{\text{sw}}_{ji}$ is large, task $j$ is predicted to precede task $i$ on the software resource.
+
+These ordering probabilities are then gated by placement:
+\begin{align}
+R^{\text{sw}} &= B^{\text{sw}} \odot \big((1-p)(1-p)^{\top}\big), \\
+R^{\text{hw}} &= B^{\text{hw}} \odot \big(pp^{\top}\big),
+\end{align}
+where $\odot$ denotes elementwise multiplication. In words, a resource-order relation matters only when both tasks actually occupy that resource with high probability.
+
+\subsubsection{Order-Aware Makespan Surrogate}
+The ordered loss extends the DAG-based surrogate with resource-precedence terms. A simplified view is
+\begin{equation}
+\begin{aligned}
+\mathcal{L}_{\text{ord}} ={}&
+\widetilde{T}_{\text{dag+res}}(p,P^{\text{sw}},P^{\text{hw}}) \\
+&+ \lambda_a [A(p)-A_{\max}]_{+}
++ \lambda_c \widetilde{C}(p)
++ \lambda_{\text{perm}}\Omega(P),
+\end{aligned}
+\label{eq:ordered_loss}
+\end{equation}
+where $\Omega(P)$ denotes doubly-stochastic and entropy regularizers over the soft permutation matrices.
+
+Operationally, the code performs iterative refinement. For each node, the start time combines:
+\begin{itemize}
+\item a DAG precedence term from predecessors and cross-partition communication,
+\item and a resource precedence term derived from other tasks that are likely to execute earlier on the same lane.
+\end{itemize}
+This is the main conceptual difference from the baseline. The baseline models dependency timing well, but it does not explicitly learn a schedule order over tasks competing for software or hardware execution slots.
+
+\subsubsection{Order-Aware Decode}
+The ordered model also changes the discrete decode step. Rather than repairing a partition using only placement probabilities, it may blend placement confidence with the difference between hardware and software priority logits. The resulting score preserves nodes that are simultaneously hardware-favored and structurally important to the learned order. However, the code still evaluates multiple decode candidates and keeps the best discrete solution according to the selected metric. This choice is sensible because ordering information can be helpful or harmful depending on the training regime and graph structure.
+
+\begin{table*}[t]
+\centering
+\caption{Repository-grounded comparison between the baseline and ordered variants.}
+\label{tab:baseline_vs_order}
+\small
+\begin{tabular}{p{0.18\textwidth} p{0.34\textwidth} p{0.38\textwidth}}
+\toprule
+Component & \texttt{diff\_gnn} & \texttt{diff\_gnn\_order} \\
+\midrule
+Output heads & One partition head producing relaxed hardware logits & One partition head plus separate hardware and software priority heads \\
+Training signal & Soft longest-path surrogate with area, communication, and optional regularizers & DAG-plus-resource surrogate with soft permutations and permutation regularization \\
+Ordering model & Implicit only through final schedule evaluation and local search & Explicit through Sinkhorn-based soft permutations and pairwise-before probabilities \\
+Decode score & Placement probability with optional heuristic speedup blend & Placement probability plus order-aware repair score; evaluates multiple repaired candidates \\
+Postprocess & DLS and optional LSSP-style local search & Same family of postprocessing, but applied after an order-aware decode \\
+Current default limitation & No explicit order modeling & Hardware ordering disabled by default; software ordering remains active \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Training and Inference Pipeline}
+The end-to-end pipeline used by both variants is straightforward:
+\begin{enumerate}
+\item build a graph from the task graph instance and selected feature profile;
+\item run the GNN to obtain relaxed assignment probabilities, and order logits for the ordered variant;
+\item optimize a differentiable surrogate loss with temperature annealing;
+\item periodically decode a discrete partition, repair area violations, and evaluate makespan with the chosen metric;
+\item keep the best discrete assignment observed during training or final decode.
+\end{enumerate}
+
+The practical consequence is worth emphasizing. The final reported partition is not the argmin of the continuous loss. It is the best discrete candidate found after repair and evaluation. This makes the method closer to ``differentiable proposal generation plus schedule-aware selection'' than to a purely end-to-end differentiable solver. For HW/SW partitioning, that is a reasonable design compromise.
+
+\subsection{Why Ordering Can Help}
+The ordered extension is motivated by a simple failure mode of placement-only learning. Suppose two tasks have similar hardware speedups and similar area demands, but one sits on the critical software chain while the other is off the critical path. A placement-only model may score them similarly, especially when the longest-path surrogate is still a smooth approximation. An order head can inject an additional bias: it can express that one task should appear earlier or later in the software lane relative to its competitors. If that learned order correlates with true schedule criticality, the decode step will preserve more useful hardware assignments.
+
+At the same time, the repository results show that ordering is not automatically beneficial. Soft permutations introduce extra parameters, an extra temperature schedule, and more challenging optimization dynamics. If the order model is under-regularized, weakly supervised, or only partially activated, it can increase runtime without improving the final schedule. A final paper should therefore present ordering as a structured extension with a cost-benefit tradeoff, not as a guaranteed monotonic improvement.

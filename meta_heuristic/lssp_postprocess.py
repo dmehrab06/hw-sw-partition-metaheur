@@ -3,47 +3,15 @@ import time
 from typing import Dict, Tuple
 
 import networkx as nx
+from utils.lssp_schedule_utils import compute_static_priorities, evaluate_makespan_lssp
 
 
 def _node_exec_time(TG, node: str, partition: Dict[str, int]) -> float:
     return float(TG.hardware_costs[node] if int(partition[node]) == 1 else TG.software_costs[node])
 
 
-def _edge_comm_time(TG, u: str, v: str, partition: Dict[str, int]) -> float:
-    if int(partition[u]) == int(partition[v]):
-        return 0.0
-    return float(TG.communication_costs.get((u, v), 0.0))
-
-
 def _raw_edge_comm_time(TG, u: str, v: str) -> float:
     return float(TG.communication_costs.get((u, v), 0.0))
-
-
-def compute_static_priorities(TG, partition: Dict[str, int]) -> Dict[str, float]:
-    """
-    LSSP-style static priorities:
-    Pri(node) = longest path length from node to any sink, including node execution
-    and cross-partition communication costs on edges.
-    """
-    G = TG.graph
-    topo = list(nx.topological_sort(G))
-    pri: Dict[str, float] = {}
-
-    for node in reversed(topo):
-        exec_t = _node_exec_time(TG, node, partition)
-        succs = list(G.successors(node))
-        if not succs:
-            pri[node] = exec_t
-            continue
-        best_tail = -1.0
-        for succ in succs:
-            comm = _edge_comm_time(TG, node, succ, partition)
-            cand = comm + pri[succ]
-            if cand > best_tail:
-                best_tail = cand
-        pri[node] = exec_t + max(0.0, best_tail)
-
-    return pri
 
 
 def _schedule_detail(TG, partition: Dict[str, int], eval_mode: str) -> Dict:
@@ -145,60 +113,6 @@ def _rank_local_search_nodes(
         "selected_candidates": float(len(ordered)),
         "schedule_makespan": float(makespan),
     }
-
-
-def evaluate_makespan_lssp(TG, partition: Dict[str, int]) -> Dict:
-    """
-    Priority-list scheduling with static priorities (LSSP-style):
-    - hardware tasks: run in parallel once dependencies are satisfied
-    - software tasks: single processor (serialized), priority-ordered among ready tasks
-    - communication: charged only across HW/SW boundary
-    """
-    G = TG.graph
-    pri = compute_static_priorities(TG, partition)
-    topo = list(nx.topological_sort(G))
-    topo_idx = {n: i for i, n in enumerate(topo)}
-
-    start_times: Dict[str, float] = {}
-    finish_times: Dict[str, float] = {}
-    scheduled = set()
-    sw_available = 0.0
-
-    def earliest_start(node: str) -> float:
-        t = 0.0
-        for p in G.predecessors(node):
-            tf = finish_times[p]
-            tf += _edge_comm_time(TG, p, node, partition)
-            if tf > t:
-                t = tf
-        return t
-
-    while len(scheduled) < len(topo):
-        ready = [
-            n for n in topo
-            if n not in scheduled and all(p in scheduled for p in G.predecessors(n))
-        ]
-        if not ready:
-            break
-
-        # Higher priority first; topo index stabilizes tie-breaks.
-        ready.sort(key=lambda n: (-pri[n], topo_idx[n]))
-
-        for node in ready:
-            est = earliest_start(node)
-            if int(partition[node]) == 0:
-                st = max(est, sw_available)
-                ft = st + float(TG.software_costs[node])
-                sw_available = ft
-            else:
-                st = est
-                ft = st + float(TG.hardware_costs[node])
-            start_times[node] = st
-            finish_times[node] = ft
-            scheduled.add(node)
-
-    makespan = max(finish_times.values()) if finish_times else 0.0
-    return {"makespan": makespan, "start_times": start_times, "finish_times": finish_times}
 
 
 def _hardware_area(TG, partition: Dict[str, int]) -> float:

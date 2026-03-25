@@ -1,0 +1,58 @@
+\section{Preliminaries}
+We consider a task graph $G=(V,E)$, where each node $i \in V$ is a task and each directed edge $(i,j) \in E$ denotes a precedence constraint and a potential communication transfer from task $i$ to task $j$. For every task $i$, let $s_i$ be the software execution time, $h_i$ the hardware execution time, and $a_i$ the hardware area cost. For every edge $(i,j)$, let $c_{ij}$ denote the communication cost when the incident tasks are placed on different platforms.
+
+Following both the 2021 paper and the internal draft, the total hardware area is limited. If $x_i \in \{0,1\}$ denotes whether task $i$ is assigned to hardware ($x_i=1$) or software ($x_i=0$), then the feasibility condition is
+\begin{equation}
+\sum_{i \in V} a_i x_i \le \alpha \sum_{i \in V} a_i ,
+\label{eq:area}
+\end{equation}
+where $\alpha \in (0,1]$ is the area-constraint ratio.
+
+\subsection{Partition and Schedule Objectives}
+The internal experiment draft distinguishes between a simple partition cost and multiple schedule-oriented objectives. The simplest partition objective is
+\begin{equation}
+C_{\text{part}}(x)=\sum_{i \in V}\left[(1-x_i)s_i + x_i h_i\right]
++ \sum_{(i,j)\in E} |x_i-x_j| c_{ij},
+\label{eq:partition_cost}
+\end{equation}
+which counts node execution cost and communication across the cut. This form is useful because it is cheap to evaluate, but it does not capture software serialization or more detailed scheduling behavior.
+
+The current repository therefore emphasizes makespan. In discrete evaluation, a partition is passed either to:
+\begin{itemize}
+\item a queue-style simulator implemented in \texttt{TaskGraph.evaluate\_makespan}, where software tasks execute sequentially and hardware tasks may overlap subject to dependencies, or
+\item a legacy LP-based evaluator, exposed through \texttt{compute\_dag\_makespan}, for comparison with earlier infrastructure.
+\end{itemize}
+Additional scheduling heuristics already exist for event-driven scheduling, communication-aware ordering, critical-path list scheduling, and shortest-processing-time ordering. This matters because a good paper should distinguish between the \emph{training surrogate} and the \emph{discrete evaluation metric}; the repository code clearly does so.
+
+\subsection{Relaxed Assignment}
+The differentiable models do not optimize binary assignments directly. Instead they produce a relaxed hardware probability $p_i \in [0,1]$ for each task. The relaxed execution time of task $i$ is
+\begin{equation}
+\tilde{t}_i(p_i)=p_i h_i + (1-p_i)s_i,
+\label{eq:relaxed_exec}
+\end{equation}
+and the relaxed communication cost over an edge $(i,j)$ is approximated by
+\begin{equation}
+\tilde{c}_{ij}(p)=|p_i-p_j|c_{ij}.
+\label{eq:relaxed_comm}
+\end{equation}
+This approximation is central to both \texttt{diff\_gnn} and \texttt{diff\_gnn\_order}, because it makes the cost continuous in the assignment probabilities.
+
+\subsection{Graph Features and Edge Information}
+The repository combines two feature families. The first is a ``default'' feature profile containing normalized software time, hardware time, area, degree, hardware speedup proxy, area constraint, and hardware scale factor. The second is a ``paper'' profile inspired by Zheng \textit{et al.}, using hardware gain
+\begin{equation}
+HG_i = s_i - h_i,
+\end{equation}
+and gain per unit area
+\begin{equation}
+HGP_i = \frac{s_i-h_i}{a_i+\varepsilon}.
+\end{equation}
+The implemented hybrid profile, \texttt{default\_plus\_paper}, concatenates both sets of descriptors. Edges can also carry learned or hand-designed weights. In the current configuration, edge attributes include normalized communication cost, $|HG_i-HG_j|$, and $|HGP_i-HGP_j|$, while the effective edge weight can be derived from cosine similarity or learned by a small MLP.
+
+\subsection{Problem Statement for This Draft}
+Given a DAG with node costs, edge communication, and an area budget, we seek a partition and an implied execution order that minimize makespan. The paper focuses on two concrete implementations:
+\begin{enumerate}
+\item \textbf{Baseline differentiable partitioning} (\texttt{diff\_gnn}): learn relaxed placements, decode them into a feasible partition, and evaluate the resulting schedule.
+\item \textbf{Order-aware differentiable partitioning} (\texttt{diff\_gnn\_order}): learn relaxed placements and additional priority scores that induce soft task orderings during training and decode.
+\end{enumerate}
+
+The key technical question is whether learning ordering information jointly with placement improves the quality of the final discrete partition once the schedule is evaluated. The rest of the paper is organized around that question.

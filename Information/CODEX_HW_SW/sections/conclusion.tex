@@ -1,0 +1,6 @@
+\section{Conclusion}
+This draft paper presented a structured description of a differentiable graph-neural HW/SW partitioning pipeline grounded in the current repository. The baseline model, \texttt{diff\_gnn}, learns relaxed hardware assignments and optimizes a differentiable makespan surrogate. The ordered extension, \texttt{diff\_gnn\_order}, augments that formulation with explicit priority heads, soft permutations, and order-aware decode logic so that placement and scheduling preference are modeled jointly.
+
+The repository artifacts already support a credible draft conclusion: ordering is promising but not automatically dominant. On a fifteen-instance random summary it improves mean and median makespan over the baseline, yet on small sweep cases its benefit depends on configuration and comes with additional runtime. That is a useful and publishable type of result if documented carefully.
+
+As a scaffold, this manuscript shows one reasonable way to turn the code, the 2021 GCN paper, and the newer internal partitioning draft into a six-page research narrative. The next step for a final human-written paper is to rerun the experiments cleanly, tighten the claims, and rewrite the prose in the author's own voice while preserving the overall structure.
