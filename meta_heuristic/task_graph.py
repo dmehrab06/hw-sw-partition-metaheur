@@ -1,9 +1,7 @@
 from platform import node
-import networkx as nx
 import random
 import numpy as np
 import os, sys
-import pydot
 
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +16,17 @@ if __name__ == "__main__":
     LogManager.initialize("logs/task_graph.log")
 
 logger = LogManager.get_logger(__name__)
+
+_NETWORKX_MODULE = None
+
+
+def _nx():
+    global _NETWORKX_MODULE
+    if _NETWORKX_MODULE is None:
+        import networkx as nx
+
+        _NETWORKX_MODULE = nx
+    return _NETWORKX_MODULE
 
 class TaskGraph:
     """
@@ -85,6 +94,9 @@ class TaskGraph:
             - Hardware areas are uniformly distributed between 1 and A_max
             - Communication costs are uniformly distributed between 0 and 2*mu*s_max
         """
+        import pydot
+
+        nx = _nx()
         # Load graph structure (robust pydot parser with subgraph support)
         pydot_graphs = pydot.graph_from_dot_file(pydot_file)
         if not pydot_graphs:
@@ -685,6 +697,7 @@ class TaskGraph:
             return earliest_start
         
         # Get topological order for processing
+        nx = _nx()
         topo_order = list(nx.topological_sort(self.graph))
         
         # Initialize with source nodes (nodes with no predecessors)

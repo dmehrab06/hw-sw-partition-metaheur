@@ -1,53 +1,75 @@
-import numpy as np
-import pyswarms as ps
-from pyswarms.backend.topology import Star
-from .task_graph import TaskGraph
-from .parser_utils import parse_arguments
-from .pso_utils import simulate_PSO, simulate_DBPSO, simulate_CLPSO, simulate_CCPSO
-from .ga_utils import simulate_GL25
-from .sa_utils import simulate_ESA
-from .de_utils import simulate_SHADE, simulate_JADE
-from .nondiff_gnn_utils import simulate_nondiff_GNN
-# from .diff_gnn_utils import simulate_diff_GNN
-from .diff_gnn_utils_schedule import simulate_diff_GNN
-from .diff_gnn_ordering import simulate_diff_GNN_order
-from .gcps import simulate_gcps
+from __future__ import annotations
 
+from importlib import import_module
+
+__all__ = [
+    "TaskGraph",
+    "parse_arguments",
+    "simulate_PSO",
+    "simulate_DBPSO",
+    "simulate_CLPSO",
+    "simulate_CCPSO",
+    "random_assignment",
+    "simulate_GL25",
+    "simulate_ESA",
+    "simulate_SHADE",
+    "simulate_JADE",
+    "simulate_nondiff_GNN",
+    "simulate_diff_GNN",
+    "simulate_diff_GNN_order",
+    "simulate_gcps",
+]
+
+
+_LAZY_EXPORTS = {
+    "TaskGraph": (".task_graph", "TaskGraph"),
+    "parse_arguments": (".parser_utils", "parse_arguments"),
+    "simulate_PSO": (".pso_utils", "simulate_PSO"),
+    "simulate_DBPSO": (".pso_utils", "simulate_DBPSO"),
+    "simulate_CLPSO": (".pso_utils", "simulate_CLPSO"),
+    "simulate_CCPSO": (".pso_utils", "simulate_CCPSO"),
+    "simulate_GL25": (".ga_utils", "simulate_GL25"),
+    "simulate_ESA": (".sa_utils", "simulate_ESA"),
+    "simulate_SHADE": (".de_utils", "simulate_SHADE"),
+    "simulate_JADE": (".de_utils", "simulate_JADE"),
+    "simulate_nondiff_GNN": (".nondiff_gnn_utils", "simulate_nondiff_GNN"),
+    "simulate_diff_GNN": (".diff_gnn_utils_schedule", "simulate_diff_GNN"),
+    "simulate_diff_GNN_order": (".diff_gnn_ordering", "simulate_diff_GNN_order"),
+    "simulate_gcps": (".gcps", "simulate_gcps"),
+}
+
+
+def __getattr__(name: str):
+    if name == "random_assignment":
+        return random_assignment
+
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = _LAZY_EXPORTS[name]
+    module = import_module(module_name, __name__)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 
 def random_assignment(dim, func_to_optimize, config):
-    
+    import numpy as np
+
     all_samples = []
-    for i in range(config['random']['num_samples']):
-        bernoulli_samples = np.random.binomial(n=1, p=config['random']['p'], size=dim)
+    for _ in range(config["random"]["num_samples"]):
+        bernoulli_samples = np.random.binomial(n=1, p=config["random"]["p"], size=dim)
         all_samples.append(bernoulli_samples)
-    
-    # Convert to numpy array and evaluate all solutions
+
     sample_array = np.array(all_samples)
     all_costs = func_to_optimize(sample_array)
-    
-    # Find best solution
+
     best_cost = np.min(all_costs)
     min_index = np.argmin(all_costs)
     best_solution = all_samples[min_index]
-    
+
     return best_cost, best_solution
-
-
-__all__ = [
-    'TaskGraph', 
-    'parse_arguments', 
-    'simulate_PSO', 
-    'simulate_DBPSO',
-    'simulate_CLPSO',
-    'simulate_CCPSO',
-    'random_assignment',
-    'simulate_GL25',
-    'simulate_ESA',
-    'simulate_SHADE',
-    'simulate_JADE',
-    'simulate_nondiff_GNN',
-    'simulate_diff_GNN',
-    'simulate_diff_GNN_order',
-    'simulate_gcps',
-]

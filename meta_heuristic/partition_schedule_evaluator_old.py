@@ -3,70 +3,18 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, replace
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Hashable
+from typing import Any, Hashable
 import math
-import os
 import pickle
 import random
 import sys
 from pathlib import Path
 
-if TYPE_CHECKING:
-    import networkx as nx
+import networkx as nx
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-current_module = sys.modules.get(__name__)
-if current_module is not None:
-    sys.modules.setdefault("meta_heuristic.partition_schedule_evaluator", current_module)
-
-_NETWORKX_MODULE = None
-_NETWORKX_PATCHED = False
-
-
-def _patch_networkx_backend_discovery():
-    global _NETWORKX_PATCHED
-    if _NETWORKX_PATCHED:
-        return
-    if os.environ.get("HWSW_ENABLE_NETWORKX_BACKENDS", "").strip().lower() in {"1", "true", "yes"}:
-        _NETWORKX_PATCHED = True
-        return
-
-    if "networkx" in sys.modules:
-        _NETWORKX_PATCHED = True
-        return
-
-    if "importlib.metadata" not in sys.modules:
-        import importlib.metadata as importlib_metadata
-    else:
-        importlib_metadata = sys.modules["importlib.metadata"]
-
-    networkx_entry_points = importlib_metadata.entry_points
-
-    def _fast_entry_points(*args, **kwargs):
-        group = kwargs.get("group")
-        if group is None and args:
-            group = args[0]
-        if group in {"networkx.backends", "networkx.backend_info"}:
-            return ()
-        return networkx_entry_points(*args, **kwargs)
-
-    importlib_metadata.entry_points = _fast_entry_points
-    _NETWORKX_PATCHED = True
-
-
-def _nx():
-    global _NETWORKX_MODULE
-    if _NETWORKX_MODULE is not None:
-        return _NETWORKX_MODULE
-
-    _patch_networkx_backend_discovery()
-
-    import networkx as nx
-
-    _NETWORKX_MODULE = nx
-    return nx
 
 
 @dataclass(frozen=True)
@@ -79,41 +27,6 @@ class PartitionScheduleProblem:
     area_constraint: float
     total_area: float
     violation_cost: float
-
-
-class _PickledTaskGraphShim:
-    def violates(self, partition):
-        problem = build_problem(self)
-        normalized = _normalize_partition(problem, partition)
-        return int(not _partition_is_valid(problem, normalized))
-
-    def evaluate_partition_cost(self, solution):
-        problem = build_problem(self)
-        partition = _normalize_partition(problem, solution)
-
-        cost = 0.0
-        area_used = 0.0
-        for node, placement in partition.items():
-            if int(placement) == 1:
-                cost += float(problem.hardware_costs[node])
-                area_used += float(problem.hardware_area[node])
-            else:
-                cost += float(problem.software_costs[node])
-
-        for (src, dst), comm in problem.communication_costs.items():
-            if int(partition[src]) != int(partition[dst]):
-                cost += float(comm)
-
-        if problem.total_area > 0.0 and area_used > _area_budget(problem) + 1e-9:
-            return float(problem.violation_cost)
-        return float(cost)
-
-
-class _TaskGraphShimUnpickler(pickle.Unpickler):
-    def find_class(self, module, name):
-        if module == "meta_heuristic.task_graph" and name == "TaskGraph":
-            return _PickledTaskGraphShim
-        return super().find_class(module, name)
 
 
 def _resolve_runtime_overrides(
@@ -186,7 +99,6 @@ def build_problem(task_graph_or_problem: Any) -> PartitionScheduleProblem:
         return task_graph_or_problem
 
     graph = getattr(task_graph_or_problem, "graph", task_graph_or_problem)
-    nx = _nx()
     if not isinstance(graph, nx.DiGraph):
         raise TypeError("build_problem expects a TaskGraph-like object or a networkx.DiGraph.")
 
@@ -241,7 +153,6 @@ def build_problem(task_graph_or_problem: Any) -> PartitionScheduleProblem:
 
 
 def _require_dag(problem: PartitionScheduleProblem) -> list[Hashable]:
-    nx = _nx()
     if not nx.is_directed_acyclic_graph(problem.graph):
         raise ValueError("Partition scheduling requires a DAG task graph.")
     return list(nx.topological_sort(problem.graph))
@@ -641,57 +552,6 @@ def evaluate_partition_lssp(
     return result
 
 
-def _use_legacy_cvxpy_dag_solver() -> bool:
-    return os.environ.get("HWSW_EVAL_DAG_USE_CVXPY", "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _compute_dag_schedule_topological(
-    problem: PartitionScheduleProblem,
-    partition: Mapping[Hashable, int],
-    topo: Sequence[Hashable] | None = None,
-) -> tuple[float, dict[Hashable, float], dict[Hashable, float]]:
-    order = list(topo) if topo is not None else _require_dag(problem)
-    start_times: dict[Hashable, float] = {}
-    finish_times: dict[Hashable, float] = {}
-    sw_available = 0.0
-
-    for node in order:
-        dep_ready = 0.0
-        for pred in problem.graph.predecessors(node):
-            pred_finish = float(finish_times[pred])
-            dep_ready = max(dep_ready, pred_finish + _edge_comm_time(problem, pred, node, partition))
-
-        exec_time = _node_exec_time(problem, node, partition)
-        if int(partition[node]) == 0:
-            start = max(dep_ready, sw_available)
-            sw_available = start + exec_time
-        else:
-            start = dep_ready
-        finish = start + exec_time
-        start_times[node] = float(start)
-        finish_times[node] = float(finish)
-
-    makespan = max(finish_times.values()) if finish_times else 0.0
-    return float(makespan), start_times, finish_times
-
-
-def _compute_dag_schedule_cvxpy(
-    problem: PartitionScheduleProblem,
-    partition: Mapping[Hashable, int],
-) -> tuple[float, dict[Hashable, float], dict[Hashable, float]]:
-    from utils.scheduler_utils import compute_dag_makespan
-
-    node_order = list(problem.graph.nodes())
-    dag_partition = [1 - int(partition[node]) for node in node_order]
-    raw_makespan, raw_start_times = compute_dag_makespan(problem.graph, dag_partition)
-    start_times = {node: float(raw_start_times[node]) for node in node_order}
-    finish_times = {
-        node: float(start_times[node] + _node_exec_time(problem, node, partition))
-        for node in node_order
-    }
-    return float(raw_makespan), start_times, finish_times
-
-
 def evaluate_partition_dag(
     problem_or_task_graph: Any,
     partition_assignment: Mapping[Hashable, Any] | Sequence[Any],
@@ -705,23 +565,17 @@ def evaluate_partition_dag(
         repair_strategy=repair_strategy,
     )
     topo = _require_dag(problem)
+    node_order = list(problem.graph.nodes())
 
-    solver_status: str
-    if _use_legacy_cvxpy_dag_solver():
-        try:
-            raw_makespan, start_times, finish_times = _compute_dag_schedule_cvxpy(problem, partition)
-            solver_status = "cvxpy"
-        except Exception as exc:
-            raw_makespan, start_times, finish_times = _compute_dag_schedule_topological(
-                problem, partition, topo=topo
-            )
-            solver_status = f"topological_fallback:{type(exc).__name__}"
-    else:
-        raw_makespan, start_times, finish_times = _compute_dag_schedule_topological(
-            problem, partition, topo=topo
-        )
-        solver_status = "topological"
+    from utils.scheduler_utils import compute_dag_makespan
 
+    dag_partition = [1 - int(partition[node]) for node in node_order]
+    raw_makespan, raw_start_times = compute_dag_makespan(problem.graph, dag_partition)
+    start_times = {node: float(raw_start_times[node]) for node in node_order}
+    finish_times = {
+        node: float(start_times[node] + _node_exec_time(problem, node, partition))
+        for node in node_order
+    }
     active_comm_edges = [
         (u, v, float(problem.communication_costs.get((u, v), 0.0)))
         for u, v in problem.graph.edges()
@@ -745,7 +599,7 @@ def evaluate_partition_dag(
     result.update(
         {
             "software_order": [node for node in topo if int(partition[node]) == 0],
-            "solver_status": solver_status,
+            "solver_status": None,
         }
     )
     return result
@@ -829,21 +683,17 @@ def _load_demo_config(config_path: str | Path) -> dict[str, Any]:
 
 
 def _load_task_graph_from_config(config: Mapping[str, Any]):
+    from meta_heuristic import TaskGraph
+
     tg_pickle = _resolve_repo_path(config.get("taskgraph-pickle"))
     if tg_pickle is not None and tg_pickle.exists():
-        _patch_networkx_backend_discovery()
         with open(tg_pickle, "rb") as f:
-            task_graph = _TaskGraphShimUnpickler(f).load()
+            task_graph = pickle.load(f)
         return synchronize_problem_with_config(task_graph, config)
 
     graph_file = _resolve_repo_path(config.get("graph-file"))
     if graph_file is None or not graph_file.exists():
         raise FileNotFoundError(f"Graph file not found: {config.get('graph-file')}")
-
-    if __package__:
-        from .task_graph import TaskGraph
-    else:
-        from task_graph import TaskGraph
 
     task_graph = TaskGraph(area_constraint=float(config.get("area-constraint", 1.0)))
     task_graph.load_graph_from_pydot(
@@ -898,19 +748,21 @@ def run_demo(
     seed: int | None = None,
     hw_probability: float = 0.5,
 ) -> dict[str, Any]:
+    from tools.visualize_schedule_from_partitions import (
+        save_input_graph_visualization,
+        save_schedule_visualization,
+    )
+
     config_path = Path(config_path or (ROOT / "configs" / "config_fig3_taskgraph_gnn_fast_simple.yaml")).resolve()
     out_root = Path(out_dir or (ROOT / "Figs")).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
 
-    print(f"[demo] loading config: {config_path}", flush=True)
     config = _load_demo_config(config_path)
-    print("[demo] loading task graph", flush=True)
     task_graph = _load_task_graph_from_config(config)
     problem = build_problem(task_graph)
     demo_seed = int(config.get("seed", 42) if seed is None else seed)
     rng = random.Random(demo_seed)
 
-    print("[demo] sampling random partition and evaluating schedules", flush=True)
     random_partition = _sample_random_partition(problem, rng, hw_probability=hw_probability)
     repair_info = make_partition_valid(problem, random_partition)
     evaluated_partition = dict(repair_info["partition"])
@@ -924,33 +776,6 @@ def run_demo(
         "seed": demo_seed,
         "partition_file": "in-memory random assignment",
     }
-
-    print(f"Demo config: {config_path}")
-    print(
-        "Task graph:"
-        f" nodes={len(problem.graph.nodes())}"
-        f" edges={len(problem.graph.edges())}"
-        f" area_limit={_area_budget(problem):.2f}/{problem.total_area:.2f}"
-    )
-    print(f"Random seed: {demo_seed}")
-    print(f"Random assignment (raw): {_format_partition(random_partition)}")
-    if repair_info["was_repaired"]:
-        print(f"Random assignment repaired for area feasibility: {_format_partition(evaluated_partition)}")
-        print(f"Repaired nodes: {repair_info['repaired_nodes']}")
-    else:
-        print("Random assignment was already area-feasible.")
-    print(f"DAG makespan: {float(dag_result['makespan']):.2f}")
-    print(f"DAG start times: {_format_times(problem, dag_result['start_times'])}")
-    print(f"DAG finish times: {_format_times(problem, dag_result['finish_times'])}")
-    print(f"LSSP makespan: {float(lssp_result['makespan']):.2f}")
-    print(f"LSSP start times: {_format_times(problem, lssp_result['start_times'])}")
-    print(f"LSSP finish times: {_format_times(problem, lssp_result['finish_times'])}")
-    print("[demo] importing visualization helpers and saving figures", flush=True)
-
-    from tools.visualize_schedule_from_partitions import (
-        save_input_graph_visualization,
-        save_schedule_visualization,
-    )
 
     save_input_graph_visualization(
         task_graph,
@@ -977,6 +802,27 @@ def run_demo(
         mode="lssp",
         schedule_result=lssp_result,
     )
+
+    print(f"Demo config: {config_path}")
+    print(
+        "Task graph:"
+        f" nodes={len(problem.graph.nodes())}"
+        f" edges={len(problem.graph.edges())}"
+        f" area_limit={_area_budget(problem):.2f}/{problem.total_area:.2f}"
+    )
+    print(f"Random seed: {demo_seed}")
+    print(f"Random assignment (raw): {_format_partition(random_partition)}")
+    if repair_info["was_repaired"]:
+        print(f"Random assignment repaired for area feasibility: {_format_partition(evaluated_partition)}")
+        print(f"Repaired nodes: {repair_info['repaired_nodes']}")
+    else:
+        print("Random assignment was already area-feasible.")
+    print(f"DAG makespan: {float(dag_result['makespan']):.2f}")
+    print(f"DAG start times: {_format_times(problem, dag_result['start_times'])}")
+    print(f"DAG finish times: {_format_times(problem, dag_result['finish_times'])}")
+    print(f"LSSP makespan: {float(lssp_result['makespan']):.2f}")
+    print(f"LSSP start times: {_format_times(problem, lssp_result['start_times'])}")
+    print(f"LSSP finish times: {_format_times(problem, lssp_result['finish_times'])}")
     print("Saved figures:")
     for key in ("input", "dag", "lssp"):
         print(f"  {key}: {figure_paths[key]}")
