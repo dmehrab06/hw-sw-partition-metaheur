@@ -19,6 +19,22 @@ logger = LogManager.get_logger(__name__)
 _EPS = 1e-12
 
 
+def _as_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        vv = value.strip().lower()
+        if vv in {"1", "true", "yes", "on", "enable", "enabled"}:
+            return True
+        if vv in {"0", "false", "no", "off", "disable", "disabled"}:
+            return False
+    return default
+
+
 def _as_float(x) -> float:
     if isinstance(x, np.ndarray):
         return float(np.asarray(x).reshape(-1)[0])
@@ -129,11 +145,45 @@ def _decode_greedy_area(
     return labels
 
 
-def _evaluate_candidate(task_graph, func_to_optimize, node_list, x: np.ndarray) -> Tuple[float, float]:
+def _evaluate_schedule(
+    task_graph,
+    partition: dict,
+    schedule_mode: str,
+    schedule_auto_repair: bool = True,
+) -> float:
+    mode_key = str(schedule_mode or "lssp").strip().lower()
+    if mode_key in {"taskgraph", "queue"}:
+        return float(task_graph.evaluate_makespan(partition)["makespan"])
+    if mode_key == "lssp":
+        from meta_heuristic.partition_schedule_evaluator import evaluate_partition_lssp
+
+        return float(
+            evaluate_partition_lssp(
+                task_graph,
+                partition,
+                auto_repair=bool(schedule_auto_repair),
+            )["makespan"]
+        )
+    raise ValueError(f"Unsupported GCPS schedule_mode '{schedule_mode}'. Use lssp|taskgraph.")
+
+
+def _evaluate_candidate(
+    task_graph,
+    func_to_optimize,
+    node_list,
+    x: np.ndarray,
+    schedule_mode: str,
+    schedule_auto_repair: bool = True,
+) -> Tuple[float, float]:
     x = np.asarray(x, dtype=np.float64).reshape(-1)
     blackbox_cost = _as_float(func_to_optimize(x))
     partition = {node_list[i]: int(x[i] > 0.5) for i in range(len(node_list))}
-    schedule = float(task_graph.evaluate_makespan(partition)["makespan"])
+    schedule = _evaluate_schedule(
+        task_graph,
+        partition,
+        schedule_mode=schedule_mode,
+        schedule_auto_repair=schedule_auto_repair,
+    )
     return blackbox_cost, schedule
 
 
@@ -206,6 +256,10 @@ def simulate_gcps(dim, func_to_optimize, config):
     quick_search = bool(gcps_cfg.get("quick_search", True))
     area_penalty_coeff = float(gcps_cfg.get("area_penalty_coeff", 0.0))
     verbose_every = int(gcps_cfg.get("verbose", 0))
+    schedule_mode = str(gcps_cfg.get("schedule_eval", "lssp")).strip().lower()
+    if schedule_mode not in {"lssp", "taskgraph", "queue"}:
+        raise ValueError("gcps.schedule_eval must be one of: lssp|taskgraph|queue")
+    schedule_auto_repair = _as_bool(gcps_cfg.get("schedule_auto_repair", True), True)
 
     alpha = float(gcps_cfg.get("alpha", 5.0))
     if "early_stop_k" in gcps_cfg:
@@ -231,7 +285,14 @@ def simulate_gcps(dim, func_to_optimize, config):
         logger.warning("PyTorch not available; using heuristic-only GCPS fallback.")
         base_scores = np.clip(0.5 * _minmax01(sw - hw) + 0.5 * hgp01, 0.0, 1.0)
         best_x = _decode_greedy_area(base_scores, area, area_budget, quick_search=quick_search)
-        best_cost, _ = _evaluate_candidate(task_graph, func_to_optimize, node_list, best_x)
+        best_cost, _ = _evaluate_candidate(
+            task_graph,
+            func_to_optimize,
+            node_list,
+            best_x,
+            schedule_mode=schedule_mode,
+            schedule_auto_repair=schedule_auto_repair,
+        )
         return best_cost, best_x
 
     device = _get_device(gcps_cfg.get("device", config.get("device", "auto")))
@@ -261,7 +322,14 @@ def simulate_gcps(dim, func_to_optimize, config):
     # Start from a deterministic score baseline.
     init_scores = np.clip(0.5 * _minmax01(sw - hw) + 0.5 * hgp01, 0.0, 1.0)
     best_x = _decode_greedy_area(init_scores, area, area_budget, quick_search=quick_search)
-    best_cost, best_schedule = _evaluate_candidate(task_graph, func_to_optimize, node_list, best_x)
+    best_cost, best_schedule = _evaluate_candidate(
+        task_graph,
+        func_to_optimize,
+        node_list,
+        best_x,
+        schedule_mode=schedule_mode,
+        schedule_auto_repair=schedule_auto_repair,
+    )
     best_epoch = 0
 
     metric_name = str(getattr(func_to_optimize, "__name__", "")).lower()
@@ -285,7 +353,14 @@ def simulate_gcps(dim, func_to_optimize, config):
         # Feature aggregation trick from the paper: X'=(1-sigma)X + sigma*F1.
         blended = np.clip((1.0 - sigma) * probs + sigma * hgp01, 0.0, 1.0)
         cand_x = _decode_greedy_area(blended, area, area_budget, quick_search=quick_search)
-        cand_cost, cand_schedule = _evaluate_candidate(task_graph, func_to_optimize, node_list, cand_x)
+        cand_cost, cand_schedule = _evaluate_candidate(
+            task_graph,
+            func_to_optimize,
+            node_list,
+            cand_x,
+            schedule_mode=schedule_mode,
+            schedule_auto_repair=schedule_auto_repair,
+        )
 
         if prefer_schedule:
             improved = (
