@@ -27,6 +27,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+from meta_heuristic.partition_schedule_evaluator import evaluate_partition, synchronize_problem_with_config
+
 
 def _load_taskgraph(path: str):
     with open(path, "rb") as f:
@@ -52,6 +54,36 @@ def _as_bool(value, default: bool = False) -> bool:
         if s in {"0", "false", "no", "off", "disable", "disabled"}:
             return False
     return default
+
+
+def _normalize_partition(partition: dict) -> dict:
+    normalized = {}
+    for node, value in partition.items():
+        if value in (0, 1):
+            normalized[node] = int(value)
+            continue
+        if isinstance(value, str):
+            vv = value.strip().lower()
+            if vv in {"hardware", "hw", "1"}:
+                normalized[node] = 1
+                continue
+            if vv in {"software", "sw", "0"}:
+                normalized[node] = 0
+                continue
+        raise ValueError(f"Unsupported partition value for node {node}: {value!r}")
+    return normalized
+
+
+def _evaluate_schedule(
+    task_graph,
+    partition: dict,
+    config: dict | None = None,
+    mode: str = "lssp",
+) -> dict:
+    partition = _normalize_partition(partition)
+    if config is not None:
+        task_graph = synchronize_problem_with_config(task_graph, config)
+    return evaluate_partition(task_graph, partition, mode=mode)
 
 
 def _sanitize_name(s: str) -> str:
@@ -314,19 +346,30 @@ def _plot_input_task_graph(task_graph, out_path: str, context: dict | None = Non
     plt.close(fig)
 
 
-def _plot_schedule(task_graph, partition: dict, method: str, out_path: str, context: dict | None = None) -> None:
+def _plot_schedule(
+    task_graph,
+    partition: dict,
+    method: str,
+    out_path: str,
+    context: dict | None = None,
+    config: dict | None = None,
+    mode: str = "lssp",
+    schedule_result: dict | None = None,
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     context = context or {}
-    result = task_graph.evaluate_makespan(partition)
+    partition = _normalize_partition(partition)
+    result = schedule_result or _evaluate_schedule(task_graph, partition, config=config, mode=mode)
+    evaluated_partition = dict(result.get("partition", partition))
     starts = result["start_times"]
     finishes = result["finish_times"]
-    partition_cost = float(task_graph.evaluate_partition_cost(partition))
-    hw_nodes = list(result.get("hardware_nodes", [n for n, p in partition.items() if p == 1]))
-    sw_nodes = list(result.get("software_nodes", [n for n, p in partition.items() if p == 0]))
+    partition_cost = float(task_graph.evaluate_partition_cost(evaluated_partition))
+    hw_nodes = list(result.get("hardware_nodes", [n for n, p in evaluated_partition.items() if p == 1]))
+    sw_nodes = list(result.get("software_nodes", [n for n, p in evaluated_partition.items() if p == 0]))
     total_comm_delay = float(result.get("total_communication_delay", 0.0))
     active_comm_edges = list(result.get("active_communication_edges", []))
 
@@ -355,13 +398,15 @@ def _plot_schedule(task_graph, partition: dict, method: str, out_path: str, cont
     y_bus = y_hardware_top + group_gap
     y_software = y_bus + group_gap
 
-    bus_transfers = []
-    for (u, v), comm in task_graph.communication_costs.items():
-        if partition[u] != partition[v] and comm > 0:
-            start = finishes[u]
-            end = start + float(comm)
-            bus_transfers.append((u, v, start, end))
-    bus_transfers.sort(key=lambda t: t[2])
+    bus_transfers = [
+        (
+            item["source"],
+            item["target"],
+            float(item["start_time"]),
+            float(item["finish_time"]),
+        )
+        for item in result.get("bus_schedule", [])
+    ]
 
     fig_h_sched = 5.6 + max(0, num_hw_lanes - 1) * 0.45
     fig, (ax, ax_info) = plt.subplots(
@@ -382,7 +427,7 @@ def _plot_schedule(task_graph, partition: dict, method: str, out_path: str, cont
 
     for u, v, s, e in bus_transfers:
         ax.barh(y_bus, e - s, left=s, height=bar_h * 0.75, color="#B6CCE1", edgecolor="#333333", linewidth=0.6)
-        ax.text(s + (e - s) / 2.0, y_bus, f"{u[1:]}->{v[1:]}", ha="center", va="center", fontsize=7)
+        ax.text(s + (e - s) / 2.0, y_bus, f"{u}->{v}", ha="center", va="center", fontsize=7)
 
     max_finish = max(finishes.values()) if finishes else 0.0
     max_bus = max((e for _, _, _, e in bus_transfers), default=0.0)
@@ -400,7 +445,8 @@ def _plot_schedule(task_graph, partition: dict, method: str, out_path: str, cont
     ax.set_xlim(0, max(1.0, x_max * 1.02))
     ax.set_xticks(range(0, int(math.ceil(max(1.0, x_max))) + 1))
     ax.grid(axis="x", linestyle="--", alpha=0.25)
-    ax.set_title(f"Schedule ({method})", pad=12)
+    schedule_mode = str(result.get("mode", mode)).upper()
+    ax.set_title(f"Schedule ({method}, {schedule_mode})", pad=12)
 
     info_line_1 = (
         f"Run={context.get('run_name', '-')} | Method={method} | Seed={context.get('seed', '-')} | "
@@ -412,6 +458,8 @@ def _plot_schedule(task_graph, partition: dict, method: str, out_path: str, cont
         f"Cross edges={len(active_comm_edges)} Comm delay={total_comm_delay:.2f}"
     )
     info_line_3 = f"Partition file={context.get('partition_file', '-')}"
+    if result.get("was_repaired", False):
+        info_line_3 += f" | repaired={','.join(map(str, result.get('repaired_nodes', [])))}"
 
     ax_info.axis("off")
     ax_info.text(0.01, 0.82, info_line_1, ha="left", va="top", fontsize=8.8, family="monospace", transform=ax_info.transAxes)
@@ -422,6 +470,38 @@ def _plot_schedule(task_graph, partition: dict, method: str, out_path: str, cont
     fig.tight_layout()
     fig.savefig(out_path, dpi=220)
     plt.close(fig)
+
+
+def save_schedule_visualization(
+    task_graph,
+    partition: dict,
+    method: str,
+    out_path: str,
+    context: dict | None = None,
+    config: dict | None = None,
+    mode: str = "lssp",
+    schedule_result: dict | None = None,
+) -> str:
+    _plot_schedule(
+        task_graph=task_graph,
+        partition=partition,
+        method=method,
+        out_path=out_path,
+        context=context,
+        config=config,
+        mode=mode,
+        schedule_result=schedule_result,
+    )
+    return out_path
+
+
+def save_input_graph_visualization(
+    task_graph,
+    out_path: str,
+    context: dict | None = None,
+) -> str:
+    _plot_input_task_graph(task_graph, out_path, context=context)
+    return out_path
 
 
 def _parse_methods(value):
@@ -482,6 +562,7 @@ def generate_visualizations_for_run(
         if not tg_pkl or not os.path.exists(tg_pkl):
             raise FileNotFoundError(f"TaskGraph pickle not found: {tg_pkl}")
         task_graph = _load_taskgraph(tg_pkl)
+    task_graph = synchronize_problem_with_config(task_graph, cfg)
 
     run_tag = _run_tag_from_config(cfg)
     saved_paths: list[str] = []
@@ -518,6 +599,7 @@ def generate_visualizations_for_run(
                     "seed": cfg.get("seed", "-"),
                     "partition_file": os.path.basename(part_path),
                 },
+                config=cfg,
             )
             saved_paths.append(out_path)
 

@@ -27,6 +27,7 @@ from meta_heuristic import (
 )
 
 from meta_heuristic.metaheuristic_registry import MethodRegistry
+from meta_heuristic.partition_schedule_evaluator import synchronize_problem_with_config
 try:
     from tools.visualize_schedule_from_partitions import generate_visualizations_for_run
 except Exception:
@@ -189,7 +190,16 @@ def load_taskgraph_if_available(config):
         try:
             with open(tg_pickle, "rb") as f:
                 TG = pickle.load(f)
+            loaded_area = getattr(TG, "area_constraint", None)
+            synchronize_problem_with_config(TG, config)
             logger.info(f"Loaded TaskGraph instance from: {tg_pickle}")
+            if loaded_area is not None and abs(float(loaded_area) - float(config['area-constraint'])) > 1e-9:
+                logger.warning(
+                    "Loaded TaskGraph area constraint %.8f differs from config %.8f. "
+                    "Using config value at runtime.",
+                    float(loaded_area),
+                    float(config['area-constraint']),
+                )
             # Keep config aligned for downstream consumers
             config['taskgraph-pickle'] = tg_pickle
             return TG
@@ -315,6 +325,7 @@ def main():
                 A_max=100,
                 seed=config['seed']
             )
+            synchronize_problem_with_config(TG, config)
 
             save_taskgraph(config, TG)
         

@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from utils.lssp_schedule_utils import evaluate_makespan_lssp  # noqa: E402
+from meta_heuristic.partition_schedule_evaluator import evaluate_partition_lssp  # noqa: E402
 
 
 def _load_pickle(path: str):
@@ -151,7 +151,7 @@ def main() -> None:
     task_graph = _load_pickle(taskgraph_pickle)
     partition = _load_pickle(partition_pickle)
 
-    lssp_result = evaluate_makespan_lssp(task_graph, partition)
+    lssp_result = evaluate_partition_lssp(task_graph, partition)
     _print_lssp_result(lssp_result)
 
     if args.visualize:

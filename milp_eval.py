@@ -5,7 +5,6 @@ Implements the incidence matrix formulation for DAG partitioning
 
 import os
 import json
-import shutil
 import random
 import pickle
 from pathlib import Path
@@ -16,6 +15,11 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from utils.logging_utils import LogManager
+from meta_heuristic.partition_schedule_evaluator import (
+    PartitionScheduleProblem,
+    evaluate_partition_lssp,
+    synchronize_problem_with_config,
+)
 from utils.partition_utils import ScheduleConstPartitionSolver
 from utils.cuopt_utils import CuOptScheduleConstPartitionSolver
 from utils.scheduler_utils import compute_dag_execution_time, compute_dag_makespan
@@ -41,11 +45,25 @@ def _resolve_taskgraph_for_visualization(config, taskgraph_pickle_used, taskgrap
         if candidate and os.path.exists(candidate):
             try:
                 with open(candidate, "rb") as f:
-                    return pickle.load(f), candidate
+                    task_graph = pickle.load(f)
+                return synchronize_problem_with_config(task_graph, config), candidate
             except Exception:
                 continue
     return None, None
 
+
+def _build_problem_from_graph(graph, area_constraint: float) -> PartitionScheduleProblem:
+    hardware_area = {n: float(graph.nodes[n].get("area_cost", 0.0)) for n in graph.nodes()}
+    return PartitionScheduleProblem(
+        graph=graph,
+        hardware_costs={n: float(graph.nodes[n].get("hardware_time", 0.0)) for n in graph.nodes()},
+        software_costs={n: float(graph.nodes[n].get("software_time", 0.0)) for n in graph.nodes()},
+        hardware_area=hardware_area,
+        communication_costs={(u, v): float(graph.edges[u, v].get("communication_cost", 0.0)) for u, v in graph.edges()},
+        area_constraint=float(area_constraint),
+        total_area=float(sum(hardware_area.values())),
+        violation_cost=1e9,
+    )
 
 def main():
     t0 = time.perf_counter()
@@ -70,11 +88,22 @@ def main():
 
     try:
         # Initialize Task Graph
-        
+        task_graph_eval = None
         if os.path.exists(config.get('taskgraph-pickle', "")):
             taskgraph_pickle_used = os.path.abspath(config['taskgraph-pickle'])
             logger.info(f"Loading graph from {taskgraph_pickle_used}")
             graph = solver.load_pickle_graph(taskgraph_pickle_used)
+            with open(taskgraph_pickle_used, "rb") as f:
+                task_graph_eval = pickle.load(f)
+            loaded_area = getattr(task_graph_eval, "area_constraint", None)
+            task_graph_eval = synchronize_problem_with_config(task_graph_eval, config)
+            if loaded_area is not None and abs(float(loaded_area) - float(config['area-constraint'])) > 1e-9:
+                logger.warning(
+                    "Loaded TaskGraph area constraint %.8f differs from config %.8f. "
+                    "Using config value at runtime.",
+                    float(loaded_area),
+                    float(config['area-constraint']),
+                )
         else:
             taskgraph_pickle_used = None
             logger.info(f"Loading graph from {config['graph-file']}")
@@ -85,6 +114,7 @@ def main():
                 mu=config['comm-scale-factor'],
                 A_max=100
                 )
+            task_graph_eval = _build_problem_from_graph(graph, config['area-constraint'])
     except Exception as e:
         logger.error(f"An error occurred during loading graph from input file: {str(e)}", exc_info=True)
         raise
@@ -116,16 +146,20 @@ def main():
     print(f"[mip] hardware nodes ({len(hw_nodes_sorted)}): {', '.join(hw_nodes_sorted)}")
     print(f"[mip] software nodes ({len(sw_nodes_sorted)}): {', '.join(sw_nodes_sorted)}")
     
-    # Compute execution time
+    # Compute final makespan from the solved partition using the shared LSSP evaluator
     lp_assignment = [1 - partition_assignment[n] for n in graph.nodes()]
-    makespan,_ = compute_dag_makespan(graph, lp_assignment)
-    logger.info(f"LP makespan: {makespan}")
+    lp_makespan, _ = compute_dag_makespan(graph, lp_assignment)
+    lssp_result = evaluate_partition_lssp(task_graph_eval, partition_assignment)
+    lssp_makespan = float(lssp_result["makespan"])
+    logger.info(f"LP makespan: {lp_makespan}")
+    logger.info(f"LSSP makespan: {lssp_makespan}")
 
     # Print summary metrics to stdout for quick terminal inspection
     print("[mip] summary:")
     print(f"  status: {solution.get('status')}")
     print(f"  model_makespan: {float(solution.get('makespan', float('nan'))):.6f}")
-    print(f"  lp_makespan: {float(makespan):.6f}")
+    print(f"  lp_makespan: {float(lp_makespan):.6f}")
+    print(f"  final_lssp_makespan: {float(lssp_makespan):.6f}")
     print(f"  total_hw_area: {float(solution.get('total_hardware_area', float('nan'))):.6f}")
     print(f"  area_limit: {float(A_max):.6f}")
     print(f"  solve_time_sec: {solve_sec:.3f}")
@@ -152,8 +186,9 @@ def main():
     taskgraph_copy_path = None
     if taskgraph_pickle_used:
         taskgraph_copy_path = Path(output_dir) / f"{partition_base}_taskgraph.pkl"
-        shutil.copy2(taskgraph_pickle_used, taskgraph_copy_path)
-        logger.info(f"Copied TaskGraph pickle to {taskgraph_copy_path}")
+        with open(taskgraph_copy_path, "wb") as f:
+            pickle.dump(task_graph_eval, f)
+        logger.info(f"Saved synchronized TaskGraph pickle to {taskgraph_copy_path}")
 
     # Write solve metadata alongside the partition
     meta = {
@@ -237,6 +272,7 @@ def main():
                         "seed": config.get("seed", "-"),
                         "partition_file": os.path.basename(str(partition_path)),
                     },
+                    config=cfg_for_viz,
                 )
                 logger.info(f"Visualization task graph source: {task_graph_viz_src}")
                 print(f"[mip] saved input graph image: {input_png}")

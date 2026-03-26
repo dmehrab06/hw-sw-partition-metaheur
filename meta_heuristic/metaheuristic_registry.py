@@ -2,6 +2,7 @@ from typing import Dict, Callable, Any, List
 import pandas as pd
 from dataclasses import dataclass
 from utils.logging_utils import LogManager
+from meta_heuristic.partition_schedule_evaluator import evaluate_partition_dag, evaluate_partition_lssp
 import time
 
 # Set up logging
@@ -34,12 +35,53 @@ def _normalize_partition(partition: dict):
         raise ValueError(f"Invalid partition value for node={node}: {a!r}")
     return out
 
-def _compute_schedule_makespan(task_graph, partition: dict) -> float:
-    """Compute queue-based makespan using TaskGraph.evaluate_makespan with area-constraint penalty."""
+def _compute_queue_makespan(task_graph, partition: dict) -> float:
+    """Compute queue-simulation makespan using TaskGraph.evaluate_makespan()."""
     if task_graph.violates(partition):
         return task_graph.violation_cost
     result = task_graph.evaluate_makespan(partition)
     return float(result["makespan"])
+
+
+def _compute_lp_makespan(task_graph, partition: dict) -> float:
+    """Compute LP/legacy makespan using compute_dag_makespan()."""
+    return float(
+        evaluate_partition_dag(
+            task_graph,
+            partition,
+            auto_repair=False,
+        )["makespan"]
+    )
+
+
+def _resolve_objective_mode(opt_cost_type: str) -> str:
+    opt_key = str(opt_cost_type or "queue").strip().lower()
+    if opt_key == "partition":
+        return "partition"
+    if opt_key == "mip":
+        return "lp"
+    return "queue"
+
+
+def _compute_objective_value(task_graph, partition: dict, mode: str) -> float:
+    if mode == "lp":
+        return _compute_lp_makespan(task_graph, partition)
+    if mode == "queue":
+        return _compute_queue_makespan(task_graph, partition)
+    raise ValueError(f"Unsupported objective mode: {mode}")
+
+
+def _compute_lssp_makespan(task_graph, partition: dict) -> float:
+    return float(evaluate_partition_lssp(task_graph, partition)["makespan"])
+
+
+def _get_naive_baseline(task_graph, opt_cost_type: str, config: dict | None) -> tuple[float, dict]:
+    partition = {node: 0 for node in task_graph.graph.nodes()}
+    mode = _resolve_objective_mode(opt_cost_type)
+
+    if mode == "partition":
+        return task_graph.evaluate_partition_cost(partition), partition
+    return _compute_objective_value(task_graph, partition, mode), partition
 
 
 @dataclass
@@ -79,10 +121,7 @@ class MethodRegistry:
         kwargs = method_info['kwargs']
 
         # get a naive solution first
-        if naive_opt_func_name=='partition':
-            best_cost, partition = task_graph.get_naive_solution()
-        else:
-            best_cost, partition = task_graph.get_naive_solution_makespan()
+        best_cost, partition = _get_naive_baseline(task_graph, naive_opt_func_name, config)
             
         logger.info(f"naive assignment has a opt_cost of {best_cost}")
 
@@ -100,10 +139,9 @@ class MethodRegistry:
         print(partition)
         partition = _normalize_partition(partition)
         print(partition)
-        if naive_opt_func_name == 'mip':
-            makespan = _compute_schedule_makespan(task_graph, partition)
-        else:
-            makespan = task_graph.evaluate_makespan(partition)['makespan']
+        schedule_result = evaluate_partition_lssp(task_graph, partition)
+        partition = dict(schedule_result["partition"])
+        makespan = float(schedule_result["makespan"])
         partition_cost = task_graph.evaluate_partition_cost(partition)
         
         # Store result
@@ -114,7 +152,11 @@ class MethodRegistry:
             makespan = makespan,
             partition_cost = partition_cost,
             partition_assignment = partition,
-            optimization_time = opt_time
+            optimization_time = opt_time,
+            additional_metrics = {
+                "was_repaired": bool(schedule_result.get("was_repaired", False)),
+                "num_repaired_nodes": len(schedule_result.get("repaired_nodes", [])),
+            },
             ## later add time here
         )
         
@@ -122,16 +164,16 @@ class MethodRegistry:
         return result
     
     def add_manual_result(self, name: str, best_cost: float, best_solution: Any, 
-                         task_graph=None, timing_info = 0.0, naive_opt_func_name='partition') -> MethodResult:
+                         task_graph=None, timing_info = 0.0, naive_opt_func_name='partition',
+                         config: dict | None = None) -> MethodResult:
         """Add a result from a method that doesn't follow the standard interface (like greedy)"""
         partition = task_graph.get_partitioning(best_solution, method=name)
         print(partition)
         partition = _normalize_partition(partition)
         print(partition)
-        if naive_opt_func_name == 'mip':
-            makespan = _compute_schedule_makespan(task_graph, partition)
-        else:
-            makespan = task_graph.evaluate_makespan(partition)['makespan']
+        schedule_result = evaluate_partition_lssp(task_graph, partition)
+        partition = dict(schedule_result["partition"])
+        makespan = float(schedule_result["makespan"])
         partition_cost = task_graph.evaluate_partition_cost(partition)
         
         result = MethodResult(
@@ -141,7 +183,11 @@ class MethodRegistry:
             makespan = makespan,
             partition_cost = partition_cost,
             partition_assignment = partition,
-            optimization_time = timing_info
+            optimization_time = timing_info,
+            additional_metrics = {
+                "was_repaired": bool(schedule_result.get("was_repaired", False)),
+                "num_repaired_nodes": len(schedule_result.get("repaired_nodes", [])),
+            },
             ## add timing info later maybe
         )
         
@@ -163,7 +209,7 @@ class MethodRegistry:
             results_dict[f'{name}_time'] = result.optimization_time
             
             if result.additional_metrics:
-                for metric in results.additional_metrics:
+                for metric in result.additional_metrics:
                     results_dict[f'{name}_{metric}'] = result.additional_metrics[metric]
         
         return results_dict

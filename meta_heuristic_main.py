@@ -156,7 +156,12 @@ def main():
         
         greedy_best_cost, greedy_solution = TG.greedy_heur()
         greedy_result = registry.add_manual_result(
-            'greedy', greedy_best_cost, greedy_solution, TG
+            'greedy',
+            greedy_best_cost,
+            greedy_solution,
+            TG,
+            naive_opt_func_name=config['opt-cost-type'],
+            config=config,
         )
         logger.info(f"Greedy Result: {greedy_best_cost:.4f}")
         

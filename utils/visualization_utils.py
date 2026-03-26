@@ -6,7 +6,7 @@ import seaborn as sns
 import networkx as nx
 import numpy as np
 from collections import defaultdict
-from utils.scheduler_utils import compute_dag_makespan
+from meta_heuristic.partition_schedule_evaluator import evaluate_partition_lssp
 
 def analyze_method_across_parameter(method_name, param_name, param_values, 
                                     fixed_params, seeds, config_type, 
@@ -90,7 +90,7 @@ def analyze_method_across_parameter(method_name, param_name, param_values,
             
             # Calculate naive baseline
             naive_partition = {v: 0 for v in graph.nodes()}
-            naive_makespan = task_graph.evaluate_makespan(naive_partition)['makespan']
+            naive_makespan = evaluate_partition_lssp(task_graph, naive_partition)['makespan']
             naive_makespans_by_param[param_value].append(naive_makespan)
             
             # Find solution file for this method
@@ -108,7 +108,7 @@ def analyze_method_across_parameter(method_name, param_name, param_values,
                 partition = pickle.load(file)
                 assignment = [1 - partition[k] for k in graph.nodes]
                 #makespan, _ = compute_dag_makespan(graph, assignment)
-                makespan = task_graph.evaluate_makespan(partition)['makespan']
+                makespan = evaluate_partition_lssp(task_graph, partition)['makespan']
                 makespans_by_param[param_value].append(makespan)
                 print(f"    Makespan: {makespan:.2f}")
     
@@ -412,7 +412,7 @@ def load_and_process_results(hw, area, seeds, config_type, solution_dir,
         
         # Calculate naive (all software) makespan
         naive_partition = {v: 0 for v in graph.nodes()}
-        naive_makespan = task_graph.evaluate_makespan(naive_partition)['makespan']
+        naive_makespan = evaluate_partition_lssp(task_graph, naive_partition)['makespan']
         naive_makespans.append(naive_makespan)
         
         # Process solution files for this seed
@@ -431,7 +431,7 @@ def load_and_process_results(hw, area, seeds, config_type, solution_dir,
                     partition = pickle.load(file)
                     assignment = [1 - partition[k] for k in graph.nodes]
                     #makespan, _ = compute_dag_makespan(graph, assignment)
-                    makespan = task_graph.evaluate_makespan(partition)['makespan']
+                    makespan = evaluate_partition_lssp(task_graph, partition)['makespan']
                     # Store result
                     results_by_method[method_name].append(makespan)
     
@@ -584,5 +584,3 @@ def print_summary_statistics(results, seeds):
     for i, method in enumerate(methods):
         print(f"  {method:20s}: {mean_makespans[i]:8.2f} ± {std_makespans[i]:6.2f}")
     print("="*60)
-
-

@@ -177,6 +177,7 @@ import sys
 import json
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 from omegaconf import OmegaConf
@@ -184,8 +185,8 @@ import numpy as np
 import random
 
 from meta_heuristic import TaskGraph
+from meta_heuristic.partition_schedule_evaluator import evaluate_partition_lssp, synchronize_problem_with_config
 from utils.partition_utils import ScheduleConstPartitionSolver
-from utils.scheduler_utils import compute_dag_execution_time, compute_dag_makespan
 
 config_path = Path(sys.argv[1])
 partition_path = Path(sys.argv[2])
@@ -195,6 +196,46 @@ cfg = OmegaConf.load(config_path)
 seed = cfg.get('seed', 42)
 
 task_graph = None
+
+
+def build_taskgraph_like(graph, area_constraint: float):
+    hardware_area = {n: float(graph.nodes[n].get('area_cost', 0.0)) for n in graph.nodes()}
+    total_area = float(sum(hardware_area.values()))
+
+    class _TaskGraphLike(SimpleNamespace):
+        def violates(self, partition):
+            if total_area <= 0:
+                return 0
+            used_area = sum(hardware_area[n] for n, a in partition.items() if int(a) == 1)
+            return int((used_area / total_area) > float(area_constraint))
+
+        def evaluate_partition_cost(self, partition):
+            exec_cost = 0.0
+            comm_cost = 0.0
+            area_used = 0.0
+            for node, placement in partition.items():
+                if int(placement) == 1:
+                    exec_cost += self.hardware_costs[node]
+                    area_used += self.hardware_area[node]
+                else:
+                    exec_cost += self.software_costs[node]
+            for (u, v), cost in self.communication_costs.items():
+                if int(partition[u]) != int(partition[v]):
+                    comm_cost += cost
+            if total_area > 0 and (area_used / total_area) > float(area_constraint):
+                return float(self.violation_cost)
+            return float(exec_cost + comm_cost)
+
+    return _TaskGraphLike(
+        graph=graph,
+        hardware_area=hardware_area,
+        hardware_costs={n: float(graph.nodes[n].get('hardware_time', 0.0)) for n in graph.nodes()},
+        software_costs={n: float(graph.nodes[n].get('software_time', 0.0)) for n in graph.nodes()},
+        communication_costs={(u, v): float(graph.edges[u, v].get('communication_cost', 0.0)) for u, v in graph.edges()},
+        area_constraint=float(area_constraint),
+        total_area=total_area,
+        violation_cost=1e9,
+    )
 
 # Prefer the TaskGraph pickle used by the MIP run (metadata saved alongside partition)
 meta_path = partition_path.with_name(partition_path.name.replace('_assignment-mip.pkl', '_assignment-mip.meta.json'))
@@ -216,6 +257,7 @@ tg_pickle_used = None
 if tg_pickle and Path(tg_pickle).exists():
     with open(tg_pickle, 'rb') as f:
         task_graph = pickle.load(f)
+    task_graph = synchronize_problem_with_config(task_graph, cfg)
     graph = task_graph.graph
     tg_pickle_used = str(tg_pickle)
 else:
@@ -240,6 +282,7 @@ if missing and cfg_tg_pickle and tg_pickle_used and (str(cfg_tg_pickle) != tg_pi
     try:
         with open(cfg_tg_pickle, 'rb') as f:
             task_graph = pickle.load(f)
+        task_graph = synchronize_problem_with_config(task_graph, cfg)
         graph = task_graph.graph
         tg_pickle_used = str(cfg_tg_pickle)
         missing = [n for n in graph.nodes() if n not in partition]
@@ -250,45 +293,12 @@ if missing:
         partition[n] = 0
     print(f"[warn] Filled {len(missing)} missing nodes with software=0: {missing[:5]}")
 
-if task_graph is not None:
-    naive_lb = sum(min(task_graph.software_costs[n], task_graph.hardware_costs[n]) for n in graph.nodes())
-    if task_graph.violates(partition):
-        makespan = task_graph.violation_cost
-    else:
-        lp_assignment = [1 - partition[n] for n in task_graph.rounak_graph]
-        makespan, _ = compute_dag_makespan(task_graph.rounak_graph, lp_assignment)
-    partition_cost = task_graph.evaluate_partition_cost(partition)
-else:
-    node_sw = {n: graph.nodes[n]['software_time'] for n in graph.nodes()}
-    node_hw = {n: graph.nodes[n]['hardware_time'] for n in graph.nodes()}
-    node_area = {n: graph.nodes[n]['area_cost'] for n in graph.nodes()}
-    edge_comm = {(u, v): graph.edges[u, v].get('communication_cost', 0) for u, v in graph.edges()}
-    total_area = sum(node_area.values())
+if task_graph is None:
+    task_graph = build_taskgraph_like(graph, cfg['area-constraint'])
 
-    exec_cost = 0.0
-    area_used = 0.0
-    for n, placement in partition.items():
-        if placement <= 0.5:
-            exec_cost += node_sw[n]
-        else:
-            exec_cost += node_hw[n]
-            area_used += node_area[n]
-
-    naive_lb = sum(min(node_sw[n], node_hw[n]) for n in graph.nodes())
-    if total_area > 0 and (area_used / total_area) > cfg['area-constraint']:
-        makespan = 1e9
-    else:
-        lp_assignment = [1 - partition[n] for n in graph.nodes()]
-        makespan, _ = compute_dag_makespan(graph, lp_assignment)
-    comm_cost = 0.0
-    for (u, v), c in edge_comm.items():
-        if (partition[u] <= 0.5) != (partition[v] <= 0.5):
-            comm_cost += c
-
-    if total_area > 0 and (area_used / total_area) > cfg['area-constraint']:
-        partition_cost = 1e9
-    else:
-        partition_cost = exec_cost + comm_cost
+naive_lb = sum(min(task_graph.software_costs[n], task_graph.hardware_costs[n]) for n in graph.nodes())
+makespan = float(evaluate_partition_lssp(task_graph, partition)['makespan'])
+partition_cost = float(task_graph.evaluate_partition_cost(partition))
 
 base_data = {
     'SimTime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),

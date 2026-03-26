@@ -3,7 +3,7 @@ import time
 from typing import Dict, Tuple
 
 import networkx as nx
-from utils.lssp_schedule_utils import compute_static_priorities, evaluate_makespan_lssp
+from meta_heuristic.partition_schedule_evaluator import compute_static_priorities, evaluate_partition_lssp
 
 
 def _node_exec_time(TG, node: str, partition: Dict[str, int]) -> float:
@@ -17,7 +17,7 @@ def _raw_edge_comm_time(TG, u: str, v: str) -> float:
 def _schedule_detail(TG, partition: Dict[str, int], eval_mode: str) -> Dict:
     mode = str(eval_mode).lower()
     if mode == "lssp":
-        return evaluate_makespan_lssp(TG, partition)
+        return evaluate_partition_lssp(TG, partition)
     return TG.evaluate_makespan(partition)
 
 
