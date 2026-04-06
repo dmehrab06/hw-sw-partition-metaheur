@@ -142,16 +142,20 @@ diffgnn:
 
 diffgnn_order:
     iter: 1000
+    early_stop_enabled: true
+    early_stop_min_epochs: 250
+    early_stop_patience: 5
+    early_stop_min_delta: 1.0e-4
     verbose: 1000
     device: "gpu"
     hidden_dim: 256
     num_layers: 3
-    dropout: 0.2
+    dropout: 0.5
     model: "default"
     speed_patch: true
     hard_eval_every: 100
     hard_eval_only_final: true
-    checkpoint_eval_when_final_only: true
+    checkpoint_eval_when_final_only: false
     fast_mode: true
     use_hw_ordering: true
     selection_metric: "queue"
@@ -161,7 +165,7 @@ diffgnn_order:
     feature_profile: "default"
     edge_weight_mode: "auto"
     edge_weight_learner: "none"
-    sinkhorn_iters: 12
+    sinkhorn_iters: 8
     order_refine_steps: 2
     gumbel_noise: false
     gumbel_scale: 0.0
@@ -177,7 +181,7 @@ diffgnn_order:
       mode: "hybrid"
       during_train: false
       eval_mode: "lssp"
-      max_iters: 120
+      max_iters: 24
       adaptive_max_iters: false
       adaptive_large_n: 128
       adaptive_large_cap: 10

@@ -313,14 +313,22 @@ def _apply_common_overrides(
     order_cfg["feature_profile"] = "default_plus_paper"
     order_cfg["edge_weight_mode"] = "paper2_cosine"
     order_cfg["edge_weight_learner"] = "mlp"
-    order_cfg["sinkhorn_iters"] = 12
+    order_cfg["sinkhorn_iters"] = 8
     order_cfg["order_refine_steps"] = 2
     order_cfg["pairwise_mode"] = "rank_sigmoid"
     order_cfg["pairwise_temp"] = 0.35
     order_cfg["gumbel_noise"] = False
     order_cfg["use_hw_ordering"] = False
-    order_cfg.setdefault("dropout", 0.2)
+    order_cfg["dropout"] = 0.5
     order_cfg.setdefault("num_layers", 3)
+    order_cfg["checkpoint_eval_when_final_only"] = False
+    order_cfg["early_stop_enabled"] = True
+    order_cfg["early_stop_min_epochs"] = 250
+    order_cfg["early_stop_patience"] = 5
+    order_cfg["early_stop_min_delta"] = 1.0e-4
+    order_post_cfg = dict(order_cfg.get("postprocess", {}))
+    order_post_cfg["max_iters"] = 24
+    order_cfg["postprocess"] = order_post_cfg
     cfg["diffgnn_order"] = order_cfg
 
     return cfg

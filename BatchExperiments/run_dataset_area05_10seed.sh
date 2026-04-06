@@ -23,18 +23,18 @@ ALL_METHODS_ORDER=(
 
 # Comment out any method you do not want to run.
 METHODS=(
-  "mip"
-  "diff_gnn_order"
-  "gl25"
-  "gcps"
-  "esa"
-  "pso"
-  "dbpso"
-  "clpso"
-  "ccpso"
-  "shade"
-  "jade"
-  "random"
+  # "mip"
+  # "diff_gnn_order"
+  # "gl25"
+  # "gcps"
+  # "esa"
+  # "pso"
+  # "dbpso"
+  # "clpso"
+  # "ccpso"
+  # "shade"
+  # "jade"
+  # "random"
   "greedy"
 )
 
@@ -42,18 +42,18 @@ METHODS=(
 # Comment out any dataset you do not want to include.
 DATASETS=(
   "paper_fig3_11node"
-  # "mobile_net_tosa"
-  # "rez_net_tosa"
-  # "squeeze_net_tosa"
-  # "anomaly_detection_tosa"
-  # "image_classification_tosa"
-  # "keyword_spotting_tosa"
-  # "visual_wake_words_tosa"
+  "mobile_net_tosa"
+  "rez_net_tosa"
+  "squeeze_net_tosa"
+  "anomaly_detection_tosa"
+  "image_classification_tosa"
+  "keyword_spotting_tosa"
+  "visual_wake_words_tosa"
 )
 
 # Edit this array to control the number of seeds.
-# SEEDS=(42 43 44 45 46 47 48 49 50 51)
-SEEDS=(42 43)
+SEEDS=(42 43 44 45 46 47 48 49 50 51)
+# SEEDS=(42)
 
 if [[ -n "${METHODS_OVERRIDE:-}" ]]; then
   read -r -a METHODS <<<"$METHODS_OVERRIDE"
@@ -71,12 +71,28 @@ RESULT_TAG="dataset_area05_10seed"
 OUTDIR="$ROOT/BatchExperiments/dataset_area05"
 CONFIG_ROOT="${CONFIG_ROOT:-$ROOT/BatchExperiments/dataset_area05_configs}"
 FORCE_REGENERATE_CONFIGS="${FORCE_REGENERATE_CONFIGS:-0}"
-TMPDIR_ROOT="$(mktemp -d "$ROOT/BatchExperiments/.dataset_area05_tmp.XXXXXX")"
-trap 'rm -rf "$TMPDIR_ROOT"' EXIT
+RUN_TAG="${RUN_TAG:-$(date '+%Y%m%d-%H%M%S')}"
+SELECTED_CONFIG_ROOT="${SELECTED_CONFIG_ROOT:-$ROOT/BatchExperiments/${RESULT_TAG}_configs}"
 
-# MIP runtime controls. Edit if needed for larger graphs.
+DEFAULT_FULL_CONFIG_SEEDS=(42 43 44 45 46 47 48 49 50 51)
+DEFAULT_PILOT_CONFIG_SEEDS=(42 43 44)
+if [[ "$PROFILE" == "full" ]]; then
+  CONFIG_CACHE_SEEDS=("${DEFAULT_FULL_CONFIG_SEEDS[@]}")
+else
+  CONFIG_CACHE_SEEDS=("${DEFAULT_PILOT_CONFIG_SEEDS[@]}")
+fi
+if [[ -n "${CONFIG_SEEDS_OVERRIDE:-}" ]]; then
+  read -r -a CONFIG_CACHE_SEEDS <<<"$CONFIG_SEEDS_OVERRIDE"
+fi
+
+# MIP runtime controls for the dataset batch.
+# These defaults are intentionally higher than the fast smoke-test settings.
 FAST_MIP="${FAST_MIP:-1}"
-RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-1800}"
+MIP_TIME_LIMIT_SEC="${MIP_TIME_LIMIT_SEC:-300}"
+MIP_GAP="${MIP_GAP:-0.05}"
+MIP_NODE_LIMIT="${MIP_NODE_LIMIT:-100000}"
+MIP_TIMEOUT_BUFFER_SEC="${MIP_TIMEOUT_BUFFER_SEC:-180}"
+RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-$((MIP_TIME_LIMIT_SEC + MIP_TIMEOUT_BUFFER_SEC))}"
 TIMEOUT_KILL_AFTER_SEC="${TIMEOUT_KILL_AFTER_SEC:-30}"
 
 CONFIG_PROFILE_ROOT="$CONFIG_ROOT/$PROFILE"
@@ -95,27 +111,77 @@ join_by_comma() {
   echo "$*"
 }
 
+generate_stable_topology_configs() {
+  "$PYTHON" "$ROOT/tools/generate_task_graph_topology_configs.py" \
+    --profile "$PROFILE" \
+    --config-root "$CONFIG_ROOT" \
+    --area "$AREA" \
+    --seeds "${CONFIG_CACHE_SEEDS[@]}"
+}
+
+count_manifest_rows() {
+  "$PYTHON" - <<'PY' "$1"
+from pathlib import Path
+import sys
+import pandas as pd
+
+path = Path(sys.argv[1])
+if not path.exists() or path.stat().st_size == 0:
+    print(0)
+else:
+    print(len(pd.read_csv(path)))
+PY
+}
+
+count_missing_config_paths() {
+  "$PYTHON" - <<'PY' "$1" "$ROOT"
+from pathlib import Path
+import sys
+import pandas as pd
+
+manifest_path = Path(sys.argv[1])
+root = Path(sys.argv[2]).resolve()
+
+if not manifest_path.exists() or manifest_path.stat().st_size == 0:
+    print(0)
+    raise SystemExit(0)
+
+df = pd.read_csv(manifest_path)
+missing = 0
+for value in df.get("config_path", []):
+    path = Path(str(value))
+    if not path.is_absolute():
+        path = root / path
+    if not path.exists():
+        missing += 1
+print(missing)
+PY
+}
+
 mkdir -p "$OUTDIR"
-rm -f "$ROOT_GNN_CSV" "$ROOT_MIP_CSV"
+mkdir -p "$SELECTED_CONFIG_ROOT"
 
 print_banner "Starting dataset-area batch run"
 echo "  Profile        : $PROFILE"
 echo "  Area constraint: $AREA"
 echo "  Output root    : $OUTDIR"
 echo "  Config root    : $CONFIG_ROOT"
-echo "  Temp work dir  : $TMPDIR_ROOT"
+echo "  Selected cfg dir: $SELECTED_CONFIG_ROOT"
+echo "  Run tag        : $RUN_TAG"
 echo "  Datasets (${#DATASETS[@]}): $(join_by_comma "${DATASETS[@]}")"
 echo "  Methods  (${#METHODS[@]}): $(join_by_comma "${METHODS[@]}")"
 echo "  Seeds    (${#SEEDS[@]}): $(join_by_comma "${SEEDS[@]}")"
+echo "  Config cache seeds: $(join_by_comma "${CONFIG_CACHE_SEEDS[@]}")"
+echo "  MIP tlimit    : ${MIP_TIME_LIMIT_SEC}s"
+echo "  MIP timeout pad: ${MIP_TIMEOUT_BUFFER_SEC}s"
+echo "  MIP hard kill : ${RUN_TIMEOUT_SEC}s"
+echo "  MIP gap       : $MIP_GAP"
+echo "  MIP node limit: $MIP_NODE_LIMIT"
 echo "  Plot step      : disabled in this script; run plot_dataset_area05_10seed.sh separately"
 
 if [[ ! -f "$MANIFEST" || "$FORCE_REGENERATE_CONFIGS" =~ ^(1|true|yes|on)$ ]]; then
   print_banner "Generating stable topology configurations"
-  "$PYTHON" "$ROOT/tools/generate_task_graph_topology_configs.py" \
-    --profile "$PROFILE" \
-    --config-root "$CONFIG_ROOT" \
-    --area "$AREA" \
-    --seeds "${SEEDS[@]}"
+  generate_stable_topology_configs
 else
   print_banner "Reusing existing stable topology configurations"
   echo "  Using manifest: $MANIFEST"
@@ -126,7 +192,7 @@ if [[ ! -f "$MANIFEST" ]]; then
   exit 1
 fi
 
-CFG_DIR="$TMPDIR_ROOT/configs"
+CFG_DIR="$SELECTED_CONFIG_ROOT/root"
 print_banner "Selecting requested dataset/seed subset from manifest"
 "$PYTHON" "$ROOT/tools/select_configs_from_manifest.py" \
   --manifest "$MANIFEST" \
@@ -135,15 +201,25 @@ print_banner "Selecting requested dataset/seed subset from manifest"
   --seeds "${SEEDS[@]}" \
   --areas "$AREA"
 expected_root_configs=$(( ${#DATASETS[@]} * ${#SEEDS[@]} ))
-actual_root_configs=$("$PYTHON" - <<'PY' "$CFG_DIR/selected_manifest.csv"
-import sys
-import pandas as pd
-print(len(pd.read_csv(sys.argv[1])))
-PY
-)
-if [[ "$actual_root_configs" -ne "$expected_root_configs" ]]; then
-  echo "Config selection mismatch: expected $expected_root_configs rows but found $actual_root_configs in $CFG_DIR/selected_manifest.csv"
-  echo "If the stable config cache is stale, regenerate it with FORCE_REGENERATE_CONFIGS=1."
+actual_root_configs="$(count_manifest_rows "$CFG_DIR/selected_manifest.csv")"
+missing_root_configs="$(count_missing_config_paths "$CFG_DIR/selected_manifest.csv")"
+if [[ "$actual_root_configs" -ne "$expected_root_configs" || "$missing_root_configs" -gt 0 ]]; then
+  print_banner "Stable config cache is missing requested rows; regenerating once"
+  echo "  Expected rows: $expected_root_configs"
+  echo "  Found rows   : $actual_root_configs"
+  echo "  Missing cfgs : $missing_root_configs"
+  generate_stable_topology_configs
+  "$PYTHON" "$ROOT/tools/select_configs_from_manifest.py" \
+    --manifest "$MANIFEST" \
+    --out-dir "$CFG_DIR" \
+    --graph-names "${DATASETS[@]}" \
+    --seeds "${SEEDS[@]}" \
+    --areas "$AREA"
+  actual_root_configs="$(count_manifest_rows "$CFG_DIR/selected_manifest.csv")"
+  missing_root_configs="$(count_missing_config_paths "$CFG_DIR/selected_manifest.csv")"
+fi
+if [[ "$actual_root_configs" -ne "$expected_root_configs" || "$missing_root_configs" -gt 0 ]]; then
+  echo "Config selection mismatch after regeneration: expected $expected_root_configs rows, found $actual_root_configs rows, missing $missing_root_configs config files in $CFG_DIR/selected_manifest.csv"
   exit 1
 fi
 "$PYTHON" - <<'PY' "$CFG_DIR/selected_manifest.csv" "$ROOT_MANIFEST"
@@ -185,7 +261,7 @@ for dataset in "${DATASETS[@]}"; do
   DATASET_DIR="$OUTDIR/$dataset"
   mkdir -p "$DATASET_DIR"
 
-  DATASET_CFG_DIR="$TMPDIR_ROOT/configs_${dataset}"
+  DATASET_CFG_DIR="$SELECTED_CONFIG_ROOT/$dataset/_dataset"
   "$PYTHON" "$ROOT/tools/select_configs_from_manifest.py" \
     --manifest "$ROOT_MANIFEST" \
     --out-dir "$DATASET_CFG_DIR" \
@@ -193,15 +269,10 @@ for dataset in "${DATASETS[@]}"; do
     --seeds "${SEEDS[@]}" \
     --areas "$AREA"
   expected_dataset_configs=${#SEEDS[@]}
-  actual_dataset_configs=$("$PYTHON" - <<'PY' "$DATASET_CFG_DIR/selected_manifest.csv"
-import sys
-import pandas as pd
-print(len(pd.read_csv(sys.argv[1])))
-PY
-)
-  if [[ "$actual_dataset_configs" -ne "$expected_dataset_configs" ]]; then
-    echo "Dataset config mismatch for $dataset: expected $expected_dataset_configs rows but found $actual_dataset_configs in $DATASET_CFG_DIR/selected_manifest.csv"
-    echo "If the stable config cache is stale, regenerate it with FORCE_REGENERATE_CONFIGS=1."
+  actual_dataset_configs="$(count_manifest_rows "$DATASET_CFG_DIR/selected_manifest.csv")"
+  missing_dataset_configs="$(count_missing_config_paths "$DATASET_CFG_DIR/selected_manifest.csv")"
+  if [[ "$actual_dataset_configs" -ne "$expected_dataset_configs" || "$missing_dataset_configs" -gt 0 ]]; then
+    echo "Dataset config mismatch for $dataset: expected $expected_dataset_configs rows, found $actual_dataset_configs rows, missing $missing_dataset_configs config files in $DATASET_CFG_DIR/selected_manifest.csv"
     exit 1
   fi
 
@@ -239,7 +310,7 @@ PY
     print_banner "Dataset [$dataset_idx/$total_datasets] Method [$method_idx/$total_methods]: $dataset / $method"
     method_start_sec=$SECONDS
     METHOD_DIR="$DATASET_DIR/$method"
-    METHOD_CFG_DIR="$TMPDIR_ROOT/configs_${dataset}_${method}"
+    METHOD_CFG_DIR="$SELECTED_CONFIG_ROOT/$dataset/$method"
     METHOD_PREFIX="${RESULT_TAG}_${dataset}_${method}"
     METHOD_MANIFEST="$METHOD_DIR/${METHOD_PREFIX}_selected_manifest.csv"
 
@@ -276,9 +347,9 @@ PY
     rm -f "$METHOD_CFG_DIR/selected_manifest.csv"
 
     for cfg in "$METHOD_CFG_DIR"/*.yaml; do
-      src_cfg="$(readlink -f "$cfg")"
-      rm -f "$cfg"
-      "$PYTHON" - <<'PY' "$src_cfg" "$cfg" "$METHOD_DIR" "$METHOD_PREFIX"
+      src_cfg="$cfg"
+      tmp_cfg="${cfg}.tmp"
+      "$PYTHON" - <<'PY' "$src_cfg" "$tmp_cfg" "$METHOD_DIR" "$METHOD_PREFIX"
 from omegaconf import OmegaConf
 import sys
 
@@ -292,6 +363,7 @@ vis["enabled"] = False
 cfg["visualization"] = vis
 OmegaConf.save(config=cfg, f=dst)
 PY
+      mv "$tmp_cfg" "$cfg"
     done
 
     if [[ "$method" == "mip" ]]; then
@@ -299,8 +371,12 @@ PY
       CONFIG_GLOB="$METHOD_CFG_DIR/*.yaml" \
       OUTDIR="$METHOD_DIR" \
       FAST_MIP="$FAST_MIP" \
+      MIP_TIME_LIMIT_SEC="$MIP_TIME_LIMIT_SEC" \
+      MIP_GAP="$MIP_GAP" \
+      MIP_NODE_LIMIT="$MIP_NODE_LIMIT" \
       RUN_TIMEOUT_SEC="$RUN_TIMEOUT_SEC" \
       TIMEOUT_KILL_AFTER_SEC="$TIMEOUT_KILL_AFTER_SEC" \
+      HWSW_RUN_TAG="$RUN_TAG" \
       PYTHON="$PYTHON" \
       "$ROOT/run_all_mip_configs.sh"
     else
@@ -310,6 +386,7 @@ PY
       HWSW_METHODS="$method" \
       HWSW_CSV_DIR="$METHOD_DIR" \
       HWSW_RESULT_PREFIX="$METHOD_PREFIX" \
+      HWSW_RUN_TAG="$RUN_TAG" \
       PYTHON="$PYTHON" \
       "$ROOT/run_all_gnn_configs.sh"
     fi

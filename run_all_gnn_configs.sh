@@ -14,6 +14,7 @@ METHODS_ENV="${HWSW_METHODS:-${METHODS:-}}"
 RESULT_CSV_ENV="${HWSW_RESULT_CSV:-${RESULT_CSV:-}}"
 RESULT_PREFIX_ENV="${HWSW_RESULT_PREFIX:-${RESULT_PREFIX:-}}"
 CSV_DIR_ENV="${HWSW_CSV_DIR:-${CSV_DIR:-}}"
+RUN_TAG_ENV="${HWSW_RUN_TAG:-${RUN_TAG:-}}"
 
 cd "$ROOT"
 
@@ -37,12 +38,19 @@ fi
 if [[ -n "$CSV_DIR_ENV" ]]; then
   echo "CSV directory override: $CSV_DIR_ENV"
 fi
+if [[ -n "$RUN_TAG_ENV" ]]; then
+  echo "Run tag: $RUN_TAG_ENV"
+fi
 
 batch_start_sec=$SECONDS
 
 for config in "${CONFIGS[@]}"; do
   config_base="$(basename "$config" .yaml)"
-  log_file="$OUTDIR/gnn_main_${config_base}.log"
+  if [[ -n "$RUN_TAG_ENV" ]]; then
+    log_file="$OUTDIR/gnn_main_${config_base}__run-${RUN_TAG_ENV}.log"
+  else
+    log_file="$OUTDIR/gnn_main_${config_base}.log"
+  fi
   config_start_sec=$SECONDS
 
   echo "---- [METHOD] $config_base ----"
@@ -58,6 +66,9 @@ for config in "${CONFIGS[@]}"; do
   fi
   if [[ -n "$CSV_DIR_ENV" ]]; then
     run_env+=(HWSW_CSV_DIR="$CSV_DIR_ENV")
+  fi
+  if [[ -n "$RUN_TAG_ENV" ]]; then
+    run_env+=(HWSW_RUN_TAG="$RUN_TAG_ENV")
   fi
 
   if [[ ${#run_env[@]} -gt 0 ]]; then

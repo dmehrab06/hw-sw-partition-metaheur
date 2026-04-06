@@ -1,2 +1,0 @@
-graph_name,family,nodes,area_constraint,method,mean_makespan,median_makespan,min_makespan,max_makespan,p10_makespan,p90_makespan,mean_dag_makespan,num_runs,num_invalid_runs,num_repaired_runs,mean_over_dag,validity_note_summary
-paper_fig3_11node,custom,11,0.5,random,31.0,31.0,30.0,32.0,30.2,31.8,31.0,2,0,0,1.0,Valid solution; no area repair needed.

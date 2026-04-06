@@ -68,12 +68,12 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "device": "gpu",
     "hidden_dim": 256,
     "num_layers": 3,
-    "dropout": 0.2,
+    "dropout": 0.5,
     "model": "default",
     "speed_patch": True,
     "hard_eval_every": 100,
     "hard_eval_only_final": True,
-    "checkpoint_eval_when_final_only": True,
+    "checkpoint_eval_when_final_only": False,
     "fast_mode": True,
     "feature_profile": "default_plus_paper",
     "edge_weight_mode": "paper2_cosine",
@@ -81,7 +81,7 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "edge_mlp_hidden_dim": 16,
     "edge_weight_min_scale": 0.5,
     "edge_weight_max_scale": 1.5,
-    "sinkhorn_iters": 12,
+    "sinkhorn_iters": 8,
     "order_refine_steps": 2,
     "use_hw_ordering": False,
     "gumbel_noise": False,
@@ -98,13 +98,17 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "selection_metric_train": "queue",
     "selection_metric_final": "queue",
     "final_legacy_lp_if_mip": True,
+    "early_stop_enabled": True,
+    "early_stop_min_epochs": 250,
+    "early_stop_patience": 5,
+    "early_stop_min_delta": 1e-4,
 }
 
 _MKSPAN_POSTPROCESS_DEFAULTS = {
     "mode": "hybrid",
     "during_train": False,
     "eval_mode": "lssp",
-    "max_iters": 120,
+    "max_iters": 24,
     "adaptive_max_iters": False,
     "adaptive_large_n": 128,
     "adaptive_large_cap": 10,
@@ -131,22 +135,27 @@ _FAST_MODE_DEFAULTS = {
     "verbose": 500,
     "hidden_dim": 256,
     "num_layers": 3,
-    "dropout": 0.2,
+    "dropout": 0.5,
     "feature_profile": "default_plus_paper",
     "edge_weight_mode": "paper2_cosine",
     "edge_weight_learner": "mlp",
     "edge_mlp_hidden_dim": 16,
     "edge_weight_min_scale": 0.5,
     "edge_weight_max_scale": 1.5,
-    "sinkhorn_iters": 12,
+    "sinkhorn_iters": 8,
     "order_refine_steps": 2,
     "use_hw_ordering": False,
     "hard_eval_only_final": True,
+    "checkpoint_eval_when_final_only": False,
     "gumbel_noise": False,
     "gumbel_scale": 0.0,
     "pairwise_mode": "rank_sigmoid",
     "pairwise_temp": 0.35,
     "order_decode_weight": 0.45,
+    "early_stop_enabled": True,
+    "early_stop_min_epochs": 250,
+    "early_stop_patience": 5,
+    "early_stop_min_delta": 1e-4,
 }
 
 
@@ -622,6 +631,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 5)))
     hard_eval_only_final = bool(config.get("hard_eval_only_final", True))
     checkpoint_eval_when_final_only = bool(config.get("checkpoint_eval_when_final_only", True))
+    early_stop_enabled = bool(config.get("early_stop_enabled", True))
+    early_stop_min_epochs = max(1, min(int(config.get("early_stop_min_epochs", 250)), epochs))
+    early_stop_patience = max(0, int(config.get("early_stop_patience", 5)))
+    early_stop_min_delta = max(0.0, float(config.get("early_stop_min_delta", 1e-4)))
     selection_metric_train = str(config.get("selection_metric_train", config.get("selection_metric", "queue"))).lower()
     selection_metric_final = str(config.get("selection_metric_final", selection_metric_train)).lower()
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
@@ -725,6 +738,13 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         str(hard_eval_only_final),
         str(checkpoint_eval_when_final_only),
     )
+    logger.info(
+        "DiffGNNOrder early stop: enabled=%s min_epochs=%d patience=%d min_delta=%.2e",
+        str(early_stop_enabled),
+        early_stop_min_epochs,
+        early_stop_patience,
+        early_stop_min_delta,
+    )
     edge_weight_learner = str(
         config.get(
             "edge_weight_learner",
@@ -776,6 +796,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     best_assign = None
     best_probs = None
     best_sw_priority_scores = None
+    best_loss_value = float("inf")
+    best_loss_epoch = 0
+    stagnant_epochs = 0
+    completed_epochs = 0
 
     tau = tau_start
     order_tau = order_tau_start
@@ -784,6 +808,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     paper_hgp = getattr(data, "paper_hgp", None)
 
     for ep in range(1, epochs + 1):
+        completed_epochs = ep
         model.train()
         optimizer.zero_grad()
 
@@ -850,6 +875,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
 
         loss.backward()
         optimizer.step()
+
+        current_loss_value = float(info["loss"])
+        if current_loss_value < (best_loss_value - early_stop_min_delta):
+            best_loss_value = current_loss_value
+            best_loss_epoch = ep
+            stagnant_epochs = 0
+        else:
+            stagnant_epochs += 1
 
         tau = max(tau_final, tau_start - (ep / max(1, epochs)) * (tau_start - tau_final))
         order_tau = max(order_tau_final, order_tau_start - (ep / max(1, epochs)) * (order_tau_start - order_tau_final))
@@ -969,7 +1002,19 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 best_sched_cost,
             )
 
-    logger.info("DiffGNNOrder final decode started.")
+        if early_stop_enabled and ep >= early_stop_min_epochs and stagnant_epochs >= early_stop_patience:
+            logger.info(
+                "DiffGNNOrder early stop triggered at epoch %d/%d: best_loss=%.6f at epoch %d, no improvement above min_delta=%.2e for %d epochs.",
+                ep,
+                epochs,
+                best_loss_value,
+                best_loss_epoch,
+                early_stop_min_delta,
+                stagnant_epochs,
+            )
+            break
+
+    logger.info("DiffGNNOrder final decode started after %d/%d training epochs.", completed_epochs, epochs)
     model.eval()
     with torch.no_grad():
         logits2, prio_hw, prio_sw = model(
@@ -1123,7 +1168,9 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         logger.info("DiffGNNOrder final metric eval elapsed: %.3fs", time.perf_counter() - metric_t0)
 
     logger.info(
-        "DiffGNNOrder training finished. Best %s makespan: %.6f; selected assignment %s makespan: %.6f",
+        "DiffGNNOrder training finished after %d/%d epochs. Best %s makespan: %.6f; selected assignment %s makespan: %.6f",
+        completed_epochs,
+        epochs,
         selection_metric_train,
         best_sched_cost,
         selection_metric_final,

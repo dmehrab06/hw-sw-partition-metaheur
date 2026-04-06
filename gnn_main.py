@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import random
 import warnings
+import csv
 from datetime import datetime
 import os
 from pathlib import Path
@@ -36,8 +37,70 @@ except Exception:
 def _greedy_adapter(dim, func_to_optimize, config, task_graph=None, **kwargs):
     if task_graph is None:
         raise ValueError("Greedy adapter requires task_graph")
-    best_cost, solution = task_graph.greedy_heur()
+    _, solution = task_graph.greedy_heur()
+    assignment = np.array(
+        [float(solution[node]) for node in task_graph.graph.nodes()],
+        dtype=float,
+    )
+    best_cost = float(func_to_optimize(assignment))
     return best_cost, solution
+
+
+def _resolve_effective_search_objective(config, method_name):
+    """Use a fast DAG-style surrogate during search for all non-order methods."""
+    requested = str(config.get("opt-cost-type", "partition")).strip().lower()
+    if requested not in {"partition", "makespan", "mip"}:
+        return requested
+    if requested == "partition":
+        return requested
+    if str(method_name).lower() == "diff_gnn_order":
+        return requested
+    # Final reporting still uses LSSP, but the search loop should use the fast DAG path.
+    return "mip"
+
+
+def _describe_objective_mode(mode):
+    if mode == "partition":
+        return "partition-cost"
+    if mode == "mip":
+        return "fast-dag"
+    if mode == "makespan":
+        return "queue-makespan"
+    return str(mode)
+
+
+def _select_optimization_callable(task_graph, method_name, objective_mode):
+    if method_name == "non_diffgnn":
+        return (
+            task_graph.optimize_gcomopt_makespan
+            if objective_mode == "makespan"
+            else task_graph.optimize_gcomopt_makespan_mip
+            if objective_mode == "mip"
+            else task_graph.optimize_gcomopt
+        )
+    if method_name == "pso":
+        return (
+            task_graph.optimize_swarm_makespan
+            if objective_mode == "makespan"
+            else task_graph.optimize_swarm_makespan_mip
+            if objective_mode == "mip"
+            else task_graph.optimize_swarm
+        )
+    if method_name in ["random", "dbpso"]:
+        return (
+            task_graph.optimize_random_makespan
+            if objective_mode == "makespan"
+            else task_graph.optimize_random_makespan_mip
+            if objective_mode == "mip"
+            else task_graph.optimize_random
+        )
+    return (
+        task_graph.optimize_single_point_makespan
+        if objective_mode == "makespan"
+        else task_graph.optimize_single_point_makespan_mip
+        if objective_mode == "mip"
+        else task_graph.optimize_single_point
+    )
 
 AVAILABLE_METHODS = {
     'random': random_assignment,
@@ -212,6 +275,7 @@ def save_partition(args, solution, method='random'):
     assert isinstance(solution, dict), "The object is not of type 'dict'"
 
     graph_name = Path(args['graph-file']).stem
+    run_tag = os.getenv("HWSW_RUN_TAG", "").strip()
     
     filename = (f"taskgraph-{graph_name}_"
                f"area-{args['area-constraint']:.2f}_"
@@ -220,6 +284,8 @@ def save_partition(args, solution, method='random'):
                f"comm-{args['comm-scale-factor']:.2f}_"
                f"seed-{args['seed']}_"
                f"assignment-{method}.pkl")
+    if run_tag:
+        filename = filename.replace(".pkl", f"__run-{run_tag}.pkl")
 
     os.makedirs(args['solution-dir'], exist_ok=True)
     with open(f"{args['solution-dir']}/{filename}", "wb") as file:
@@ -234,6 +300,7 @@ def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
     # Base result data
     base_data = {
         'SimTime': formatted_time,
+        'RunTag': os.getenv("HWSW_RUN_TAG", ""),
         'Config': config_base,
         'GraphName': config['graph-file'],
         'N': N,
@@ -297,15 +364,29 @@ def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
     # If a CSV already exists, align this row to the existing header columns so values
     # land in the appropriate column positions. Any new columns are appended.
     if os.path.exists(file_path):
-        try:
-            existing_cols = pd.read_csv(file_path, nrows=0).columns.tolist()
-        except Exception:
-            # Fallback: if header can't be read, just append with current header
-            result_df.to_csv(file_path, mode='a', index=False, header=False)
+        with open(file_path, newline="") as handle:
+            reader = csv.reader(handle)
+            rows = list(reader)
+
+        if not rows:
+            result_df.to_csv(file_path, mode='w', index=False, header=True)
         else:
+            existing_cols = list(rows[0])
             ordered_cols = existing_cols + [c for c in result_df.columns if c not in existing_cols]
-            result_df_reordered = result_df.reindex(columns=ordered_cols)
-            result_df_reordered.to_csv(file_path, mode='a', index=False, header=False)
+
+            row_dicts = []
+            for raw in rows[1:]:
+                padded = list(raw) + [""] * max(0, len(ordered_cols) - len(raw))
+                row_dicts.append(dict(zip(ordered_cols, padded[:len(ordered_cols)])))
+
+            if len(ordered_cols) != len(existing_cols):
+                existing_df = pd.DataFrame(row_dicts, columns=ordered_cols)
+                result_df_reordered = result_df.reindex(columns=ordered_cols)
+                combined_df = pd.concat([existing_df, result_df_reordered], ignore_index=True)
+                combined_df.to_csv(file_path, mode='w', index=False, header=True)
+            else:
+                result_df_reordered = result_df.reindex(columns=ordered_cols)
+                result_df_reordered.to_csv(file_path, mode='a', index=False, header=False)
     else:
         # New file: write header
         result_df.to_csv(file_path, mode='a', index=False, header=True)
@@ -372,32 +453,27 @@ def main():
             logger.info('='*50)
             logger.info(f'STARTING {method_name.upper()} OPTIMIZATION')
             logger.info('='*50)
-            
-            if method_name == 'non_diffgnn':
-                func_to_optimize = (
-                    TG.optimize_gcomopt_makespan
-                    if config['opt-cost-type'] == 'makespan'
-                    else TG.optimize_gcomopt_makespan_mip
-                    if config['opt-cost-type'] == 'mip'
-                    else TG.optimize_gcomopt
-                )
+            requested_objective = str(config.get('opt-cost-type', 'partition')).strip().lower()
+            effective_objective = _resolve_effective_search_objective(config, method_name)
+            func_to_optimize = _select_optimization_callable(TG, method_name, effective_objective)
 
-                print(f"func_to_optimize is {getattr(func_to_optimize,'__name__','didntgetaname')}")
-
-            elif method_name == 'pso':
-                func_to_optimize = (TG.optimize_swarm_makespan if config['opt-cost-type']=='makespan' 
-                                    else (TG.optimize_swarm_makespan_mip if config['opt-cost-type']=='mip' else TG.optimize_swarm))
-            elif method_name in ['random','dbpso']:
-                func_to_optimize = (TG.optimize_random_makespan if config['opt-cost-type']=='makespan' 
-                                   else (TG.optimize_random_makespan_mip if config['opt-cost-type']=='mip' else TG.optimize_random))
-            else:
-                func_to_optimize = (TG.optimize_single_point_makespan if config['opt-cost-type']=='makespan' 
-                                    else (TG.optimize_single_point_makespan_mip if config['opt-cost-type']=='mip' else TG.optimize_single_point))
-
-            logger.info(f"{method_name.upper()} will optimize function {getattr(func_to_optimize,'__name__','didntgetaname')} as black box")
+            logger.info(
+                "%s search objective requested=%s (%s), effective=%s (%s), black-box=%s",
+                method_name.upper(),
+                requested_objective,
+                _describe_objective_mode(requested_objective),
+                effective_objective,
+                _describe_objective_mode(effective_objective),
+                getattr(func_to_optimize, '__name__', 'didntgetaname'),
+            )
             
             result = registry.run_method(
-                method_name, N, func_to_optimize, config, TG, naive_opt_func_name = config['opt-cost-type']
+                method_name,
+                N,
+                func_to_optimize,
+                config,
+                TG,
+                naive_opt_func_name=effective_objective,
             )
             
             logger.info(f"{method_name.upper()} Result: {result.best_optimization_cost:.4f}")

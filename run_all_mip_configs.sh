@@ -42,6 +42,7 @@ MIP_VERBOSE="${MIP_VERBOSE:-false}"
 # 0 disables external timeout.
 RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-120}"
 TIMEOUT_KILL_AFTER_SEC="${TIMEOUT_KILL_AFTER_SEC:-15}"
+RUN_TAG_ENV="${HWSW_RUN_TAG:-${RUN_TAG:-}}"
 
 cd "$ROOT"
 
@@ -57,12 +58,19 @@ echo "MIP evaluator: $(basename "$MIP_EVAL_ENTRY")"
 if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
   echo "Fast MIP settings: mode=$MIP_SOLVE_MODE, sw=$MIP_SW_CONSTRAINT_MODE, tlimit=${MIP_TIME_LIMIT_SEC}s, gap=$MIP_GAP, nodes=$MIP_NODE_LIMIT"
 fi
+if [[ -n "$RUN_TAG_ENV" ]]; then
+  echo "Run tag: $RUN_TAG_ENV"
+fi
 
 batch_start_sec=$SECONDS
 
 for config in "${CONFIGS[@]}"; do
   config_base="$(basename "$config" .yaml)"
-  log_file="$OUTDIR/mip_eval_${config_base}.log"
+  if [[ -n "$RUN_TAG_ENV" ]]; then
+    log_file="$OUTDIR/mip_eval_${config_base}__run-${RUN_TAG_ENV}.log"
+  else
+    log_file="$OUTDIR/mip_eval_${config_base}.log"
+  fi
   tmp_cfg=""
   run_config="$config"
   config_start_sec=$SECONDS
@@ -174,11 +182,21 @@ PY
   out_csv="$OUTDIR/mip_${result_prefix}-result-summary-soda-graphs-config.csv"
   config_elapsed_sec=$((SECONDS - config_start_sec))
 
+  if [[ -n "$RUN_TAG_ENV" && -f "$partition_pkl" ]]; then
+    versioned_partition="${partition_pkl%.pkl}__run-${RUN_TAG_ENV}.pkl"
+    cp -f "$partition_pkl" "$versioned_partition"
+    meta_src="${partition_pkl%.pkl}.meta.json"
+    if [[ -f "$meta_src" ]]; then
+      cp -f "$meta_src" "${versioned_partition%.pkl}.meta.json"
+    fi
+  fi
+
   "$PYTHON" - <<'PY' "$config" "$partition_pkl" "$out_csv" "$config_elapsed_sec"
 import os
 import pickle
 import sys
 import json
+import csv
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -327,6 +345,7 @@ else:
 
 base_data = {
     'SimTime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+    'RunTag': os.getenv('HWSW_RUN_TAG', ''),
     'Config': config_path.stem,
     'GraphName': cfg['graph-file'],
     'N': len(graph.nodes()),
@@ -361,10 +380,28 @@ out_csv.parent.mkdir(parents=True, exist_ok=True)
 result_df = pd.DataFrame([row])
 
 if out_csv.exists():
-    existing_cols = pd.read_csv(out_csv, nrows=0).columns.tolist()
-    ordered_cols = existing_cols + [c for c in result_df.columns if c not in existing_cols]
-    result_df = result_df.reindex(columns=ordered_cols)
-    result_df.to_csv(out_csv, mode='a', index=False, header=False)
+    with out_csv.open(newline='') as handle:
+        rows = list(csv.reader(handle))
+
+    if not rows:
+        result_df.to_csv(out_csv, mode='w', index=False, header=True)
+    else:
+        existing_cols = list(rows[0])
+        ordered_cols = existing_cols + [c for c in result_df.columns if c not in existing_cols]
+
+        row_dicts = []
+        for raw in rows[1:]:
+            padded = list(raw) + [""] * max(0, len(ordered_cols) - len(raw))
+            row_dicts.append(dict(zip(ordered_cols, padded[:len(ordered_cols)])))
+
+        if len(ordered_cols) != len(existing_cols):
+            existing_df = pd.DataFrame(row_dicts, columns=ordered_cols)
+            result_df = result_df.reindex(columns=ordered_cols)
+            combined_df = pd.concat([existing_df, result_df], ignore_index=True)
+            combined_df.to_csv(out_csv, mode='w', index=False, header=True)
+        else:
+            result_df = result_df.reindex(columns=ordered_cols)
+            result_df.to_csv(out_csv, mode='a', index=False, header=False)
 else:
     result_df.to_csv(out_csv, mode='a', index=False, header=True)
 PY
