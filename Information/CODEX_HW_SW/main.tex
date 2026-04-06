@@ -1,27 +1,46 @@
-% Draft scaffold generated from repository inspection.
-% Rewrite the prose, update all claims, and rerun experiments before any external use.
 \documentclass[10pt,twocolumn]{article}
 
 \usepackage[margin=0.75in]{geometry}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
-\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{amsmath,amssymb,amsfonts,bm}
 \usepackage{booktabs}
-\usepackage{graphicx}
 \usepackage{array}
-\usepackage{xcolor}
+\usepackage{tabularx}
+\usepackage{graphicx}
+\usepackage{xspace}
 \usepackage[hidelinks]{hyperref}
 
 \setlength{\columnsep}{0.24in}
-\setlength{\parskip}{0.3em}
+\setlength{\parskip}{0.25em}
 \setlength{\parindent}{1em}
 \sloppy
 
-\title{Differentiable Graph Neural Hardware/Software Partitioning\\with Order-Aware Scheduling}
-\author{Author Name \\
-Affiliation \\
-\texttt{email@example.com}}
-\date{Draft scaffold, March 2026}
+\newcommand{\gG}{\mathcal{G}}
+\newcommand{\gV}{\mathcal{V}}
+\newcommand{\gE}{\mathcal{E}}
+\newcommand{\Pred}{\mathrm{Pred}}
+\newcommand{\Sink}{\mathrm{Sink}}
+\newcommand{\Sched}{\mathrm{Sched}}
+\newcommand{\SMax}{\mathrm{SMax}}
+\newcommand{\diffgnn}{\texttt{Diff-GNN}\xspace}
+\newcommand{\diffgnnorder}{\texttt{Diff-GNN-Order}\xspace}
+\newcommand{\gcps}{\texttt{GCPS}\xspace}
+\newcommand{\gnn}{\texttt{GNN}\xspace}
+\newcommand{\gcn}{\texttt{GCN}\xspace}
+\newcommand{\mlp}{\texttt{MLP}\xspace}
+\newcommand{\vp}{\bm{p}}
+\newcommand{\vpi}{\bm{\pi}}
+\newcommand{\vs}{\bm{s}}
+\newcommand{\vf}{\bm{f}}
+\newcommand{\ve}{\bm{e}}
+\newcommand{\mP}{\bm{P}}
+\newcommand{\mB}{\bm{B}}
+\newcommand{\mR}{\bm{R}}
+
+\title{Diff-GNN-Order for Scheduling-Aware Hardware/Software Partitioning}
+\author{Anonymous Authors}
+\date{April 2026}
 
 \begin{document}
 \maketitle

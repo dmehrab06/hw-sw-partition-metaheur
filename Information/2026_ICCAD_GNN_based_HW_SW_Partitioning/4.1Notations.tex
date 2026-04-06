@@ -1,0 +1,30 @@
+\noindent \textbf{Notations:} Table~\ref{tab:Notation} summarizes the main notations used in this paper.
+
+\begin{table}[!htbp]
+\caption{Main notations.}
+\label{tab:Notation}
+\centering
+\resizebox{1.0\linewidth}{!}{
+\begin{tabular}{l l l}
+\toprule
+$\gG(\gV,\gE)$ & $\triangleq$ & Task graph \\
+$(j,i)$ & $\triangleq$ & Dependency edge $j \rightarrow i$ \\
+$t_i^{sw},\,t_i^{hw}$ & $\triangleq$ & SW/HW execution costs \\
+$A_i,\,A_{\max}$ & $\triangleq$ & Node area and area budget \\
+$C_{ji}$ & $\triangleq$ & Communication cost on $(j,i)$ \\
+
+$\vp,\tilde{\vp},\hat{\vp}$ & $\triangleq$ & Discrete, relaxed, and decoded placements \\
+$p_i,\tilde{p}_i,\hat{p}_i$ & $\triangleq$ & Corresponding node assignments \\
+$\pi^{sw},\,\tilde{\vpi}^{sw}$ & $\triangleq$ & Discrete and relaxed software order \\
+$\pi_{\mathrm{learn}}^{sw},\,\pi_{\mathrm{static}}^{sw}$ & $\triangleq$ & Learned and static software orders \\
+
+$\vs,\vf$ & $\triangleq$ & Discrete start and finish times \\
+$\tilde{\vs},\tilde{\vf}$ & $\triangleq$ & Relaxed start and finish times \\
+$M(\vp,\pi^{sw})$ & $\triangleq$ & Discrete makespan \\
+$\widetilde{M}(\tilde{\vp},\tilde{\vpi}^{sw})$ & $\triangleq$ & Relaxed makespan \\
+$\tilde{t}_i(\tilde{\vp}),\,\tilde{c}_{ji}(\tilde{\vp})$ & $\triangleq$ & Relaxed execution and communication \\
+$\mathrm{SMax}_{\beta}(\cdot)$ & $\triangleq$ & Smooth maximum \\
+\bottomrule
+\end{tabular}
+}
+\end{table}

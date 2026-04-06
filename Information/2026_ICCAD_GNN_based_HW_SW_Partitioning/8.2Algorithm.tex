@@ -1,0 +1,83 @@
+\pagebreak
+\section{Pseudocode}
+
+\begin{algorithm}[!htbp]
+\caption{Training of \diffgnn}
+\label{alg:diffgnn_trainingapp}
+\KwIn{Task graph $\gG=(\gV,\gE)$, epochs $T$, area budget $A_{\max}$}
+\KwIn{Area penalty weight $\lambda_a$, ordering temperature $\tau_o$, smooth-max parameter $\beta$}
+Initialize model parameters $\theta$\;
+
+\For{$t=1,\dots,T$}{
+    Construct node and edge features $\mF,\mE$\;
+    Predict relaxed placement and ordering scores
+    $\vp,\vq^{sw} \gets \mathrm{GNN}_{\theta}(\gG,\mF,\mE)$,
+    where $\vp\in[0,1]^n$ and $\vq^{sw}\in\mathbb{R}^n$\;
+
+    Convert ordering scores to a soft resource-order matrix\;
+    $\mP^{sw}\gets \mathrm{Sinkhorn}(\vq^{sw}/\tau_o)$\;
+    $\mB^{sw}\gets \mathrm{BeforeMatrix}(\mP^{sw})$\;
+    $\forall (j,i)\in\gV\times\gV:\;
+    B^{res}_{j,i}\gets B^{sw}_{j,i}(1-p_j)(1-p_i)$\;
+
+    Compute soft execution and communication costs\;
+    $\forall i\in\gV:\;
+    \tilde{t}_i \gets p_i t_i^{hw} + (1-p_i)t_i^{sw}$\;
+    $\forall (j,i)\in\gE:\;
+    \tilde{c}_{ji} \gets |p_j-p_i|\,c_{ji}$\;
+
+    Process nodes in topological order\;
+    \ForEach{$i\in\gV$}{
+        $R_{\mathrm{dag}}(i)\gets
+        \mathrm{SMax}_{\beta}\!\Big(\{0\}\cup\{f_j+\tilde{c}_{ji}: j\in\mathrm{pred}(i)\}\Big)$\;
+
+        $R_{\mathrm{res}}(i)\gets
+        \mathrm{SMax}_{\beta}\!\Big(\{0\}\cup\{f_j+\alpha\log(B^{res}_{j,i}+\varepsilon): j\neq i\}\Big)$\;
+
+        $s_i \gets \mathrm{SMax}_{\beta}\!\big(R_{\mathrm{dag}}(i), R_{\mathrm{res}}(i)\big)$\;
+        $f_i \gets s_i+\tilde{t}_i$\;
+    }
+
+    $L_{\mathrm{soft\mbox{-}makespan}}
+    \gets
+    \mathrm{SMax}_{\beta}\!\big(\{f_i:i\in\gV_{\mathrm{sink}}\}\big)$\;
+
+    $L_{\mathrm{exec}} \gets \sum_{i\in\gV}\tilde{t}_i$\;
+    $L_{\mathrm{comm}} \gets \sum_{(j,i)\in\gE}\tilde{c}_{ji}$\;
+    $L_{\mathrm{area}}
+    \gets
+    \left[\max\!\left(0,\sum_{i\in\gV}p_iA_i-A_{\max}\right)\right]^2$\;
+
+    $L \gets L_{\mathrm{makespan}} + L_{\mathrm{exec}} + L_{\mathrm{comm}} + \lambda_a L_{\mathrm{area}}+ L_\mathrm{reg}$\;
+
+    Update $\theta$ via backpropagation\;
+}
+\end{algorithm}
+
+\begin{algorithm}[!htbp]
+\caption{Decoding and Refinement}
+\label{alg:diffgnn_inferenceapp}
+\KwIn{Graph $\gG$, trained model, area budget $A_{\max}$, thresholds $\mathcal{T}$}
+\KwOut{Best partition $\vx^\star$}
+
+Compute $\vp$, $\vq^{sw}$\;
+
+Initialize $\vx^\star \gets \emptyset$, $M^\star \gets +\infty$\;
+
+\For{$\tau_d \in \mathcal{T}$}{
+    Decode $\vx$: $x_i = \mathbb{I}[p_i \ge \tau_d]$\;
+
+    \While{$\sum_i x_i A_i > A_{\max}$}{
+        Move a hardware node to software\;
+    }
+
+    Refine/improve $\vx$ (local search)\;    
+    Compute makespan $M(\vx)$ using LSSP\;
+
+    \If{$M(\vx) < M^\star$}{
+        $\vx^\star \gets \vx$, \quad $M^\star \gets M(\vx)$\;
+    }
+}
+
+\Return{$\vx^\star$}\;
+\end{algorithm}

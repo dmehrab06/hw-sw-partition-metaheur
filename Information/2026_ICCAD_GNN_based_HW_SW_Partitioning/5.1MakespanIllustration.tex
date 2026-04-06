@@ -1,0 +1,194 @@
+
+\begin{figure*}[t]
+\centering
+\setlength{\tabcolsep}{2.2pt}
+\renewcommand{\arraystretch}{1.0}
+\begin{adjustbox}{width=\textwidth,center}
+\begin{tikzpicture}[
+    >=Latex,
+    font=\scriptsize,
+    box/.style={draw=black!55, rounded corners=1pt, fill=gray!5, inner sep=2.2pt, align=center},
+    arr/.style={-{Latex[length=1.8mm]}, very thick, draw=orange!85!black}
+]
+
+% =========================================================
+% 1) GRAPH + INPUTS
+% =========================================================
+\node[anchor=north west] (graphbox) at (0,0) {%
+\begin{minipage}{0.20\textwidth}
+\centering
+\begin{tikzpicture}[scale=0.68, every node/.style={font=\scriptsize}]
+\node[circle,draw,fill=orange!85!yellow,inner sep=1.6pt,label=above:{A $(8,5,2)$}] (A) at (0,1.8) {};
+\node[circle,draw,fill=orange!85!yellow,inner sep=1.6pt,label=above:{B $(3,1,3)$}] (B) at (1.9,1.8) {};
+\node[circle,draw,fill=orange!85!yellow,inner sep=1.6pt,label=above:{C $(4,4,2)$}] (C) at (3.8,1.8) {};
+\node[circle,draw,fill=black!90,inner sep=1.6pt,label=left:{D $(3,2,1)$}] (D) at (0.95,0.7) {};
+\node[circle,draw,fill=black!90,inner sep=1.6pt,label=right:{E $(6,4,1)$}] (E) at (2.85,0.7) {};
+\node[circle,draw,fill=black!90,inner sep=1.6pt,label=below:{F $(2,1,2)$}] (F) at (1.90,-0.35) {};
+\draw[->,thin] (A)-- node[left] {\scriptsize 2} (D);
+\draw[->,thin] (B)-- node[left] {\scriptsize 2} (D);
+\draw[->,thin] (C)-- node[right] {\scriptsize 2} (E);
+\draw[->,thin] (D)-- node[below] {\scriptsize 0} (F);
+\draw[->,thin] (E)-- node[below] {\scriptsize 0} (F);
+\end{tikzpicture}
+
+\vspace{0.8mm}
+$\tilde{\vp}=[0.05,0.05,0.05,0.95,0.95,0.95]^\top$
+
+$\tilde{\vpi}^{sw}=[0.00,-1.00,1.00,-0.50,-0.75,-0.25]^\top$
+
+Induced SW order: $C \prec A \prec B$
+\end{minipage}
+};
+
+% =========================================================
+% 2) ORDER VECTOR
+% =========================================================
+\node[box, anchor=north west] (qtab) at (4.25,0) {%
+\begin{tabular}{c|c}
+Task & $\tilde{\pi}^{sw}$\\\hline
+A & \textcolor{red}{0.00}\\
+B & \textcolor{red}{-1.00}\\
+C & \textcolor{red}{1.00}\\
+D & -0.50\\
+E & -0.75\\
+F & -0.25
+\end{tabular}
+};
+
+% =========================================================
+% 3) SINKHORN MATRIX
+% =========================================================
+\node[box, anchor=north west] (pmat) at (6.15,0) {%
+\begin{tabular}{c|cccccc}
+$u_a$ & A & B & C & D & E & F\\\hline
+1.0  & 0.181 & 0.002 & \textcolor{red}{0.695} & 0.029 & 0.008 & 0.084\\
+0.6  & \textcolor{red}{0.332} & 0.015 & 0.257 & 0.120 & 0.047 & 0.229\\
+0.2  & 0.271 & 0.060 & 0.043 & 0.218 & 0.128 & 0.280\\
+-0.2 & 0.143 & 0.155 & 0.005 & 0.255 & 0.224 & 0.219\\
+-0.6 & 0.056 & 0.302 & 0.000 & 0.223 & 0.291 & 0.128\\
+-1.0 & 0.017 & \textcolor{red}{0.467} & 0.000 & 0.155 & 0.302 & 0.060
+\end{tabular}
+};
+
+\node[font=\scriptsize] at ($(pmat.south)+(0,-0.28)$)
+{$L_{ai}=-(\tilde{\pi}^{sw}_i-u_a)^2/\tau_o,\quad \mP^{sw}=\mathrm{Sinkhorn}(L)$};
+
+% =========================================================
+% 4) RANK TABLE
+% =========================================================
+\node[box, anchor=north west] (rtab) at (11.10,0) {%
+\begin{tabular}{c|c}
+Task & $\tilde r_i$\\\hline
+A & \textcolor{red}{1.613}\\
+B & \textcolor{red}{4.141}\\
+C & \textcolor{red}{0.357}\\
+D & 2.986\\
+E & 3.649\\
+F & 2.258
+\end{tabular}
+};
+
+\node[font=\scriptsize] at ($(rtab.south)+(0,-0.28)$)
+{$\tilde r_i=\sum_{a=0}^{n-1} a\,\mP^{sw}_{ai}$};
+
+% =========================================================
+% 5) COMBINED GATE + BEFORE BOX
+% =========================================================
+\node[box, anchor=north west] (gbbox) at (13.00,0) {%
+\begin{minipage}{0.23\textwidth}
+\centering
+$\displaystyle
+G^{sw}=(1-\tilde{\vp})(1-\tilde{\vp})^\top=
+\begin{bmatrix}
+0.903\,\mathbf{1}_{3\times3} & 0.048\,\mathbf{1}_{3\times3}\\
+0.048\,\mathbf{1}_{3\times3} & 0.003\,\mathbf{1}_{3\times3}
+\end{bmatrix}
+$
+
+\vspace{0.8mm}
+\begin{tabular}{c|cccccc}
+ & A & B & C & D & E & F\\\hline
+A & 0     & 0.999 & 0.027 & 0.981 & 0.997 & 0.863\\
+B & 0.001 & 0     & 0     & 0.036 & 0.197 & 0.005\\
+C & \textcolor{red}{0.973} & \textcolor{red}{1.000} & 0 & 0.999 & 1.000 & 0.996\\
+D & 0.019 & 0.964 & 0.001 & 0 & 0.869 & 0.111\\
+E & 0.003 & 0.803 & 0 & 0.131 & 0 & 0.018\\
+F & 0.137 & 0.995 & 0.004 & 0.889 & 0.982 & 0
+\end{tabular}
+
+\vspace{0.6mm}
+$\displaystyle B^{sw}_{ji}=\sigma\!\left(\frac{\tilde r_i-\tilde r_j}{\tau_r}\right)$
+\end{minipage}
+};
+
+% =========================================================
+% 6) FINAL RESOURCE MATRIX
+% =========================================================
+\node[box, anchor=north west] (rmat) at (18.00,0) {%
+\begin{tabular}{c|cccccc}
+ & A & B & C & D & E & F\\\hline
+A & 0     & 0.902 & \textcolor{red}{0.024} & 0.047 & 0.047 & 0.041\\
+B & 0.001 & 0     & 0     & 0.002 & 0.009 & 0\\
+C & \textcolor{red}{0.878} & \textcolor{red}{0.902} & 0 & 0.047 & 0.047 & 0.047\\
+D & 0.001 & 0.046 & 0 & 0 & 0.002 & 0\\
+E & 0 & 0.038 & 0 & 0 & 0 & 0\\
+F & 0.006 & 0.047 & 0 & 0.002 & 0.002 & 0
+\end{tabular}
+};
+
+\node[font=\scriptsize] at ($(rmat.south)+(0,-0.28)$)
+{$R^{sw}=B^{sw}\odot G^{sw}$};
+
+\node[font=\scriptsize] at ($(rmat.south)+(0,-0.68)$)
+{Key entries: $R^{sw}_{CA}=0.878,\;R^{sw}_{CB}=0.902,\;R^{sw}_{AB}=0.902$};
+
+% =========================================================
+% 7) MAKESPAN BOX
+% =========================================================
+\node[anchor=north west] (mspan) at (22.65,0) {%
+\begin{minipage}{0.27\textwidth}
+\centering
+\textbf{From $R^{sw}$ to relaxed makespan}
+
+\vspace{0.8mm}
+Using the induced order $C \prec A \prec B$:
+\[
+\tilde f_C=4.00,\quad \tilde f_A=11.85,\quad \tilde f_B=14.75
+\]
+\[
+\tilde s_D=16.55,\ \tilde f_D=18.60,\qquad
+\tilde s_E=5.80,\ \tilde f_E=9.90
+\]
+\[
+\tilde s_F=18.60,\qquad \tilde f_F=19.65
+\]
+\[
+\widetilde{M}(\tilde{\vp},\tilde{\vpi}^{sw})
+=
+\mathrm{SMax}_{\beta}\!\big(\{\tilde f_i:i\in\Sink(\gG)\}\big)
+\approx 19.65
+\]
+
+Alternative order $A \prec B \prec C$:
+\[
+\tilde f_F\approx 21.70
+\]
+Hence the learned ordering reduces the relaxed makespan.
+\end{minipage}
+};
+
+% =========================================================
+% ARROWS
+% =========================================================
+\draw[arr] (graphbox.east) -- (qtab.west);
+\draw[arr] (qtab.east) -- (pmat.west);
+\draw[arr] (pmat.east) -- (rtab.west);
+\draw[arr] (rtab.east) -- (gbbox.west);
+\draw[arr] (gbbox.east) -- (rmat.west);
+\draw[arr] (rmat.east) -- (mspan.west);
+
+\end{tikzpicture}
+\end{adjustbox}
+\caption{Numerical walk-through of the soft scheduler on a 6-node example. The example graph and relaxed inputs are followed by the ordering vector, Sinkhorn soft permutation matrix, expected ranks, gated rank-based precedence structure, effective software-order matrix $R^{sw}$, and the resulting relaxed makespan computation. The highlighted entries show that the example strongly favors the software order $C \prec A \prec B$.}
+\label{fig:soft_scheduler_walkthrough}
+\end{figure*}

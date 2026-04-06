@@ -1,72 +1,53 @@
-\section{Implementation and Reproducibility Notes}
-\subsection{Mapping Paper Concepts to Repository Files}
-Table~\ref{tab:file_map} maps the main paper claims to the concrete implementation files inspected for this draft. Including such a table in an appendix is often useful during paper writing because it prevents the method section from drifting away from the actual code.
+\section{Notation and Pseudocode}
 
+\subsection{Main Notation}
 \begin{table}[h]
 \centering
-\caption{File-to-method mapping used to build this draft.}
-\label{tab:file_map}
+\caption{Main notation used in the paper.}
+\label{tab:notation}
 \small
-\begin{tabular}{p{0.27\columnwidth} p{0.62\columnwidth}}
+\begin{tabular}{ll}
 \toprule
-File & Main role in the draft \\
+Symbol & Meaning \\
 \midrule
-\texttt{diff\_gnn\_utils\_schedule.py} & Baseline differentiable placement model, feature construction, relaxed assignment, decode-and-repair, differentiable local search, and discrete evaluation hooks \\
-\texttt{diff\_gnn\_ordering.py} & Ordered extension with additional priority heads, Sinkhorn permutations, resource-aware loss, and order-aware decode \\
-\texttt{diff\_gnn\_models.py} & Neural architectures for the placement-only and ordered models \\
-\texttt{task\_graph.py} & Task-graph representation, random cost generation, area violation checks, and queue-style makespan evaluation \\
-\texttt{scheduler\_utils.py} & Event-driven, critical-path, shortest-processing-time, and communication-aware scheduling heuristics \\
-\texttt{HW:SW2021.pdf} & Prior GCN-based HW/SW partitioning paper and terminology source \\
-\texttt{2026 HW\_SW draft PDF} & Internal benchmark framing, objective vocabulary, and baseline-method context \\
+$\gG(\gV,\gE)$ & Task graph \\
+$(j,i)$ & Dependency edge from task $j$ to task $i$ \\
+$t_i^{sw}, t_i^{hw}$ & Software and hardware execution costs \\
+$A_i, A_{\max}$ & Node area cost and total hardware-area budget \\
+$C_{ji}$ & Communication cost on edge $(j,i)$ \\
+$\vp, \tilde{\vp}$ & Discrete and relaxed placements \\
+$\pi^{sw}, \tilde{\vpi}^{sw}$ & Discrete and relaxed software orders \\
+$\vs, \vf$ & Discrete start and finish times \\
+$\tilde{\vs}, \tilde{\vf}$ & Relaxed start and finish times \\
+$M_{\mathrm{DAG}}$ & DAG makespan baseline \\
+$M_{\mathrm{static}}$ & Static-priority makespan \\
+$M_{\mathrm{learned}}$ & Learned-priority makespan \\
+$\widetilde{M}(\tilde{\vp},\tilde{\vpi}^{sw})$ & Relaxed makespan surrogate \\
+$\SMax_{\beta}(\cdot)$ & Smooth maximum operator \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Representative Default Hyperparameters}
-The repository contains many configuration options, but a reader only needs a small subset to understand the main method. Table~\ref{tab:defaults} lists the defaults that are most visible in the current differentiable path.
+\subsection{Order-Aware Training and Decode}
+\paragraph{Algorithm 1: Training of \diffgnnorder.}
+\begin{enumerate}
+\item Construct node and edge features for the input task graph $\gG=(\gV,\gE)$.
+\item Run the shared encoder and predict the relaxed placement vector $\tilde{\vp}$ and software-priority vector $\tilde{\vpi}^{sw}$.
+\item Build the soft software permutation $\mP^{sw}$ with Sinkhorn normalization and convert it to the pairwise-before matrix $\mB^{sw}$.
+\item Form the effective software-order matrix $\mR^{sw}$ using Equation~\eqref{eq:effective_sw_order}.
+\item Evaluate the relaxed start and finish times with the differentiable scheduler and compute $\widetilde{M}(\tilde{\vp},\tilde{\vpi}^{sw})$.
+\item Add the area penalty and auxiliary regularizers to obtain $\mathcal{L}_{\mathrm{ord}}$.
+\item Update the model parameters by backpropagation.
+\end{enumerate}
 
-\begin{table}[h]
-\centering
-\caption{Representative default settings exposed in the current code.}
-\label{tab:defaults}
-\small
-\begin{tabular}{p{0.29\columnwidth} p{0.26\columnwidth} p{0.28\columnwidth}}
-\toprule
-Setting & Baseline & Ordered \\
-\midrule
-Hidden dimension & 256 & 256 \\
-GNN layers & 3 & 3 \\
-Dropout & 0.2 & 0.2 \\
-Feature profile & configurable, often hybrid & \texttt{default\_plus\_paper} \\
-Edge weighting & optional, often learned MLP & often learned MLP \\
-Selection metric & queue by default & queue by default \\
-Postprocess mode & hybrid defaults available & hybrid defaults available \\
-Ordering temperature & not used & $1.0 \rightarrow 0.2$ \\
-Sinkhorn iterations & not used & 12 in fast settings \\
-Hardware ordering & not applicable & disabled by default \\
-\bottomrule
-\end{tabular}
-\end{table}
+\paragraph{Algorithm 2: Discrete inference and reporting.}
+\begin{enumerate}
+\item Decode one or more candidate binary partitions from the relaxed placement scores.
+\item Repair area violations and optionally refill unused hardware area.
+\item Apply hybrid LSSP local search to the repaired partition.
+\item Compute the DAG baseline $M_{\mathrm{DAG}}$ and the static-priority makespan $M_{\mathrm{static}}$.
+\item If learned software-priority scores are available, compute $M_{\mathrm{learned}}$ and report $M_{\mathrm{report}}=\min(M_{\mathrm{static}},M_{\mathrm{learned}})$; otherwise report $M_{\mathrm{report}}=M_{\mathrm{static}}$.
+\end{enumerate}
 
-\subsection{Practical Notes for Rewriting}
-When this draft is rewritten manually, the following edits would make the final paper stronger:
-\begin{itemize}
-\item replace the placeholder author block and title with the actual project naming convention;
-\item rerun all experiments with a controlled seed protocol and identical train/eval metrics across methods;
-\item convert the draft's repository-derived tables into clean tables generated directly from the rerun outputs;
-\item explicitly state whether the final version enables hardware ordering or keeps software-only ordering;
-\item add figures showing example schedules, critical paths, or partition visualizations if needed.
-\end{itemize}
-
-One subtle but important point deserves repetition. The current ordered implementation can outperform the baseline even when \texttt{use\_hw\_ordering=False}. In that regime, the benefit comes from the software-order head, the changed loss, and the order-aware decode machinery, not from a fully symmetric ordering model over both lanes. A final paper should make this distinction clear to avoid overstating what was actually evaluated.
-
-\subsection{Suggested Appendix Material for a Final Version}
-If the final manuscript grows into a full paper, the appendix could also contain:
-\begin{itemize}
-\item the exact YAML configuration used for each ablation;
-\item additional per-instance results for the random benchmark set;
-\item sensitivity plots over $k$, $\alpha$, and communication scale;
-\item a complexity discussion comparing one forward-backward pass of \texttt{diff\_gnn} and \texttt{diff\_gnn\_order}.
-\end{itemize}
-
-Those additions are unnecessary for the present scaffold, but this appendix section shows where they would fit naturally.
+\subsection{Synthetic Scaling Generator}
+The new synthetic benchmark generator is implemented in \texttt{figures/synthetic.py} and exposed through \texttt{tools/generate\_squeezenet\_like\_synthetic\_graph.py}. It uses the SqueezeNet-TOSA topology as a template, preserves its topological-layer profile and edge-to-node ratio, and then resamples node and edge costs using the same $(k,l,\mu,\alpha)$ model as the real graphs.

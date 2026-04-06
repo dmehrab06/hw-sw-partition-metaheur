@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import math
 import time
-from typing import Dict, Tuple
+from typing import Any, Dict, Mapping, Sequence, Tuple
 
 import networkx as nx
 from meta_heuristic.partition_schedule_evaluator import compute_static_priorities, evaluate_partition_lssp
@@ -14,10 +16,19 @@ def _raw_edge_comm_time(TG, u: str, v: str) -> float:
     return float(TG.communication_costs.get((u, v), 0.0))
 
 
-def _schedule_detail(TG, partition: Dict[str, int], eval_mode: str) -> Dict:
+def _schedule_detail(
+    TG,
+    partition: Dict[str, int],
+    eval_mode: str,
+    software_priority_scores: Mapping[str, Any] | Sequence[Any] | None = None,
+) -> Dict:
     mode = str(eval_mode).lower()
     if mode == "lssp":
-        return evaluate_partition_lssp(TG, partition)
+        return evaluate_partition_lssp(
+            TG,
+            partition,
+            software_priority_scores=software_priority_scores,
+        )
     return TG.evaluate_makespan(partition)
 
 
@@ -49,6 +60,7 @@ def _rank_local_search_nodes(
     TG,
     partition: Dict[str, int],
     eval_mode: str,
+    software_priority_scores: Mapping[str, Any] | Sequence[Any] | None,
     search_strategy: str,
     candidate_top_k: int,
     critical_slack_frac: float,
@@ -65,7 +77,12 @@ def _rank_local_search_nodes(
             "schedule_makespan": 0.0,
         }
 
-    schedule = _schedule_detail(TG, partition, eval_mode)
+    schedule = _schedule_detail(
+        TG,
+        partition,
+        eval_mode,
+        software_priority_scores=software_priority_scores,
+    )
     makespan = float(schedule.get("makespan", 0.0))
     start_times = schedule.get("start_times", {}) or {}
     pri = compute_static_priorities(TG, partition)
@@ -123,10 +140,22 @@ def _budget(TG) -> float:
     return float(TG.area_constraint) * float(TG.total_area)
 
 
-def _cost(TG, partition: Dict[str, int], eval_mode: str) -> float:
+def _cost(
+    TG,
+    partition: Dict[str, int],
+    eval_mode: str,
+    software_priority_scores: Mapping[str, Any] | Sequence[Any] | None = None,
+) -> float:
     if TG.violates(partition):
         return float(TG.violation_cost)
-    return float(_schedule_detail(TG, partition, eval_mode)["makespan"])
+    return float(
+        _schedule_detail(
+            TG,
+            partition,
+            eval_mode,
+            software_priority_scores=software_priority_scores,
+        )["makespan"]
+    )
 
 
 def _normalize_partition(partition: Dict[str, int]) -> Dict[str, int]:
@@ -146,6 +175,7 @@ def improve_with_lssp_local_search(
     critical_slack_frac: float = 0.05,
     candidate_include_neighbors: bool = True,
     candidate_include_cut_endpoints: bool = True,
+    software_priority_scores: Mapping[str, Any] | Sequence[Any] | None = None,
 ) -> Tuple[Dict[str, int], Dict]:
     """
     Optional post-process:
@@ -174,7 +204,12 @@ def improve_with_lssp_local_search(
     def _cost_count(p: Dict[str, int]) -> float:
         nonlocal eval_calls
         eval_calls += 1
-        return _cost(TG, p, eval_mode)
+        return _cost(
+            TG,
+            p,
+            eval_mode,
+            software_priority_scores=software_priority_scores,
+        )
 
     cur_cost = _cost_count(part)
     improved = False
@@ -230,6 +265,7 @@ def improve_with_lssp_local_search(
             TG,
             part,
             eval_mode=eval_mode,
+            software_priority_scores=software_priority_scores,
             search_strategy=strategy,
             candidate_top_k=int(candidate_top_k),
             critical_slack_frac=float(critical_slack_frac),
@@ -286,6 +322,7 @@ def improve_with_lssp_local_search(
         "candidate_top_k": int(candidate_top_k),
         "critical_slack_frac": float(critical_slack_frac),
         "candidate_builds": int(candidate_builds),
+        "software_priority_used": bool(software_priority_scores is not None),
         "avg_candidate_pool": float(candidate_pool_total / candidate_builds) if candidate_builds > 0 else 0.0,
         "avg_selected_candidates": float(selected_candidate_total / candidate_builds) if candidate_builds > 0 else 0.0,
         "avg_eval_ms": float((elapsed / eval_calls) * 1000.0) if eval_calls > 0 else 0.0,

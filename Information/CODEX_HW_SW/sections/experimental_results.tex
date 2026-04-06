@@ -1,105 +1,218 @@
+\section{Experimental Settings}
+\label{sec:settings}
+
+\subsection{Datasets}
+The real benchmark suite is stored under \texttt{inputs/task\_graph\_topology/soda-benchmark-graphs}. It contains seven TOSA task graphs: three PyTorch-derived graphs (\texttt{mobile\_net\_tosa.dot}, \texttt{rez\_net\_tosa.dot}, and \texttt{squeeze\_net\_tosa.dot}) and four TFLite-derived graphs (\texttt{anomaly\_detection\_tosa.dot}, \texttt{image\_classification\_tosa.dot}, \texttt{keyword\_spotting\_tosa.dot}, and \texttt{visual\_wake\_words\_tosa.dot}). Across these seven real DAGs, the benchmark range spans from 68 nodes and 63 edges up to 830 nodes and 1066 edges. SqueezeNet-TOSA remains the primary neural-network benchmark discussed throughout the paper, with 179 nodes and 234 directed edges. In addition to the SODA suite, we keep the custom sanity-check graph \texttt{inputs/task\_graph\_topology/custom/paper\_fig3\_11node.dot}, which contains 11 nodes and 12 edges and is used for controlled visualizations and ablations.
+
+To study scalability beyond the real benchmarks, we generate SqueezeNet-like synthetic DAGs that preserve the edge-to-node ratio of the SqueezeNet template. In the current setup, we materialize synthetic graphs with $N\in\{11,50,1000,10000\}$ nodes, which produce 14, 65, 1307, and 13073 edges, respectively. Table~\ref{tab:graph_stats} summarizes the seven real SODA graphs together with the four synthetic SqueezeNet-like graphs used for scaling. In the makespan comparison, all non-order-aware baselines are reported by their discrete static-priority makespan $M_{\mathrm{static}}$, whereas \diffgnnorder reports both $M_{\mathrm{learned}}$ and
+\begin{equation}
+M_{\mathrm{report}}=\min(M_{\mathrm{static}},M_{\mathrm{learned}}).
+\end{equation}
+Concrete task-graph instances are created by calling \texttt{TaskGraph.load\_graph\_from\_pydot} on the real topologies or by loading the generated synthetic pickles under \texttt{inputs/task\_graph\_complete/}. The resulting instances are cached under \texttt{inputs/task\_graph\_complete/} using filenames of the form
+\begin{center}
+\texttt{taskgraph-squeeze\_net\_tosa-instance-config-<config>.pkl}.
+\end{center}
+The cached SqueezeNet sweep in the repository spans area ratios $\alpha \in \{0.1,0.3,0.5,0.7,0.9\}$, hardware scale factors $k \in \{0.1,0.3,0.5,0.7,0.9\}$, fixed variance $l=0.5$, fixed communication scale $\mu=1.0$, and multiple random seeds.
+
+\begin{table*}[t]
+\centering
+\caption{Topology statistics for the seven real SODA benchmark graphs and the synthetic SqueezeNet-like suite.}
+\label{tab:graph_stats}
+\small
+\begin{tabular}{llrr}
+\toprule
+Family & Graph & $|\gV|$ & $|\gE|$ \\
+\midrule
+PyTorch-TOSA & \texttt{mobile\_net\_tosa} & 830 & 1066 \\
+PyTorch-TOSA & \texttt{rez\_net\_tosa} & 362 & 457 \\
+PyTorch-TOSA & \texttt{squeeze\_net\_tosa} & 179 & 234 \\
+TFLite-TOSA & \texttt{anomaly\_detection\_tosa} & 68 & 63 \\
+TFLite-TOSA & \texttt{image\_classification\_tosa} & 125 & 144 \\
+TFLite-TOSA & \texttt{keyword\_spotting\_tosa} & 123 & 139 \\
+TFLite-TOSA & \texttt{visual\_wake\_words\_tosa} & 211 & 227 \\
+Synthetic & \texttt{squeezenet\_like\_11} & 11 & 14 \\
+Synthetic & \texttt{squeezenet\_like\_50} & 50 & 65 \\
+Synthetic & \texttt{squeezenet\_like\_1000} & 1000 & 1307 \\
+Synthetic & \texttt{squeezenet\_like\_10000} & 10000 & 13073 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Cost Model}
+We use the cost-assignment mechanism implemented in \texttt{meta\_heuristic/task\_graph.py}. For every node $i$, the software execution cost is sampled as
+\begin{equation}
+t_i^{sw} \sim \mathcal{U}(1,100).
+\end{equation}
+The hardware execution cost is sampled from
+\begin{equation}
+t_i^{hw} = \max\!\left(0.1,\mathcal{N}\big(k \cdot t_i^{sw}, (l \cdot k \cdot t_i^{sw})^2\big)\right),
+\end{equation}
+where $k$ is the hardware scale factor and $l$ is the hardware-cost variance. Hardware area is sampled as
+\begin{equation}
+A_i \sim \mathcal{U}(1,A_{\max}),
+\end{equation}
+and the communication cost on edge $(j,i)$ is sampled as
+\begin{equation}
+C_{ji} \sim \mathcal{U}(0,2\mu s_{\max}),
+\qquad
+s_{\max}=\max_{v\in\gV} t_v^{sw},
+\end{equation}
+where $\mu$ is the communication scale factor. A partition is feasible only if
+\begin{equation}
+\sum_{i\in\gV} p_i A_i \le \alpha \sum_{i\in\gV} A_i.
+\end{equation}
+
+\subsection{Proposed-Method Settings}
+Unless otherwise noted, the reported \diffgnnorder experiments use the order-aware configuration implemented in \texttt{diff\_gnn\_ordering.py}: a three-layer \gcn encoder with hidden dimension 256, dropout 0.2, \texttt{feature\_profile=default\_plus\_paper}, \texttt{edge\_weight\_mode=paper2\_cosine}, \texttt{edge\_weight\_learner=mlp}, 12 Sinkhorn iterations, two order-refinement steps, \texttt{pairwise\_mode=rank\_sigmoid}, pairwise temperature 0.35, no Gumbel noise, and \texttt{use\_hw\_ordering=False}. Training and final selection both use the queue-style differentiable metric, while the final discrete solution is refined with hybrid LSSP post-processing. On the small 11-node graph, we use the corresponding fast profile with hidden dimension 128 and 500 training iterations. The placement-only \diffgnn ablation uses the same encoder and post-processing pipeline but removes the ordering heads.
+
+\subsection{Competing Methods}
+The comparison set is taken directly from \texttt{gnn\_main.py}. It spans simple heuristics, population-based metaheuristics, and prior graph-learning baselines: random assignment and a gain-per-area greedy heuristic as lightweight references; a CVXPY-backed MILP formulation as an exact small-graph reference; PSO and DBPSO as canonical swarm optimizers \cite{kennedy1995particle,kennedy1997discrete}; CLPSO and CCPSO as more advanced particle-swarm variants \cite{liang2006comprehensive,li2011cooperatively}; ESA, SHADE, JADE, and GL25 as representative simulated-annealing, differential-evolution, and genetic-algorithm baselines \cite{siarry1997enhanced,tanabe2013success,zhang2009jade,garcia2008global}; and \gcps as a prior GNN-based HW/SW partitioning approach \cite{zheng2021hardware}. We also include the placement-only \diffgnn model as an ablation to isolate the contribution of the proposed ordering head.
+
+\begin{table*}[t]
+\centering
+\caption{Baseline settings used in the codebase.}
+\label{tab:baseline_parameters}
+\small
+\begin{tabular}{p{0.12\textwidth} p{0.44\textwidth} p{0.34\textwidth}}
+\toprule
+Method & Full form / implementation basis & Settings used in the repository \\
+\midrule
+Random & Uniform random HW/SW assignment & 500 samples, Bernoulli probability $p=0.5$ \\
+Greedy & Gain-per-area hardware selection heuristic & Sort by $(t_i^{sw}-t_i^{hw})/A_i$ and fill hardware greedily \\
+MILP & Mixed-Integer Linear Programming via CVXPY & hybrid solve mode, adjacent SW constraints, reduced SW constraints enabled, round threshold 0.5, preferred solvers \{HIGHS, GUROBI, SCIP, GLPK\_MI, CBC, ECOS\_BB\}, time limit 30 s, MIP gap 0.15, node limit 20{,}000, accept non-optimal solutions \\
+PSO & Particle Swarm Optimization \cite{kennedy1995particle} & $c_1=0.575$, $c_2=0.1$, $w=1.05$, 500 particles, 10 iterations \\
+DBPSO & Discrete Binary Particle Swarm Optimization \cite{kennedy1997discrete} & $c_1=0.575$, $c_2=0.1$, $w=1.05$, neighborhood $k=4$, Minkowski $p=2$, 500 particles, 10 iterations \\
+CLPSO & Comprehensive Learning PSO \cite{liang2006comprehensive} & learning coefficient $c=1$, 500 individuals, 200 evaluations/iterations budget \\
+CCPSO & Cooperative Coevolutionary PSO \cite{li2011cooperatively} & $c=1$, 500 individuals, 200 evaluations/iterations budget, group sizes $\{5,10,20\}$ \\
+ESA & Enhanced Simulated Annealing \cite{siarry1997enhanced} & 1,000 function evaluations \\
+SHADE & Success-History Adaptive Differential Evolution \cite{tanabe2013success} & 2,000 function evaluations, 500 individuals \\
+JADE & Adaptive Differential Evolution with Archive \cite{zhang2009jade} & 2,000 function evaluations, 500 individuals \\
+GL25 & Global-local real-coded GA \cite{garcia2008global} & 2,000 function evaluations, population size 500 \\
+\gcps & Graph-convolution partitioning baseline \cite{zheng2021hardware} & learning rate $10^{-3}$, dropout 0.2, hidden dimensions 10/5, pretrain 100, max epochs 800, schedule skip 5, $\sigma=0.3$, LSSP evaluation \\
+\diffgnn & Placement-only differentiable GNN & Same encoder and post-processing as \diffgnnorder, but no ordering heads \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Evaluation Protocol}
+For every repaired partition, we compute three makespan metrics:
+\begin{equation}
+M_{\mathrm{DAG}}, \qquad M_{\mathrm{static}}, \qquad M_{\mathrm{learned}}.
+\end{equation}
+$M_{\mathrm{DAG}}$ is the baseline DAG makespan. $M_{\mathrm{static}}$ is the makespan obtained by LSSP with static priorities derived from the partition. $M_{\mathrm{learned}}$ is the LSSP makespan obtained by using the learned software-priority scores; it is only available for \diffgnnorder.
+
+The reported metric is
+\begin{equation}
+M_{\mathrm{report}}=
+\begin{cases}
+M_{\mathrm{static}}, & \text{for all non-order-aware methods, including \diffgnn,}\\
+\min(M_{\mathrm{static}},M_{\mathrm{learned}}), & \text{for \diffgnnorder.}
+\end{cases}
+\end{equation}
+We still list $M_{\mathrm{DAG}}$ in every table as a baseline for comparison.
+
+\subsection{Synthetic Scaling Benchmark}
+To study scalability beyond the real TOSA graphs, we add a SqueezeNet-like synthetic generator to the codebase. The generator uses \texttt{squeeze\_net\_tosa.dot} as the structural template, extracts its topological-layer profile and inter-layer edge pattern, and then produces a larger DAG with the same edge-to-node ratio:
+\begin{equation}
+\frac{|\gE_{\mathrm{syn}}|}{|\gV_{\mathrm{syn}}|}
+\approx
+\frac{234}{179}.
+\end{equation}
+For a requested node count $N$, the target edge count is
+\begin{equation}
+E_{\mathrm{syn}} = \mathrm{round}\!\left(\frac{234}{179}N\right).
+\end{equation}
+In this paper, we use $N\in\{11,50,1000,10000\}$. After generating the synthetic topology, node and edge costs are sampled with the same $(k,l,\mu,\alpha)$ cost model as on the real graphs.
+
 \section{Experimental Results}
-This section is intentionally written as a \emph{draft experimental narrative}. The setup description is taken from the internal HW-SW partitioning draft and the repository code, while the numeric evidence comes from result files already present in the workspace. The section therefore demonstrates how the final paper could be structured, but the numbers should be rerun before any real submission.
+\label{sec:results}
+This section reports an initial single-run pilot used to populate the current draft. The full multi-seed campaign is still in progress, so the numbers below should be interpreted as preliminary sanity-check results rather than the final averages of the paper. For these pilot runs, we keep the evaluation protocol fixed, but reduce the per-method runtime budgets so that all baselines can be executed once on the three requested graph families. Following Sec.~\ref{sec:settings}, every non-order-aware method is reported by its static-priority makespan, while \diffgnnorder is reported by
+\begin{equation}
+M_{\mathrm{report}}=\min(M_{\mathrm{static}},M_{\mathrm{learned}}).
+\end{equation}
+We do not include the MILP baseline in the SqueezeNet-TOSA and synthetic pilot comparisons because those graphs are intended to probe the regime where exact optimization is no longer practical.
 
-\subsection{Experimental Setting}
-The internal draft describes task graphs derived from real neural-network models at tensor-operation granularity. The graph topology is taken from those models, while node and edge costs are assigned synthetically. In particular:
-\begin{itemize}
-\item software costs are sampled from a uniform range;
-\item hardware costs are sampled around a scaled software cost using a factor $k$ and variance parameter $l$;
-\item hardware area is sampled independently up to a chosen maximum;
-\item communication costs are sampled relative to the largest software execution time using a scale factor $\mu$.
-\end{itemize}
-This setup is also consistent with \texttt{TaskGraph.load\_graph\_from\_pydot}, which generates software time, hardware time, area, and communication values from a loaded graph topology.
+\subsection{Initial Results on Three Graph Families}
+We prepare an initial comparison on three task graphs: the 11-node paper graph, one SqueezeNet-TOSA instance, and one 50-node synthetic SqueezeNet-like DAG. Table~\ref{tab:pilot_results_three_graphs} reports the pilot \emph{reported} makespan for every competing method. Table~\ref{tab:pilot_ours_metrics} then expands the three metrics used by \diffgnnorder.
 
-For the differentiable GNN methods, the most relevant evaluation metrics are:
-\begin{itemize}
-\item \textbf{Queue makespan}, produced by the repository's queue-style simulator;
-\item \textbf{Legacy LP makespan}, produced by the older scheduling backend;
-\item \textbf{Partition cost}, which is useful for diagnosis but not sufficient by itself.
-\end{itemize}
-The main comparison in this draft is between \texttt{diff\_gnn} and \texttt{diff\_gnn\_order}. Classical methods such as GL25, GCPS, and PSO remain valuable reference points, but the purpose here is to understand what the ordering extension contributes beyond the placement-only differentiable model.
-
-\subsection{Repository-Derived Example on the Eleven-Node Figure-3 Graph}
-The repository contains a small but fully analyzable case study in the file \texttt{fig3\_area18\_paper\_dls\_eval\_summary.csv}. The graph has eleven tasks and an area budget of approximately $18.0$ units. Table~\ref{tab:fig3_eval} shows the recorded results for MIP, the baseline differentiable model, and the ordered variant.
+\begin{table*}[t]
+\centering
+\caption{Initial single-run pilot results on three graph families. All entries are reported makespan values. For every baseline, the entry equals $M_{\mathrm{static}}$; for \diffgnnorder, the entry equals $M_{\mathrm{report}}=\min(M_{\mathrm{static}},M_{\mathrm{learned}})$.}
+\label{tab:pilot_results_three_graphs}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccccccccccccccc}
+\toprule
+Graph & $|\gV|$ & $|\gE|$ & $M_{\mathrm{DAG}}$ & Random & Greedy & \gcps & PSO & DBPSO & CLPSO & CCPSO & ESA & SHADE & JADE & GL25 & \diffgnn & \diffgnnorder \\
+\midrule
+Small-11 & 11 & 12 & 32 & 32 & 32 & 32 & 83 & 29 & 30 & 32 & 30 & 29 & 29 & 29 & 31 & 29 \\
+SqueezeNet-TOSA & 179 & 234 & 8527 & 11910 & 8672 & 10038 & 8672 & 11261 & 10735 & 12874 & 11765 & 12637 & 12299 & 11765 & 9189 & 8704 \\
+Synthetic-50 & 50 & 65 & 703 & 3280 & 2257 & 2067 & 2257 & 2918 & 2831 & 3159 & 2815 & 2953 & 3097 & 2815 & 1490 & 2075 \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}
 
 \begin{table}[t]
 \centering
-\caption{Repository-derived results on the eleven-node demonstration graph.}
-\label{tab:fig3_eval}
+\caption{Detailed metrics for \diffgnnorder in the initial pilot.}
+\label{tab:pilot_ours_metrics}
 \small
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lcccc}
 \toprule
-Method & Mksp. & Part. & Area & Cross & Comm. \\
+Graph & $M_{\mathrm{DAG}}$ & $M_{\mathrm{static}}$ & $M_{\mathrm{learned}}$ & $M_{\mathrm{report}}$ \\
 \midrule
-MIP & 34 & 66 & 18.0 & 6 & 12 \\
-Diff-GNN+Order & 35 & 69 & 15.0 & 6 & 14 \\
-Diff-GNN & 37 & 66 & 16.0 & 5 & 8 \\
+Small-11 & 32 & 31 & 29 & 29 \\
+SqueezeNet-TOSA & 8527 & 8704 & 8877 & 8704 \\
+Synthetic-50 & 703 & 2075 & 2284 & 2075 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-This table gives a useful, nontrivial story. The ordered variant improves queue makespan from $37$ to $35$ relative to the baseline, moving closer to the MIP solution at $34$. However, the improvement does not come from a lower partition cost; in fact the recorded partition cost is slightly higher. This is exactly the kind of result one would expect in a schedule-sensitive partitioning problem. A partition can look worse under a static cost proxy yet produce a better actual schedule because it better matches precedence and resource interactions.
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/initial_pilot_report_heatmap.pdf}
+\caption{Initial pilot heatmap of normalized reported makespan, i.e., $M_{\mathrm{report}}/M_{\mathrm{DAG}}$. Lower is better. The figure makes cross-graph behavior easier to compare because the three graphs have very different absolute schedule lengths.}
+\label{fig:pilot_heatmap}
+\end{figure*}
 
-Another useful observation is that the ordered model does not simply place more nodes in hardware. In this example it uses \emph{less} hardware area than the baseline while improving makespan. That suggests the gain comes from \emph{where} hardware is used and how the resulting partition interacts with the software schedule, not from saturating the available area budget.
+The small 11-node graph already shows the expected value of ordering-aware decoding. The placement-only \diffgnn run reaches $M_{\mathrm{static}}=31$, while \diffgnnorder reduces the learned-priority makespan to $29$, matching the best metaheuristic pilot results (DBPSO, SHADE, JADE, and GL25). On this graph, the learned ordering head is therefore directly responsible for the two-cycle improvement from $31$ to $29$.
 
-\subsection{Mixed Behavior Across Sweep Configurations}
-A stronger paper should also show cases where ordering does \emph{not} help. The repository already contains such evidence in \texttt{fig3\_sweep\_ranked\_2026-02-19.csv}. Two cases are especially informative:
-\begin{itemize}
-\item Under \texttt{config\_fig3\_sweep\_v04\_minimal}, the baseline records queue makespan $39$ while the ordered variant records $35$, indicating a clear benefit from the extra order model.
-\item Under \texttt{config\_fig3\_sweep\_v02\_noreg}, the baseline records queue makespan $35$ while the ordered variant records $37$, indicating a regression.
-\end{itemize}
+The larger pilot results are more mixed. On the single SqueezeNet-TOSA run, Greedy and PSO both obtain the lowest pilot static-priority makespan of $8672$, while \diffgnnorder is close at $8704$. The learned ordering head does not improve this particular run because $M_{\mathrm{learned}}=8877 > M_{\mathrm{static}}=8704$, so the reported result falls back to the static schedule. On the 50-node synthetic graph, the placement-only \diffgnn pilot gives the best reported makespan of $1490$, clearly ahead of the non-learning baselines, whereas \diffgnnorder reaches $2075$. This indicates that the current short-budget order model is not yet tuned for the synthetic regime, and that the final large-scale study should be based on the full training budgets and multi-seed averages rather than the current pilot alone.
 
-The same sweep also shows the runtime cost of the ordered model. For example, under \texttt{v04\_minimal}, the baseline requires about $13.8$s whereas the ordered model requires about $26.8$s. Under \texttt{v08\_order\_strong}, the ordered model takes more than $64$s and still does not beat the best baseline setting. The lesson is that ordering changes both the optimization landscape and the wall-clock budget. A careful final study should therefore report quality and runtime together.
-
-These mixed results are not surprising after inspecting the code. The ordered model introduces extra temperatures, soft permutations, and pairwise-order computations. At the same time, the current default configuration keeps \texttt{use\_hw\_ordering=False}, so only the software-order head is fully active in the loss. The method is therefore best viewed as a partially activated order-aware extension whose benefit depends on graph structure and regularization.
-
-\subsection{Aggregate Comparison on a Fifteen-Instance Random Benchmark}
-The repository also contains an aggregate summary in \texttt{shared\_random\_15\_20260226\_070718\_summary.csv}. Table~\ref{tab:random15} reports the values for the two GNN variants and two older baselines.
+\subsection{Ablation Studies}
+Table~\ref{tab:ablation_main} summarizes the currently available ablation values. The first two rows are filled from the completed small-graph run, which already confirms the benefit of the ordering head. The remaining rows are left as explicit placeholders in this draft and will be populated after the dedicated ablation rerun finishes.
 
 \begin{table}[t]
 \centering
-\caption{Aggregate summary over fifteen random instances from repository outputs.}
-\label{tab:random15}
+\caption{Main ablation table for \diffgnnorder on the Small-11 graph.}
+\label{tab:ablation_main}
 \small
-\begin{tabular}{lrrr}
+\begin{tabular}{lcccc}
 \toprule
-Method & Mean Mksp. & Median Mksp. & Best Cnt. \\
+Variant & $M_{\mathrm{DAG}}$ & $M_{\mathrm{static}}$ & $M_{\mathrm{learned}}$ & $M_{\mathrm{report}}$ \\
 \midrule
-Diff-GNN+Order & 4624.54 & 5210.00 & 13 \\
-Diff-GNN & 4921.82 & 5423.63 & 4 \\
-GL25 & 6653.44 & 5978.47 & 0 \\
-GCPS & 6908.76 & 8369.32 & 0 \\
+\diffgnn without ordering head & 32 & 31 & N/A & 31 \\
+\diffgnnorder with ordering head & 32 & 31 & 29 & 29 \\
+\diffgnnorder without post-processing & 32 & TBD & TBD & TBD \\
+\diffgnnorder without refinement & 32 & TBD & TBD & TBD \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Here the ordered model is more clearly favorable. It improves mean makespan by roughly $6\%$ and median makespan by about $4\%$ relative to the placement-only differentiable model, and it wins thirteen out of fifteen recorded cases. These numbers are not enough for a polished claim because the exact benchmark generation and repetition protocol should still be rerun from scratch. Still, they illustrate how a final paper can argue that the ordering extension is valuable on average even if it is not uniformly dominant on every single small instance.
+\begin{table}[t]
+\centering
+\caption{Edge-weight ablation template for \diffgnnorder on the Small-11 graph.}
+\label{tab:ablation_features}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Setting & $M_{\mathrm{DAG}}$ & $M_{\mathrm{static}}$ & $M_{\mathrm{learned}}$ & $M_{\mathrm{report}}$ \\
+\midrule
+Learned edge weights (\mlp) & 32 & 31 & 29 & 29 \\
+Fixed edge weights & 32 & TBD & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-This aggregate table also suggests a broader narrative. Both differentiable GNN variants outperform older heuristic baselines in the summary, which supports the general premise that graph-based learned surrogates are promising for large combinatorial partitioning spaces. Within that family, the order-aware variant appears to offer a second layer of improvement by modeling schedule structure rather than only placement.
-
-\subsection{Interpretation}
-Taken together, the repository results suggest three defensible conclusions for a final manuscript.
-
-First, schedule-aware partitioning should be evaluated by actual schedule metrics, not by partition cost alone. The eleven-node example already shows a partition-cost/makespan mismatch.
-
-Second, the ordered extension has a meaningful upside. On the aggregate fifteen-instance summary it improves both mean and median makespan, and on at least some small controlled settings it closes part of the gap between the baseline differentiable model and MIP.
-
-Third, ordering is not free. It increases runtime, enlarges the hyperparameter space, and can regress under weak regularization or mismatched settings. This makes an ablation study essential. In a final experimental section, the following tables would be particularly useful:
-\begin{itemize}
-\item with versus without ordering under identical feature and postprocess settings;
-\item with software ordering only versus software+hardware ordering;
-\item queue metric versus legacy LP metric;
-\item no postprocess versus DLS versus DLS+LSSP.
-\end{itemize}
-
-\subsection{Recommended Final Experimental Structure}
-For later manual rewriting, a full version of this section could be organized as follows:
-\begin{enumerate}
-\item \textbf{Setup.} Describe graph sources, the $(k,l,\mu,\alpha)$ cost model, seeds, and train/eval metrics.
-\item \textbf{Method ablations.} Compare \texttt{diff\_gnn} against \texttt{diff\_gnn\_order}, then switch on or off paper features, learned edge weights, DLS, and hardware ordering.
-\item \textbf{Comparisons to baselines.} Add GCPS, GL25, PSO-family methods, and MIP where tractable.
-\item \textbf{Runtime analysis.} Report wall-clock time and memory use.
-\item \textbf{Schedule diagnostics.} Include cross-edge counts, communication delay, area usage, and critical-path behavior for representative graphs.
-\end{enumerate}
-
-That structure is consistent with the repository and with the two reference PDFs. It also gives the user a practical template for rewriting the experiments later in their own wording and with their own rerun data.
+The currently completed ablation rows already show that the ordering head matters: on the Small-11 graph, adding ordering reduces the reported makespan from $31$ to $29$ even when the underlying placement backbone is held fixed. The remaining ablations are kept in the manuscript as ready-to-fill placeholders so that the final version can directly incorporate the dedicated rerun without restructuring the section.

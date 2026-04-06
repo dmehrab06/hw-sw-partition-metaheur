@@ -142,6 +142,36 @@ class PartitionScheduleEvaluatorTest(unittest.TestCase):
         self.assertEqual(result["start_times"]["C"], max(result["finish_times"]["A"], result["finish_times"]["B"]))
         self.assertEqual(result["active_communication_edges"], [])
 
+    def test_lssp_uses_software_priority_scores_when_provided(self):
+        graph = nx.DiGraph()
+        graph.add_nodes_from(["A", "B"])
+        tg = SimpleNamespace(
+            graph=graph,
+            hardware_costs={"A": 1.0, "B": 1.0},
+            software_costs={"A": 5.0, "B": 3.0},
+            hardware_area={"A": 1.0, "B": 1.0},
+            communication_costs={},
+            area_constraint=1.0,
+            total_area=2.0,
+            violation_cost=1e9,
+        )
+        partition = {"A": 0, "B": 0}
+
+        static_result = MODULE.evaluate_partition_lssp(tg, partition, auto_repair=False)
+        guided_result = MODULE.evaluate_partition_lssp(
+            tg,
+            partition,
+            auto_repair=False,
+            software_priority_scores={"A": 0.1, "B": 0.9},
+        )
+
+        self.assertEqual(static_result["start_times"]["A"], 0.0)
+        self.assertEqual(static_result["start_times"]["B"], 5.0)
+        self.assertEqual(guided_result["start_times"]["B"], 0.0)
+        self.assertEqual(guided_result["start_times"]["A"], 3.0)
+        self.assertFalse(static_result["software_priority_used"])
+        self.assertTrue(guided_result["software_priority_used"])
+
     def test_dag_mode_matches_current_compute_dag_makespan(self):
         graph = nx.DiGraph()
         for node, hw_t, sw_t, area in [

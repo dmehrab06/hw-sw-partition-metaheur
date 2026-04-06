@@ -1,0 +1,72 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{subfig}
+\usepackage{placeins}
+
+\newcommand{\zmcomment}[1]{{\color{red}(ZM: #1)}}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{multicol}
+\usepackage{booktabs}
+\usepackage{appendix}
+\usepackage{algorithm}
+% \usepackage{algorithmic}
+\usepackage{algpseudocode}
+\usepackage{float}
+
+\newtheorem{definition}{Definition}
+\newtheorem{problem}{Problem}
+\newtheorem{relaxation}{Relaxation}
+
+\newcommand{\be}{\mathbf{e}}
+\newcommand{\bh}{\mathbf{h}}
+\newcommand{\bs}{\mathbf{s}}
+\newcommand{\bx}{\mathbf{x}}
+
+\newcommand{\bC}{\mathbf{C}}
+\newcommand{\bE}{\mathbf{E}}
+\newcommand{\bH}{\mathbf{H}}
+\newcommand{\bX}{\mathbf{X}}
+
+\newcommand{\cP}{\mathcal{P}}
+
+\newcommand{\ones}{\mathbf{1}}
+\newcommand{\zeros}{\mathbf{0}}
+
+\newcommand{\tr}[1]{\textrm{Tr}\left(#1\right)}
+
+
+\title{HW-SW Partitioning for Graph Neural Network}
+\author{anonymous}
+\date{May 2025}
+
+\begin{document}
+
+\maketitle
+
+\input{1abstract}
+\input{2Introduction}
+\input{3Preliminaries}
+\input{4RelatedWorks}
+\input{5Method}
+\input{6Experiments}
+\input{7Conclusion}
+
+% \input{GNNMethod}
+% \input{GNNExperiment}
+% \input{40-experiment}
+% \input{50-sensitvity}
+% \input{30-formulation}
+
+\FloatBarrier
+\bibliographystyle{acm}
+\bibliography{ref}
+
+\input{8Appendix}
+
+
+\end{document}
+
+

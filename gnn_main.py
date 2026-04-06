@@ -250,7 +250,18 @@ def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
     method_names = list(AVAILABLE_METHODS.keys())
     method_cols = []
     for method in method_names:
-        for suffix in ['opt_cost', 'opt_ratio', 'partition_cost', 'bb', 'makespan', 'time']:
+        for suffix in [
+            'opt_cost',
+            'opt_ratio',
+            'partition_cost',
+            'bb',
+            'makespan',
+            'time',
+            'dag_makespan',
+            'lssp_makespan',
+            'lssp_swprio_makespan',
+            'best_makespan',
+        ]:
             method_cols.append(f"{method}_{suffix}")
 
     # Default empty values for all method columns so they exist in the CSV

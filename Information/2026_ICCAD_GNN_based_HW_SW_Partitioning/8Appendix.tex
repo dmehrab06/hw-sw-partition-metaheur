@@ -1,0 +1,138 @@
+\section{Appendix}
+
+\input{4.1Notations}
+
+% \input{8.1Illustration}
+
+% \input{8.2Algorithm}
+
+
+% \newpage\pagebreak
+
+% \begin{figure*}[!t]
+% \centering
+% \begin{tikzpicture}[
+%     font=\small,
+%     >=Latex,
+%     flow/.style={->, draw=black, line width=0.9pt},
+%     line/.style={draw=black, line width=0.8pt},
+%     thinann/.style={draw=black, line width=0.45pt},
+%     task/.style={circle, draw=black!75, line width=0.7pt, minimum size=4.5mm, inner sep=0pt, fill=white},
+%     tuple/.style={font=\scriptsize, text=black!80},
+%     edgew/.style={font=\scriptsize, inner sep=1pt, fill=white, text=black!80},
+%     gnn/.style={draw=black!75, rounded corners=2.2mm, line width=0.85pt, fill=gray!8,
+%                 minimum width=1.95cm, minimum height=0.88cm, align=center, inner sep=3pt},
+%     box/.style={draw=black!75, line width=0.85pt, fill=gray!8, inner sep=4pt, align=center},
+%     topbrace/.style={decorate, decoration={brace, amplitude=4pt, raise=2pt}, draw=black, line width=0.8pt},
+%     stagebox/.style={draw=black!75, rounded corners=2.2mm, line width=0.9pt, inner sep=6pt}
+% ]
+
+% % =========================================================
+% % Input preparation
+% % =========================================================
+% \node[task] (A) at (0.90,2.90) {A};
+% \node[task] (B) at (1.65,2.90) {B};
+% \node[task] (C) at (2.40,2.90) {C};
+% \node[task] (D) at (1.18,2.05) {D};
+% \node[task] (E) at (2.08,2.05) {E};
+% \node[task] (F) at (1.60,1.18) {F};
+
+% % node tuples relative to nodes
+% \node[tuple, above=3pt of A] {(8, 5, 2)};
+% \node[tuple, above=3pt of B] {(3, 1, 3)};
+% \node[tuple, above=3pt of C] {(4, 4, 2)};
+% \node[tuple, left=3pt of D] {(3, 2, 1)};
+% \node[tuple, right=3pt of E] {(6, 4, 1)};
+% \node[tuple, right=4pt of F] {(2, 1, 2)};
+
+% % DAG edges
+% \draw[flow] (A) -- node[edgew, pos=0.57, left=0.5pt] {2} (D);
+% \draw[flow] (B) -- node[edgew, pos=0.52, right=0.5pt] {2} (D);
+% \draw[flow] (C) -- node[edgew, pos=0.55, right=0.5pt] {2} (E);
+% \draw[flow] (D) -- (F);
+% \draw[flow] (E) -- node[edgew, pos=0.56, right=0.5pt] {1} (F);
+
+% % thin feature pointers
+% \node[font=\scriptsize, text=black!80, anchor=west] (dfeat) at (0.10,0.34)
+% {$(t_D^{\mathrm{sw}},\,t_D^{\mathrm{hw}},\,A_D)$};
+% \draw[thinann] (0.55,0.57) -- (1.00,1.63);
+% \draw[thinann] (0.95,0.57) -- (1.15,1.63);
+% \draw[thinann] (1.35,0.57) -- (1.29,1.63);
+
+% \node[font=\scriptsize, text=black!80, anchor=west] at (2.68,1.16) {$C_{EF}$};
+% \draw[thinann] (2.58,1.16) -- (1.92,1.16);
+
+% % =========================================================
+% % Training: GNN + heads + loss
+% % =========================================================
+% \node[gnn] (gnn) at (4.65,2.05) {$\mathit{GNN}_{\theta}(\gG,\mF,\mE)$};
+
+% % graph -> gnn
+% \draw[flow] (2.95,2.05) -- (gnn.west);
+
+% % heads
+% \node[box, anchor=west, minimum width=2.10cm, minimum height=0.98cm] (place) at (6.35,2.58)
+% {Placement head\\[1pt]$\tilde{\vp}\in[0,1]^n$};
+
+% \node[box, anchor=west, minimum width=2.10cm, minimum height=0.98cm] (order) at (6.35,1.22)
+% {Ordering head\\[1pt]$\tilde{\vpi}^{\mathrm{sw}}\in[-1,1]^n$};
+
+% % gnn -> heads
+% \coordinate (split1) at ($(gnn.east)+(0.30,0)$);
+% \draw[line] (gnn.east) -- (split1);
+% \draw[flow] (split1) |- (place.west);
+% \draw[flow] (split1) |- (order.west);
+
+% % loss
+% \node[box, anchor=west, text width=3.20cm, font=\scriptsize] (loss) at (9.60,2.00)
+% {%
+% $L \leftarrow L_{\mathrm{makespan}}(\tilde{\vp},\tilde{\vpi}^{\mathrm{sw}})$\\[1pt]
+% $+\lambda_e L_{\mathrm{exec}}(\tilde{\vp}) + \lambda_c L_{\mathrm{comm}}(\tilde{\vp})$\\[1pt]
+% $+\lambda_a L_{\mathrm{area}}(\tilde{\vp}) + L_{\mathrm{reg}}(\tilde{\vp},\tilde{\vpi}^{\mathrm{sw}})$%
+% };
+
+% % heads -> loss
+% \coordinate (split2) at ($(loss.west)+(-0.28,0)$);
+% \draw[line] (split2) -- (loss.west);
+% \draw[flow] (place.east) -- ++(0.20,0) |- (split2);
+% \draw[flow] (order.east) -- ++(0.20,0) |- (split2);
+
+% % enclosing training box
+% \node[stagebox, fit=(gnn)(place)(order)(loss)] (trainbox) {};
+
+% % =========================================================
+% % Inference and post-processing
+% % =========================================================
+% \node[box, anchor=west, align=left, text width=4.10cm, font=\scriptsize] (refine) at (14.00,2.0)
+% {%
+% $\bullet$~Placement $\vp \leftarrow (\tilde{\vp}\geq \tau)$\\
+% \hspace*{1.2em}$\circ$~repair area if required\\[2pt]
+% $\bullet$~SW order\\
+% \hspace*{1.2em}$\circ$~learned order $\vpi_{\mathrm{learn}}^{\mathrm{sw}} \leftarrow \tilde{\vpi}^{\mathrm{sw}}$\\
+% \hspace*{1.2em}$\circ$~static order $\vpi_{\mathrm{static}}^{\mathrm{sw}} \leftarrow \text{critical path}$\\[2pt]
+% $\bullet$~Refine placement $\vp$\\
+% \hspace*{1.2em}$\circ$~local search using $\vpi_{\mathrm{learn}}^{\mathrm{sw}}/\vpi_{\mathrm{static}}^{\mathrm{sw}}$\\[2pt]
+% $\bullet$~Select best $(\vp,\vpi^{\mathrm{sw}})$%
+% };
+
+% % loss -> inference
+% \draw[flow] (loss.east) -- (refine.west);
+
+% % =========================================================
+% % Top braces
+% % =========================================================
+% \draw[topbrace] (0.20,4.32) -- (2.55,4.32)
+% node[midway, yshift=10pt, font=\small, text=black!80]
+% {Input preparation};
+
+% \draw[topbrace] (2.95,4.32) -- (13.15,4.32)
+% node[midway, yshift=10pt, font=\small, text=black!80]
+% {Training};
+
+% \draw[topbrace] (13.65,4.32) -- (18.85,4.32)
+% node[midway, yshift=10pt, font=\small, text=black!80]
+% {Inference \& post-processing};
+
+% \path[use as bounding box] (0.00,0.00) rectangle (19.05,4.72);
+% \end{tikzpicture}
+% \end{figure*}

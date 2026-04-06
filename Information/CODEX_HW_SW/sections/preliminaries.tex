@@ -1,58 +1,96 @@
-\section{Preliminaries}
-We consider a task graph $G=(V,E)$, where each node $i \in V$ is a task and each directed edge $(i,j) \in E$ denotes a precedence constraint and a potential communication transfer from task $i$ to task $j$. For every task $i$, let $s_i$ be the software execution time, $h_i$ the hardware execution time, and $a_i$ the hardware area cost. For every edge $(i,j)$, let $c_{ij}$ denote the communication cost when the incident tasks are placed on different platforms.
+\section{Problem Setup}
+\label{sec:preliminaries}
+We consider a target architecture with one software processor and a hardware substrate with limited total area. Software tasks execute sequentially on the CPU, while hardware tasks can overlap subject to precedence constraints. Communication between tasks assigned to different platforms incurs an edge-dependent delay. The goal of HW/SW partitioning is therefore to determine both a placement and an implied execution order that minimize end-to-end latency under the hardware-area budget.
 
-Following both the 2021 paper and the internal draft, the total hardware area is limited. If $x_i \in \{0,1\}$ denotes whether task $i$ is assigned to hardware ($x_i=1$) or software ($x_i=0$), then the feasibility condition is
+\subsection{Discrete Problem Formulation}
+Let $\gG(\gV,\gE)$ be a directed acyclic task graph (DAG). Each node $i \in \gV$ has software execution cost $t_i^{sw}$, hardware execution cost $t_i^{hw}$, and hardware area cost $A_i$. Each edge $(j,i)\in\gE$ encodes both a precedence relation and a communication cost $C_{ji}$ that is paid when tasks $j$ and $i$ are assigned to different platforms.
+
+We represent a discrete partition by a binary vector $\vp \in \{0,1\}^{|\gV|}$, where $p_i=1$ means that task $i$ is mapped to hardware and $p_i=0$ means that task $i$ remains in software. Since software tasks share one processor, the final makespan also depends on the software order $\pi^{sw}$. Given $(\vp,\pi^{sw})$, let $(\vs,\vf)=\Sched(\vp,\pi^{sw})$ denote the induced start-time and finish-time vectors. The true objective is
+\begin{align}
+\min_{\vp \in \{0,1\}^{|\gV|},\;\pi^{sw}} \quad
+& M(\vp,\pi^{sw}) = \max_{i\in\gV} f_i
+\label{eq:true_obj}\\
+\text{s.t.}\quad
+& \sum_{i\in\gV} p_i A_i \le A_{\max}, \label{eq:true_area}\\
+& f_i = s_i + p_i t_i^{hw} + (1-p_i)t_i^{sw}, \qquad \forall i\in\gV, \label{eq:true_finish}\\
+& s_i \ge f_j + \mathbb{I}[p_j \neq p_i]\, C_{ji}, \qquad \forall (j,i)\in\gE, \label{eq:true_pred}\\
+& s_j \ge f_i, \qquad \forall i,j\in\gV:\; p_i=p_j=0 \text{ and } i \prec_{\pi^{sw}} j, \label{eq:true_sw_serial}\\
+& s_i \ge 0, \qquad \forall i\in\gV. \label{eq:true_nonneg}
+\end{align}
+Equation~\eqref{eq:true_pred} enforces precedence and cross-platform communication delay, while Equation~\eqref{eq:true_sw_serial} enforces single-processor serialization for software tasks.
+
+\subsection{Differentiable Relaxation}
+Directly optimizing Equations~\eqref{eq:true_obj}--\eqref{eq:true_nonneg} is difficult because both placement and ordering are discrete. In \diffgnnorder, the binary placement vector is relaxed to $\tilde{\vp}\in[0,1]^{|\gV|}$, where $\tilde{p}_i$ is the confidence that node $i$ should be implemented in hardware. The software order is relaxed through a continuous software-priority vector $\tilde{\vpi}^{sw}\in\mathbb{R}^{|\gV|}$.
+
+Under this relaxation, the execution term becomes
 \begin{equation}
-\sum_{i \in V} a_i x_i \le \alpha \sum_{i \in V} a_i ,
-\label{eq:area}
+\tilde{t}_i(\tilde{\vp}) = \tilde{p}_i t_i^{hw} + (1-\tilde{p}_i)t_i^{sw},
+\label{eq:soft_exec_i}
 \end{equation}
-where $\alpha \in (0,1]$ is the area-constraint ratio.
-
-\subsection{Partition and Schedule Objectives}
-The internal experiment draft distinguishes between a simple partition cost and multiple schedule-oriented objectives. The simplest partition objective is
+and the communication term becomes
 \begin{equation}
-C_{\text{part}}(x)=\sum_{i \in V}\left[(1-x_i)s_i + x_i h_i\right]
-+ \sum_{(i,j)\in E} |x_i-x_j| c_{ij},
-\label{eq:partition_cost}
+\tilde{c}_{ji}(\tilde{\vp}) = |\tilde{p}_j-\tilde{p}_i|\, C_{ji}.
+\label{eq:soft_comm_ji}
 \end{equation}
-which counts node execution cost and communication across the cut. This form is useful because it is cheap to evaluate, but it does not capture software serialization or more detailed scheduling behavior.
-
-The current repository therefore emphasizes makespan. In discrete evaluation, a partition is passed either to:
-\begin{itemize}
-\item a queue-style simulator implemented in \texttt{TaskGraph.evaluate\_makespan}, where software tasks execute sequentially and hardware tasks may overlap subject to dependencies, or
-\item a legacy LP-based evaluator, exposed through \texttt{compute\_dag\_makespan}, for comparison with earlier infrastructure.
-\end{itemize}
-Additional scheduling heuristics already exist for event-driven scheduling, communication-aware ordering, critical-path list scheduling, and shortest-processing-time ordering. This matters because a good paper should distinguish between the \emph{training surrogate} and the \emph{discrete evaluation metric}; the repository code clearly does so.
-
-\subsection{Relaxed Assignment}
-The differentiable models do not optimize binary assignments directly. Instead they produce a relaxed hardware probability $p_i \in [0,1]$ for each task. The relaxed execution time of task $i$ is
+The discrete scheduler is replaced by a differentiable surrogate
 \begin{equation}
-\tilde{t}_i(p_i)=p_i h_i + (1-p_i)s_i,
-\label{eq:relaxed_exec}
+(\tilde{\vs},\tilde{\vf})=
+\widetilde{\Sched}(\tilde{\vp},\tilde{\vpi}^{sw}),
+\label{eq:soft_sched}
 \end{equation}
-and the relaxed communication cost over an edge $(i,j)$ is approximated by
-\begin{equation}
-\tilde{c}_{ij}(p)=|p_i-p_j|c_{ij}.
-\label{eq:relaxed_comm}
-\end{equation}
-This approximation is central to both \texttt{diff\_gnn} and \texttt{diff\_gnn\_order}, because it makes the cost continuous in the assignment probabilities.
+which approximates both DAG readiness and software serialization.
 
-\subsection{Graph Features and Edge Information}
-The repository combines two feature families. The first is a ``default'' feature profile containing normalized software time, hardware time, area, degree, hardware speedup proxy, area constraint, and hardware scale factor. The second is a ``paper'' profile inspired by Zheng \textit{et al.}, using hardware gain
+Since the max operator is nondifferentiable, the surrogate uses a smooth maximum
 \begin{equation}
-HG_i = s_i - h_i,
+\SMax_{\beta}(\{a_k\})=\frac{1}{\beta}\log\sum_k e^{\beta a_k},
+\label{eq:smax_beta}
 \end{equation}
-and gain per unit area
+where $\beta>0$ controls approximation sharpness. Let $\Pred(i)$ be the predecessor set of node $i$. The differentiable DAG-readiness term is
 \begin{equation}
-HGP_i = \frac{s_i-h_i}{a_i+\varepsilon}.
+s_i^{dag}
+=
+\begin{cases}
+0, & \Pred(i)=\emptyset,\\[4pt]
+\SMax_{\beta}\!\Big(\{\, \tilde{f}_j + \tilde{c}_{ji}(\tilde{\vp}) \mid j \in \Pred(i)\,\}\Big), & \text{otherwise}.
+\end{cases}
+\label{eq:soft_rdag}
 \end{equation}
-The implemented hybrid profile, \texttt{default\_plus\_paper}, concatenates both sets of descriptors. Edges can also carry learned or hand-designed weights. In the current configuration, edge attributes include normalized communication cost, $|HG_i-HG_j|$, and $|HGP_i-HGP_j|$, while the effective edge weight can be derived from cosine similarity or learned by a small MLP.
+The software-readiness term is
+\begin{equation}
+s_i^{sw}
+=
+\SMax_{\beta}\!\Big(\{\, \tilde{f}_j + \phi_{sw}(\tilde{\pi}_j^{sw}, \tilde{\pi}_i^{sw}) \mid j \neq i\,\}\Big),
+\label{eq:soft_rsw}
+\end{equation}
+where $\phi_{sw}(\cdot)$ is a differentiable ordering function derived from the learned software priorities.
 
-\subsection{Problem Statement for This Draft}
-Given a DAG with node costs, edge communication, and an area budget, we seek a partition and an implied execution order that minimize makespan. The paper focuses on two concrete implementations:
-\begin{enumerate}
-\item \textbf{Baseline differentiable partitioning} (\texttt{diff\_gnn}): learn relaxed placements, decode them into a feasible partition, and evaluate the resulting schedule.
-\item \textbf{Order-aware differentiable partitioning} (\texttt{diff\_gnn\_order}): learn relaxed placements and additional priority scores that induce soft task orderings during training and decode.
-\end{enumerate}
+The relaxed start and finish times are then
+\begin{equation}
+\tilde{s}_i=\SMax_{\beta}\big(\{s_i^{dag},\,s_i^{sw}\}\big),
+\label{eq:soft_start}
+\end{equation}
+\begin{equation}
+\tilde{f}_i=\tilde{s}_i+\tilde{t}_i(\tilde{\vp}),
+\label{eq:soft_finish}
+\end{equation}
+and the differentiable makespan surrogate is
+\begin{equation}
+\widetilde{M}(\tilde{\vp},\tilde{\vpi}^{sw})
+=
+\SMax_{\beta}\big(\{\, \tilde{f}_i \mid i \in \Sink(\gG)\,\}\big).
+\label{eq:soft_makespan_symbol}
+\end{equation}
 
-The key technical question is whether learning ordering information jointly with placement improves the quality of the final discrete partition once the schedule is evaluated. The rest of the paper is organized around that question.
+The relaxed area penalty is
+\begin{equation}
+\mathcal{L}_{\mathrm{area}}(\tilde{\vp})
+=
+\left[
+\max\left(
+0,\;
+\sum_{i\in\gV}\tilde{p}_i A_i - A_{\max}
+\right)
+\right]^2.
+\label{eq:l_area}
+\end{equation}
+The proposed method minimizes the differentiable makespan surrogate together with the area penalty and additional regularization terms described in Section~\ref{sec:method}.

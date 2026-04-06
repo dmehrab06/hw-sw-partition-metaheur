@@ -1,0 +1,351 @@
+\section{Method: Scheduling Objectives (Hard Baselines and Differentiable Surrogates)}
+\label{sec:method}
+
+% Requires in preamble:
+% \usepackage{algorithm}
+% \usepackage{algpseudocode}
+% \usepackage{amsmath,amssymb}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Notation (shared by all pseudocodes)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% DAG: G=(V,E), tasks i \in V, edges (u,i) \in E.
+% Placement:
+%   Hard: x[i] \in {SW, HW}
+%   Soft: p_hw[i] \in [0,1], p_sw[i] = 1 - p_hw[i]
+% Exec times: t_sw[i], t_hw[i]
+% Comm: c[u,i] (paid iff lanes differ)
+% Outputs: start s[i], finish f[i], makespan T
+%
+% Soft operators:
+%   SoftMax_beta({z_k}) = (1/beta) log \sum_k exp(beta z_k)
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% (1) HARD baseline w/o ordering (what Diff-GNN (no-order) approximates)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}[!htbp]
+\caption{HardSchedule--NoOrder (Non-differentiable baseline for Diff-GNN w/o ordering)}
+\label{alg:hard_no_order_clean}
+\scriptsize
+\begin{algorithmic}[1]
+\Require DAG $G=(V,E)$; hard placement $x[i]\in\{\mathrm{SW},\mathrm{HW}\}$; exec times $t_{\mathrm{sw}}[i],t_{\mathrm{hw}}[i]$; comm costs $c[u,i]$
+\Ensure start times $s[i]$, finish times $f[i]$, makespan $T$
+\State $\textsc{topo}\gets\textsc{TopologicalSort}(G)$
+\ForAll{$i\in V$} \State $s[i]\gets 0,\;\; f[i]\gets 0$ \EndFor
+
+\ForAll{$i\in \textsc{topo}$}
+    \Statex \textbf{(A) DAG readiness:} must wait for all predecessors to finish (+ comm if lanes differ)
+    \State $r_{\mathrm{dag}}\gets 0$
+    \ForAll{$u\in \mathrm{Pred}(i)$}
+        \State $d\gets (x[u]\neq x[i])?\,c[u,i]:0$
+        \State $r_{\mathrm{dag}}\gets \max\{r_{\mathrm{dag}},\; f[u]+d\}$
+    \EndFor
+
+    \Statex \textbf{(B) Resource readiness:} \emph{no contention / no ordering} (both lanes are unlimited-parallel)
+    \State $r_{\mathrm{res}}\gets 0$
+
+    \Statex \textbf{(C) Start/finish}
+    \State $s[i]\gets \max\{r_{\mathrm{dag}},\, r_{\mathrm{res}}\}$
+    \State $t\gets (x[i]=\mathrm{SW})?\,t_{\mathrm{sw}}[i]:t_{\mathrm{hw}}[i]$
+    \State $f[i]\gets s[i]+t$
+\EndFor
+
+\State $T\gets \max_{i\in V} f[i]$
+\State \Return $s[\cdot], f[\cdot], T$
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% (2) DIFF surrogate w/o ordering (Diff-GNN (no-order))
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}[!htbp]
+\caption{DiffSchedule--NoOrder (Differentiable surrogate for Diff-GNN w/o ordering)}
+\label{alg:diff_no_order_clean}
+\scriptsize
+\begin{algorithmic}[1]
+\Require DAG $G=(V,E)$; soft HW probs $p_{\mathrm{hw}}[i]\in[0,1]$; exec times $t_{\mathrm{sw}}[i],t_{\mathrm{hw}}[i]$; comm costs $c[u,i]$; temperature $\beta>0$
+\Ensure surrogate finish times $F[i]$, surrogate makespan $T_{\mathrm{soft}}$
+\State \textbf{Define} $\textsc{SoftMax}_\beta(\{z_k\}) \triangleq \frac{1}{\beta}\log\sum_k e^{\beta z_k}$
+\State $p_{\mathrm{sw}}[i]\gets 1-p_{\mathrm{hw}}[i]\quad \forall i$
+\State $\textsc{topo}\gets\textsc{TopologicalSort}(G)$
+
+\Statex \textbf{Soft execution time:} expected duration under soft placement
+\ForAll{$i\in V$}
+    \State $\text{exec}[i]\gets p_{\mathrm{hw}}[i]\cdot t_{\mathrm{hw}}[i] + p_{\mathrm{sw}}[i]\cdot t_{\mathrm{sw}}[i]$
+\EndFor
+
+\Statex \textbf{Initialize} $F[i]\gets \text{exec}[i]$ \Comment{(optional) or zeros; any differentiable init works}
+
+\ForAll{$i\in \textsc{topo}$}
+    \Statex \textbf{(A) Soft DAG readiness:} soft-max over predecessor finishes + soft comm
+    \State $\mathcal{Z}_{\mathrm{dag}}\gets \{0\}$
+    \ForAll{$u\in \mathrm{Pred}(i)$}
+        \Statex \quad \emph{Soft comm:} expected boundary crossing (smooth, differentiable)
+        \State $\text{comm}_{u,i}\gets |p_{\mathrm{hw}}[u]-p_{\mathrm{hw}}[i]|\cdot c[u,i]$
+        \State $\mathcal{Z}_{\mathrm{dag}}\gets \mathcal{Z}_{\mathrm{dag}}\cup\{F[u]+\text{comm}_{u,i}\}$
+    \EndFor
+    \State $R_{\mathrm{dag}}[i]\gets \textsc{SoftMax}_\beta(\mathcal{Z}_{\mathrm{dag}})$
+
+    \Statex \textbf{(B) Resource readiness:} \emph{absent} (no ordering / no contention)
+    \State $R_{\mathrm{res}}[i]\gets 0$
+
+    \Statex \textbf{(C) Soft start/finish}
+    \State $S[i]\gets R_{\mathrm{dag}}[i]$
+    \State $F[i]\gets S[i]+\text{exec}[i]$
+\EndFor
+
+\State $T_{\mathrm{soft}}\gets \textsc{SoftMax}_\beta(\{F[i]\}_{i\in V})$
+\State \Return $F[\cdot], T_{\mathrm{soft}}$
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Helper: build SW/HW predecessor-in-order maps from an explicit order list
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}[!htbp]
+\caption{BuildPrevMap (Helper for hard ordered schedules)}
+\label{alg:build_prev_map}
+\scriptsize
+\begin{algorithmic}[1]
+\Require Order list $\textsc{order}$ (a permutation of some subset of tasks)
+\Ensure Map $\textsc{prev}[i]$ giving the immediate predecessor of $i$ in the list (or \textsc{None})
+\For{$k\gets 1$ to $|\textsc{order}|$}
+    \State $i\gets \textsc{order}[k]$
+    \State $\textsc{prev}[i]\gets (k=1)?\,\textsc{None}:\textsc{order}[k-1]$
+\EndFor
+\State \Return $\textsc{prev}[\cdot]$
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% (3) HARD baseline with ordering (what Diff-GNN-Order approximates)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}[!htbp]
+\caption{HardSchedule--Order (Non-differentiable baseline for Diff-GNN with ordering)}
+\label{alg:hard_order_clean}
+\scriptsize
+\begin{algorithmic}[1]
+\Require DAG $G=(V,E)$; hard placement $x[i]\in\{\mathrm{SW},\mathrm{HW}\}$; times $t_{\mathrm{sw}}[i],t_{\mathrm{hw}}[i]$; comm costs $c[u,i]$;
+SW order $\textsc{order}_{\mathrm{sw}}$; optional HW order $\textsc{order}_{\mathrm{hw}}$; flag \textsc{use\_hw\_ord}
+\Ensure start times $s[i]$, finish times $f[i]$, makespan $T$
+
+\State $\textsc{prev}_{\mathrm{sw}}\gets \textsc{BuildPrevMap}(\textsc{order}_{\mathrm{sw}})$
+\If{\textsc{use\_hw\_ord}}
+    \State $\textsc{prev}_{\mathrm{hw}}\gets \textsc{BuildPrevMap}(\textsc{order}_{\mathrm{hw}})$
+\EndIf
+\State $\textsc{topo}\gets\textsc{TopologicalSort}(G)$
+\ForAll{$i\in V$} \State $s[i]\gets 0,\;\; f[i]\gets 0$ \EndFor
+\State $\textsc{sw\_free}\gets 0$ \Comment{single SW lane (serial)}
+\State $\textsc{hw\_free}\gets 0$ \Comment{used only if HW ordering is enabled}
+
+\ForAll{$i\in \textsc{topo}$}
+
+    \Statex \textbf{(A) DAG readiness}
+    \State $r_{\mathrm{dag}}\gets 0$
+    \ForAll{$u\in \mathrm{Pred}(i)$}
+        \State $d\gets (x[u]\neq x[i])?\,c[u,i]:0$
+        \State $r_{\mathrm{dag}}\gets \max\{r_{\mathrm{dag}},\; f[u]+d\}$
+    \EndFor
+
+    \Statex \textbf{(B) Resource readiness (ordering / contention)}
+    \If{$x[i]=\mathrm{SW}$}
+        \Statex \quad SW is \emph{serial}: must satisfy lane availability and the fixed SW order
+        \State $r_{\mathrm{lane}}\gets \textsc{sw\_free}$
+        \State $r_{\mathrm{order}}\gets 0$
+        \If{$\textsc{prev}_{\mathrm{sw}}[i]\neq \textsc{None}$}
+            \State $r_{\mathrm{order}}\gets f[\textsc{prev}_{\mathrm{sw}}[i]]$
+        \EndIf
+        \State $r_{\mathrm{res}}\gets \max\{r_{\mathrm{lane}},\, r_{\mathrm{order}}\}$
+    \Else \Comment{$x[i]=\mathrm{HW}$}
+        \If{\textsc{use\_hw\_ord}}
+            \Statex \quad HW order enabled: enforce the fixed HW order (a single ordered stream)
+            \State $r_{\mathrm{res}}\gets 0$
+            \If{$\textsc{prev}_{\mathrm{hw}}[i]\neq \textsc{None}$}
+                \State $r_{\mathrm{res}}\gets f[\textsc{prev}_{\mathrm{hw}}[i]]$
+            \EndIf
+        \Else
+            \Statex \quad HW is unlimited-parallel when no HW order is used
+            \State $r_{\mathrm{res}}\gets 0$
+        \EndIf
+    \EndIf
+
+    \Statex \textbf{(C) Start/finish}
+    \State $s[i]\gets \max\{r_{\mathrm{dag}},\, r_{\mathrm{res}}\}$
+    \State $t\gets (x[i]=\mathrm{SW})?\,t_{\mathrm{sw}}[i]:t_{\mathrm{hw}}[i]$
+    \State $f[i]\gets s[i]+t$
+
+    \If{$x[i]=\mathrm{SW}$}
+        \State $\textsc{sw\_free}\gets f[i]$ \Comment{advance SW lane}
+    \EndIf
+    \If{$x[i]=\mathrm{HW}$ \textbf{and} \textsc{use\_hw\_ord}}
+        \State $\textsc{hw\_free}\gets f[i]$ \Comment{(optional) if you track HW lane too}
+    \EndIf
+\EndFor
+
+\State $T\gets \max_{i\in V} f[i]$
+\State \Return $s[\cdot], f[\cdot], T$
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% (4) DIFF surrogate with ordering (Diff-GNN-Order)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}[!htbp]
+\caption{DiffSchedule--Order (Differentiable surrogate for Diff-GNN with ordering)}
+\label{alg:diff_order_clean}
+\scriptsize
+\begin{algorithmic}[1]
+\Require DAG $G=(V,E)$; soft HW probs $p_{\mathrm{hw}}[i]\in[0,1]$; priority scores $\pi_{\mathrm{sw}}[i]$ (and optional $\pi_{\mathrm{hw}}[i]$);
+times $t_{\mathrm{sw}}[i],t_{\mathrm{hw}}[i]$; comm costs $c[u,i]$; ordering temperature $\tau_{\mathrm{ord}}$; softmax temperature $\beta>0$; refine steps $R$; optional flag \textsc{use\_hw\_ord}
+\Ensure surrogate finish times $F^{(R)}[i]$, surrogate makespan $T_{\mathrm{soft}}$
+
+\State \textbf{Define} $\textsc{SoftMax}_\beta(\{z_k\}) \triangleq \frac{1}{\beta}\log\sum_k e^{\beta z_k}$
+\State $p_{\mathrm{sw}}[i]\gets 1-p_{\mathrm{hw}}[i]\quad \forall i$
+\State $\textsc{topo}\gets\textsc{TopologicalSort}(G)$
+
+\Statex \textbf{(A) Soft permutations from priorities (Sinkhorn relaxation)}
+\State $P_{\mathrm{sw}}\gets \textsc{SinkhornRelax}(\pi_{\mathrm{sw}},\tau_{\mathrm{ord}})$
+\If{\textsc{use\_hw\_ord}}
+    \State $P_{\mathrm{hw}}\gets \textsc{SinkhornRelax}(\pi_{\mathrm{hw}},\tau_{\mathrm{ord}})$
+\Else
+    \State $P_{\mathrm{hw}}\gets \mathbf{0}$ \Comment{no HW ordering}
+\EndIf
+
+\Statex \textbf{(B) Pairwise ``before'' probabilities from soft permutations}
+\State $B_{\mathrm{sw}}\gets \textsc{BeforeMatrix}(P_{\mathrm{sw}})$ \Comment{$B[j,i]\approx \Pr(j\text{ before }i)$}
+\If{\textsc{use\_hw\_ord}}
+    \State $B_{\mathrm{hw}}\gets \textsc{BeforeMatrix}(P_{\mathrm{hw}})$
+\Else
+    \State $B_{\mathrm{hw}}\gets \mathbf{0}$
+\EndIf
+
+\Statex \textbf{(C) Blend ordering with placement to obtain resource-before gating}
+\State $G_{\mathrm{sw}}\gets p_{\mathrm{sw}}p_{\mathrm{sw}}^\top$;\;\; $G_{\mathrm{hw}}\gets p_{\mathrm{hw}}p_{\mathrm{hw}}^\top$
+\State $B_{\mathrm{res}}\gets (B_{\mathrm{sw}}\odot G_{\mathrm{sw}}) + (B_{\mathrm{hw}}\odot G_{\mathrm{hw}})$
+\State \Comment{$B_{\mathrm{res}}[j,i]$ is high only if (i) $j$ should be before $i$ and (ii) they likely share the same lane}
+
+\Statex \textbf{(D) Soft execution time}
+\ForAll{$i\in V$}
+    \State $\text{exec}[i]\gets p_{\mathrm{hw}}[i]\cdot t_{\mathrm{hw}}[i] + p_{\mathrm{sw}}[i]\cdot t_{\mathrm{sw}}[i]$
+\EndFor
+
+\Statex \textbf{(E) Iterative refinement to couple DAG readiness and resource readiness}
+\ForAll{$i\in V$} \State $F^{(0)}[i]\gets \text{exec}[i]$ \EndFor
+
+\For{$r\gets 1$ to $R$}
+    \ForAll{$i\in \textsc{topo}$}
+
+        \Statex \textbf{(E1) Soft DAG readiness}
+        \State $\mathcal{Z}_{\mathrm{dag}}\gets \{0\}$
+        \ForAll{$u\in \mathrm{Pred}(i)$}
+            \State $\text{comm}_{u,i}\gets |p_{\mathrm{hw}}[u]-p_{\mathrm{hw}}[i]|\cdot c[u,i]$
+            \State $\mathcal{Z}_{\mathrm{dag}}\gets \mathcal{Z}_{\mathrm{dag}}\cup\{F^{(r)}[u]+\text{comm}_{u,i}\}$
+        \EndFor
+        \State $R_{\mathrm{dag}}\gets \textsc{SoftMax}_\beta(\mathcal{Z}_{\mathrm{dag}})$
+
+        \Statex \textbf{(E2) Soft resource readiness (ordering / single-lane effect)}
+        \Statex \emph{Interpretation:} if $B_{\mathrm{res}}[j,i]$ is large, $i$ should wait for $j$.
+        \State $\mathcal{Z}_{\mathrm{res}}\gets \{0\}$
+        \ForAll{$j\in V,\; j\neq i$}
+            \Statex \quad Use a differentiable gate: large when $B_{\mathrm{res}}[j,i]$ is large
+            \State $\text{gate}_{j,i}\gets \log(B_{\mathrm{res}}[j,i]+\varepsilon)$
+            \State $\mathcal{Z}_{\mathrm{res}}\gets \mathcal{Z}_{\mathrm{res}}\cup\{F^{(r-1)}[j] + \alpha\cdot \text{gate}_{j,i}\}$
+        \EndFor
+        \State $R_{\mathrm{res}}\gets \textsc{SoftMax}_\beta(\mathcal{Z}_{\mathrm{res}})$
+
+        \Statex \textbf{(E3) Soft start/finish (must satisfy both constraints)}
+        \State $S^{(r)}[i]\gets \textsc{SoftMax}_\beta(\{R_{\mathrm{dag}},\, R_{\mathrm{res}}\})$
+        \State $F^{(r)}[i]\gets S^{(r)}[i]+\text{exec}[i]$
+    \EndFor
+\EndFor
+
+\State $T_{\mathrm{soft}}\gets \textsc{SoftMax}_\beta(\{F^{(R)}[i]\}_{i\in V})$
+\State \Return $F^{(R)}[\cdot], T_{\mathrm{soft}}$
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Optional: tiny helper definitions (keep in text or appendix)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% SinkhornRelax(pi, tau): build a soft permutation P (doubly stochastic) from scores pi.
+% BeforeMatrix(P): produce pairwise before-prob matrix:
+%   U = strictly upper-triangular matrix of ones (U[a,b]=1 if a<b else 0)
+%   B = P^T U P; set diag(B)=0; clamp to [0,1] if desired.
+%
+% Hyperparams:
+%   tau_ord controls "hardness" of the ordering relaxation.
+%   beta controls softness of max constraints.
+%   alpha scales how strongly the before-gate affects readiness.
+%   eps stabilizes log.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Summary text (brief)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% - No-order: resource readiness is always 0 (unlimited parallelism), only DAG readiness matters.
+% - With-order: SW (and optionally HW) behave like a serialized lane; tasks must wait for earlier-in-order tasks.
+% - DiffSchedule-Order makes that serialization differentiable via soft permutations (Sinkhorn) and a soft
+%   resource readiness term computed from pairwise before-probabilities.
+
+
+\FloatBarrier
+% Requires in preamble:
+% \usepackage{algorithm}
+% \usepackage{algpseudocode}
+% \usepackage{amsmath,amssymb}
+
+\begin{algorithm}[t]
+\caption{List Scheduling with Static Priorities (LSSP)}
+\label{alg:lssp}
+\begin{algorithmic}[1]
+\Require DAG $G=(V,E)$; hard placement $x_i\in\{0,1\}$ ($1$=HW, $0$=SW);
+        exec times $t_i^{SW},t_i^{HW}$; comm costs $c_{u,i}$
+\Ensure start times $s_i$, finish times $f_i$, makespan $T$
+
+\State \textbf{Define} $t_i(x)=x_i\,t_i^{HW}+(1-x_i)\,t_i^{SW}$
+\State \textbf{Define} $\mathrm{comm}(u,i)=\mathbf{1}[x_u\neq x_i]\cdot c_{u,i}$
+
+\Statex \textbf{Static priorities (critical tail):}
+\State \textbf{Initialize} $\mathrm{Pri}(i)\gets 0\ \ \forall i\in V$
+\State $\textsc{rtopo}\gets\textsc{ReverseTopologicalOrder}(G)$
+\ForAll{$i\in \textsc{rtopo}$}
+    \State $\mathrm{Pri}(i)\gets t_i(x)$
+    \If{$\mathrm{Succ}(i)\neq \emptyset$}
+        \State $\mathrm{Pri}(i)\gets t_i(x)+\max\limits_{j\in \mathrm{Succ}(i)}\Big(\mathrm{comm}(i,j)+\mathrm{Pri}(j)\Big)$
+    \EndIf
+\EndFor
+
+\Statex \textbf{List scheduling (1 SW lane, HW parallel):}
+\ForAll{$i\in V$} \State $s_i\gets 0,\;\; f_i\gets 0$ \EndFor
+\State $\textsc{sw\_free}\gets 0$
+\State $\mathcal{U}\gets V$ \Comment{unscheduled tasks}
+\State $\textsc{Ready}\gets \{i\in \mathcal{U}:\mathrm{Pred}(i)=\emptyset\}$
+
+\While{$\mathcal{U}\neq \emptyset$}
+    \If{$\exists\,k\in \textsc{Ready}\ \text{s.t.}\ x_k=0$}
+        \State $i\gets \arg\max\limits_{k\in \textsc{Ready},\ x_k=0}\ \mathrm{Pri}(k)$
+    \Else
+        \State pick any $i\in \textsc{Ready}$ \Comment{all HW-ready}
+    \EndIf
+
+    \State $r_{\mathrm{dag}}\gets 0$
+    \ForAll{$u\in \mathrm{Pred}(i)$}
+        \State $r_{\mathrm{dag}}\gets \max\Big\{r_{\mathrm{dag}},\ f_u+\mathrm{comm}(u,i)\Big\}$
+    \EndFor
+    \State $r_{\mathrm{res}}\gets (x_i=0)\ ?\ \textsc{sw\_free}\ :\ 0$
+
+    \State $s_i\gets \max\{r_{\mathrm{dag}},\, r_{\mathrm{res}}\}$
+    \State $f_i\gets s_i+t_i(x)$
+    \If{$x_i=0$}
+        \State $\textsc{sw\_free}\gets f_i$
+    \EndIf
+
+    \State $\mathcal{U}\gets \mathcal{U}\setminus\{i\}$
+    \State update $\textsc{Ready}$: add nodes whose predecessors are all scheduled
+\EndWhile
+
+\State $T\gets \max\limits_{i\in V} f_i$
+\State \Return $s[\cdot], f[\cdot], T$
+\end{algorithmic}
+\end{algorithm}
+
+

@@ -1,0 +1,14 @@
+\section{Introduction}
+\noindent\textbf{Our contributions are as follows:}
+
+\begin{itemize}
+    \item We present \diffgnn, a differentiable framework for jointly optimizing HW/SW partitioning and software-task ordering under hardware area constraints.
+
+    \item We introduce a differentiable ordering head based on Sinkhorn relaxation, which enables software execution priorities to be learned jointly with placement decisions.
+
+    \item We develop an order-aware soft scheduling surrogate that captures precedence, communication, and software serialization, enabling end-to-end optimization toward makespan minimization.
+
+    \item We design a discrete inference pipeline with decoding, feasibility repair, and refinement, which produces valid solutions under area constraints and improves robustness to relaxation error.
+
+    \item We evaluate \diffgnn against exact optimization, metaheuristic, and prior learning-based baselines on task graphs derived from neural network workloads, demonstrating competitive solution quality and improved scalability.
+\end{itemize}

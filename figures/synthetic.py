@@ -1,13 +1,18 @@
+from __future__ import annotations
+
 """
 Synthetic task-graph generator compatible with the project's TaskGraph attributes.
 Provides:
  - generate_synthetic_taskgraph(N, E, ...)
  - generate_taskgraph_from_spec(nodes, edges, ...)
+ - generate_squeezenet_like_taskgraph(N, ...)
  - attach_to_TaskGraph(attrs)  # optional helper to create TaskGraph instance
+ - save_taskgraph_dot(attrs_or_TG, path)
  - visualize_taskgraph(attrs_or_TG, out_path=None)
  - save_config_yaml(path, params)
 """
 from typing import List, Tuple, Dict, Any
+from pathlib import Path
 import networkx as nx
 import numpy as np
 import random
@@ -17,6 +22,254 @@ import os
 def _ensure_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
+
+
+def _load_dot_dag(dot_path: str | os.PathLike) -> nx.DiGraph:
+    """
+    Load a DOT graph using the same robust pydot walk used elsewhere in the repo.
+    """
+    import pydot
+
+    pgraphs = pydot.graph_from_dot_file(str(dot_path))
+    if not pgraphs:
+        raise ValueError(f"Could not load DOT file: {dot_path}")
+
+    g = nx.DiGraph()
+
+    def _walk(pg):
+        for node in pg.get_nodes():
+            name = node.get_name().strip('"')
+            if name in {"node", "graph", "edge"}:
+                continue
+            g.add_node(name)
+        for edge in pg.get_edges():
+            src = edge.get_source().strip('"')
+            dst = edge.get_destination().strip('"')
+            g.add_edge(src, dst)
+        for sg in pg.get_subgraphs():
+            _walk(sg)
+
+    _walk(pgraphs[0])
+    if not nx.is_directed_acyclic_graph(g):
+        raise ValueError(f"Template graph must be a DAG: {dot_path}")
+    return g
+
+
+def _largest_remainder_counts(weights: List[float], total: int, ensure_min_one: bool = False) -> List[int]:
+    """
+    Integer allocation using the largest-remainder rule.
+    """
+    total = int(total)
+    if total < 0:
+        raise ValueError("total must be non-negative")
+    if not weights:
+        return []
+
+    clean = [max(0.0, float(w)) for w in weights]
+    n = len(clean)
+    if sum(clean) <= 0.0:
+        out = [0] * n
+        for idx in range(min(total, n)):
+            out[idx] = 1
+        return out
+
+    base = [0] * n
+    reserved = 0
+    if ensure_min_one and total >= n:
+        base = [1] * n
+        reserved = n
+
+    remaining = total - reserved
+    if remaining <= 0:
+        return base
+
+    weight_sum = sum(clean)
+    raw = [remaining * w / weight_sum for w in clean]
+    floor_vals = [int(np.floor(x)) for x in raw]
+    remainder = remaining - sum(floor_vals)
+
+    order = sorted(
+        range(n),
+        key=lambda idx: (raw[idx] - floor_vals[idx], clean[idx], -idx),
+        reverse=True,
+    )
+    for idx in order[:remainder]:
+        floor_vals[idx] += 1
+
+    return [base[idx] + floor_vals[idx] for idx in range(n)]
+
+
+def _template_profile(template_graph: nx.DiGraph) -> Dict[str, Any]:
+    topo = list(nx.topological_sort(template_graph))
+    levels = {}
+    for node in topo:
+        preds = list(template_graph.predecessors(node))
+        levels[node] = 0 if not preds else 1 + max(levels[p] for p in preds)
+
+    max_level = max(levels.values()) if levels else -1
+    level_counts = [0] * (max_level + 1)
+    for lvl in levels.values():
+        level_counts[lvl] += 1
+
+    pair_counts: Dict[Tuple[int, int], int] = {}
+    for src, dst in template_graph.edges():
+        pair = (levels[src], levels[dst])
+        pair_counts[pair] = pair_counts.get(pair, 0) + 1
+
+    return {
+        "template_nodes": template_graph.number_of_nodes(),
+        "template_edges": template_graph.number_of_edges(),
+        "levels": levels,
+        "level_counts": level_counts,
+        "pair_counts": pair_counts,
+    }
+
+
+def generate_squeezenet_like_taskgraph(
+    N: int,
+    seed: int = 42,
+    k: float = 0.1,
+    l: float = 0.5,
+    mu: float = 1.0,
+    A_max: float = 100.0,
+    template_dot: str | os.PathLike = "inputs/task_graph_topology/soda-benchmark-graphs/pytorch-graphs/squeeze_net_tosa.dot",
+) -> Dict[str, Any]:
+    """
+    Generate a larger DAG that follows the topological-layer profile of the repository's
+    SqueezeNet-TOSA graph while preserving its edge-to-node ratio.
+
+    The generator scales:
+      - the number of nodes per topological level, and
+      - the number of edges between each pair of template levels
+    proportionally to the requested node count N.
+    """
+    N = int(N)
+    if N <= 0:
+        raise ValueError("N must be positive")
+
+    _ensure_seed(seed)
+    rng = random.Random(seed)
+
+    template_path = Path(template_dot)
+    if not template_path.is_absolute():
+        repo_root = Path(__file__).resolve().parents[1]
+        candidate = repo_root / template_path
+        if candidate.exists():
+            template_path = candidate
+
+    template_graph = _load_dot_dag(template_path)
+    profile = _template_profile(template_graph)
+
+    template_nodes = int(profile["template_nodes"])
+    template_edges = int(profile["template_edges"])
+    edge_ratio = float(template_edges) / float(template_nodes) if template_nodes > 0 else 0.0
+    target_edges = int(round(edge_ratio * float(N)))
+
+    level_counts = _largest_remainder_counts(
+        profile["level_counts"],
+        total=N,
+        ensure_min_one=True,
+    )
+
+    level_nodes: Dict[int, List[str]] = {}
+    ordered_nodes: List[str] = []
+    for level, count in enumerate(level_counts):
+        nodes = [f"l{level}_n{idx}" for idx in range(count)]
+        level_nodes[level] = nodes
+        ordered_nodes.extend(nodes)
+
+    pair_keys = sorted(profile["pair_counts"].keys())
+    pair_weights = [float(profile["pair_counts"][key]) for key in pair_keys]
+    pair_targets = _largest_remainder_counts(
+        pair_weights,
+        total=target_edges,
+        ensure_min_one=(target_edges >= len(pair_keys)),
+    )
+
+    capacities = [
+        len(level_nodes[src_level]) * len(level_nodes[dst_level])
+        for src_level, dst_level in pair_keys
+    ]
+    pair_targets = [min(pair_targets[idx], capacities[idx]) for idx in range(len(pair_keys))]
+    assigned_edges = sum(pair_targets)
+    leftover = target_edges - assigned_edges
+    if leftover > 0:
+        order = sorted(
+            range(len(pair_keys)),
+            key=lambda idx: (capacities[idx] - pair_targets[idx], pair_weights[idx]),
+            reverse=True,
+        )
+        while leftover > 0:
+            progressed = False
+            for idx in order:
+                spare = capacities[idx] - pair_targets[idx]
+                if spare <= 0:
+                    continue
+                pair_targets[idx] += 1
+                leftover -= 1
+                progressed = True
+                if leftover == 0:
+                    break
+            if not progressed:
+                break
+
+    edges: List[Tuple[str, str]] = []
+    for idx, (src_level, dst_level) in enumerate(pair_keys):
+        edge_count = int(pair_targets[idx])
+        if edge_count <= 0:
+            continue
+
+        src_nodes = level_nodes[src_level]
+        dst_nodes = level_nodes[dst_level]
+        if not src_nodes or not dst_nodes:
+            continue
+
+        max_unique = len(src_nodes) * len(dst_nodes)
+        edge_count = min(edge_count, max_unique)
+
+        if edge_count == max_unique and max_unique <= 250000:
+            edges.extend((u, v) for u in src_nodes for v in dst_nodes)
+            continue
+
+        if max_unique <= 250000 and edge_count > max_unique // 3:
+            all_pairs = [(u, v) for u in src_nodes for v in dst_nodes]
+            edges.extend(rng.sample(all_pairs, edge_count))
+            continue
+
+        chosen = set()
+        while len(chosen) < edge_count:
+            chosen.add((rng.choice(src_nodes), rng.choice(dst_nodes)))
+        edges.extend(sorted(chosen))
+
+    attrs = generate_taskgraph_from_spec(
+        nodes=ordered_nodes,
+        edges=edges,
+        seed=seed,
+        k=k,
+        l=l,
+        mu=mu,
+        A_max=A_max,
+        directed=True,
+    )
+
+    attrs["template_graph_file"] = str(template_path)
+    attrs["template_nodes"] = template_nodes
+    attrs["template_edges"] = template_edges
+    attrs["edge_ratio"] = edge_ratio
+    attrs["level_counts"] = level_counts
+    attrs["params"].update(
+        {
+            "generator": "squeezenet_like",
+            "graph-file": f"synthetic_squeezenet_like_N{N}",
+            "template_dot": str(template_path),
+            "template_nodes": template_nodes,
+            "template_edges": template_edges,
+            "target_nodes": int(attrs["graph"].number_of_nodes()),
+            "target_edges": int(attrs["graph"].number_of_edges()),
+        }
+    )
+
+    return attrs
 
 def generate_synthetic_taskgraph(
     N: int,
@@ -183,6 +436,32 @@ def attach_to_TaskGraph(attrs: Dict[str, Any]):
     nx.set_node_attributes(TG.rounak_graph, TG.software_costs, 'software_time')
     nx.set_edge_attributes(TG.rounak_graph, TG.communication_costs, 'communication_cost')
     return TG
+
+
+def save_taskgraph_dot(attrs_or_TG, path: str | os.PathLike):
+    """
+    Save only the topology of a generated graph to a DOT file so it can be reused
+    by the rest of the pipeline.
+    """
+    import pydot
+
+    if hasattr(attrs_or_TG, "graph"):
+        graph = attrs_or_TG.graph
+    elif isinstance(attrs_or_TG, dict):
+        graph = attrs_or_TG["graph"]
+    else:
+        raise ValueError("Input must be attributes dict or TaskGraph instance")
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    dot = pydot.Dot(graph_type="digraph")
+    for node in graph.nodes():
+        dot.add_node(pydot.Node(str(node)))
+    for src, dst in graph.edges():
+        dot.add_edge(pydot.Edge(str(src), str(dst)))
+    dot.write_raw(str(path))
+    return str(path)
 
 # def visualize_taskgraph(attrs_or_TG, out_path: str = None, figsize=(10, 8), save_pdf: bool = True):
 #     """

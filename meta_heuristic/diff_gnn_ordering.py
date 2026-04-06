@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 import os
 import random
@@ -47,6 +49,10 @@ try:
     from .lssp_postprocess import improve_with_lssp_local_search
 except Exception:
     from lssp_postprocess import improve_with_lssp_local_search  # type: ignore
+try:
+    from .partition_schedule_evaluator import evaluate_partition_lssp
+except Exception:
+    from partition_schedule_evaluator import evaluate_partition_lssp  # type: ignore
 
 from utils.logging_utils import LogManager
 
@@ -254,6 +260,17 @@ def _solution_to_array(solution: dict, node_list) -> np.ndarray:
     return np.asarray([float(solution.get(n, 0)) for n in node_list], dtype=float)
 
 
+def _priority_array_to_node_scores(priorities: np.ndarray | None, node_list) -> dict | None:
+    if priorities is None:
+        return None
+    arr = np.asarray(priorities, dtype=float).ravel()
+    if arr.shape[0] != len(node_list):
+        raise ValueError(
+            f"Priority vector length mismatch: got {arr.shape[0]} scores for {len(node_list)} nodes."
+        )
+    return {node_list[i]: float(arr[i]) for i in range(len(node_list))}
+
+
 def _decode_repair_candidates(
     TG,
     base_probs: np.ndarray,
@@ -321,6 +338,64 @@ def _pick_best_candidate_by_metric(TG, candidates, metric: str):
             best_probs = probs
 
     return best_label, best_solution, best_probs, float(best_cost)
+
+
+def _dual_lssp_postprocess(
+    TG,
+    solution: dict,
+    *,
+    max_iters: int,
+    eval_mode: str,
+    enable_area_fill: bool,
+    fill_allow_worsen: float,
+    enable_swap: bool,
+    search_strategy: str,
+    candidate_top_k: int,
+    critical_slack_frac: float,
+    candidate_include_neighbors: bool,
+    candidate_include_cut_endpoints: bool,
+    sw_priority_scores: Mapping | None,
+):
+    """
+    Run LSSP local search in both modes and pick the lower LSSP cost:
+      1) static-priority LSSP
+      2) learned SW-priority LSSP (when scores are available)
+    """
+    common_kwargs = dict(
+        max_iters=max_iters,
+        eval_mode=eval_mode,
+        enable_area_fill=enable_area_fill,
+        fill_allow_worsen=fill_allow_worsen,
+        enable_swap=enable_swap,
+        search_strategy=search_strategy,
+        candidate_top_k=candidate_top_k,
+        critical_slack_frac=critical_slack_frac,
+        candidate_include_neighbors=candidate_include_neighbors,
+        candidate_include_cut_endpoints=candidate_include_cut_endpoints,
+    )
+
+    sol_static, info_static = improve_with_lssp_local_search(
+        TG,
+        solution,
+        software_priority_scores=None,
+        **common_kwargs,
+    )
+    candidates = [("static", sol_static, info_static)]
+
+    if isinstance(sw_priority_scores, Mapping) and len(sw_priority_scores) > 0:
+        sol_sw, info_sw = improve_with_lssp_local_search(
+            TG,
+            solution,
+            software_priority_scores=sw_priority_scores,
+            **common_kwargs,
+        )
+        candidates.append(("sw_priority", sol_sw, info_sw))
+
+    best_mode, best_sol, best_info = min(
+        candidates,
+        key=lambda item: float(item[2].get("cost", float("inf"))),
+    )
+    return best_mode, best_sol, best_info, candidates
 
 
 def _differentiable_makespan_loss_with_order(
@@ -431,7 +506,7 @@ def _differentiable_makespan_loss_with_order(
 
     # Iterative refinement: DAG DP pass + resource-precedence pass.
     F_prev = exec_time.clone()
-    refine_steps = max(1, int(order_refine_steps))
+    refine_steps = max(0, int(order_refine_steps))
     for _ in range(refine_steps):
         F_new = torch.zeros_like(exec_time)
         for i in topo_idx:
@@ -581,6 +656,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     post_enable_swap = bool(post_cfg.get("enable_swap", config.get("lssp_postprocess_enable_swap", True)))
     post_search_strategy = str(post_cfg.get("search_strategy", config.get("lssp_postprocess_search_strategy", "critical"))).lower()
     post_candidate_top_k = int(post_cfg.get("candidate_top_k", config.get("lssp_postprocess_candidate_top_k", 16)))
+    post_use_sw_priority = bool(post_cfg.get("use_sw_priority", config.get("lssp_use_sw_priority", False)))
     post_critical_slack_frac = float(post_cfg.get("critical_slack_frac", config.get("lssp_postprocess_critical_slack_frac", 0.05)))
     post_candidate_include_neighbors = bool(
         post_cfg.get("candidate_include_neighbors", config.get("lssp_postprocess_candidate_include_neighbors", True))
@@ -681,7 +757,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         )
     if use_lssp_final:
         logger.info(
-            "DiffGNNOrder final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s search=%s top_k=%d slack_frac=%.3f",
+            "DiffGNNOrder final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s search=%s top_k=%d slack_frac=%.3f dual_lssp_compare=%s (legacy use_sw_priority=%s)",
             post_eval_mode,
             str(post_during_train),
             str(post_during_eval),
@@ -692,11 +768,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             post_search_strategy,
             post_candidate_top_k,
             post_critical_slack_frac,
+            str(True),
+            str(post_use_sw_priority),
         )
 
     best_sched_cost = float("inf")
     best_assign = None
     best_probs = None
+    best_sw_priority_scores = None
 
     tau = tau_start
     order_tau = order_tau_start
@@ -826,6 +905,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 else:
                     prio_hw_np = None
                     prio_sw_np = None
+                sw_priority_scores_eval = _priority_array_to_node_scores(
+                    prio_sw_eval.detach().cpu().numpy().astype(float),
+                    node_list,
+                )
                 decode_candidates = _decode_repair_candidates(
                     TG,
                     hard_probs,
@@ -841,7 +924,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     metric=selection_metric_train,
                 )
                 if use_lssp_eval:
-                    solution_post, _ = improve_with_lssp_local_search(
+                    _, solution_post, _, _ = _dual_lssp_postprocess(
                         TG,
                         solution,
                         max_iters=post_max_iters,
@@ -854,6 +937,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         critical_slack_frac=post_critical_slack_frac,
                         candidate_include_neighbors=post_candidate_include_neighbors,
                         candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
+                        sw_priority_scores=sw_priority_scores_eval,
                     )
                     post_cost = _evaluate_discrete_solution(
                         TG,
@@ -869,6 +953,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     best_sched_cost = current_sched_cost
                     best_assign = solution.copy()
                     best_probs = np.asarray(decoded_probs, dtype=float).copy()
+                    best_sw_priority_scores = sw_priority_scores_eval
 
         if ep % max(1, epochs // 10) == 0 or ep <= 5:
             logger.info(
@@ -929,6 +1014,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         else:
             prio_hw_np = None
             prio_sw_np = None
+        final_sw_priority_scores = _priority_array_to_node_scores(
+            prio_sw.detach().cpu().numpy().astype(float),
+            node_list,
+        )
         final_decode_candidates = _decode_repair_candidates(
             TG,
             final_probs,
@@ -959,7 +1048,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 post_max_iters,
                 str(post_enable_swap),
             )
-            final_solution, post_info = improve_with_lssp_local_search(
+            post_choice_mode, final_solution, post_info, post_candidates = _dual_lssp_postprocess(
                 TG,
                 final_solution,
                 max_iters=post_max_iters,
@@ -972,9 +1061,20 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 critical_slack_frac=post_critical_slack_frac,
                 candidate_include_neighbors=post_candidate_include_neighbors,
                 candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
+                sw_priority_scores=final_sw_priority_scores,
             )
+            static_cost = float("nan")
+            swprio_cost = float("nan")
+            for mode_name, _, info in post_candidates:
+                if mode_name == "static":
+                    static_cost = float(info.get("cost", float("nan")))
+                elif mode_name == "sw_priority":
+                    swprio_cost = float(info.get("cost", float("nan")))
             logger.info(
-                "DiffGNNOrder final postprocess: improved=%s cost=%.3f hw_area=%.3f/%.3f (%s) elapsed=%.3fs eval_calls=%d stage1_iters=%d stage2_iters=%d avg_eval=%.3fms avg_iter=%.3fms search=%s avg_pool=%.1f avg_selected=%.1f",
+                "DiffGNNOrder final postprocess: mode=%s static_cost=%.3f swprio_cost=%.3f improved=%s cost=%.3f hw_area=%.3f/%.3f (%s) elapsed=%.3fs eval_calls=%d stage1_iters=%d stage2_iters=%d avg_eval=%.3fms avg_iter=%.3fms search=%s avg_pool=%.1f avg_selected=%.1f",
+                post_choice_mode,
+                static_cost,
+                swprio_cost,
                 str(post_info["improved"]),
                 post_info["cost"],
                 post_info["hw_area"],
@@ -1004,6 +1104,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         best_assign = final_solution
         best_probs = np.asarray(final_probs_repaired, dtype=float)
         best_sched_cost = final_sched_cost_train
+        best_sw_priority_scores = final_sw_priority_scores
 
     if selection_metric_final == selection_metric_train:
         best_final_cost = float(best_sched_cost)
@@ -1033,6 +1134,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         "best_probs": np.asarray(best_probs),
         "best_mip_cost": float(best_final_cost),
         "best_train_cost": float(best_sched_cost),
+        "best_sw_priority_scores": best_sw_priority_scores,
         "selection_metric_train": selection_metric_train,
         "selection_metric_final": selection_metric_final,
         "model": model,
@@ -1104,6 +1206,7 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
       (best_cost, best_solution_array)
     """
     logger.info("Starting simulate_diff_GNN_order")
+    simulate_diff_GNN_order.last_run_meta = None
 
     TG = getattr(func_to_optimize, "__self__", None)
     if TG is None:
@@ -1227,17 +1330,45 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
         )
     ).lower()
     eval_cost = _evaluate_discrete_solution(TG, solution, metric=selection_metric)
+    lssp_cost = float(evaluate_partition_lssp(TG, solution)["makespan"])
+    sw_priority_scores = result.get("best_sw_priority_scores", None)
+    lssp_swprio_cost = float("inf")
+    if isinstance(sw_priority_scores, Mapping):
+        try:
+            lssp_swprio_cost = float(
+                evaluate_partition_lssp(
+                    TG,
+                    solution,
+                    software_priority_scores=sw_priority_scores,
+                )["makespan"]
+            )
+        except Exception as e:
+            logger.warning(
+                "DiffGNNOrder sw-priority LSSP evaluation failed; ignoring this score: %s",
+                str(e),
+            )
 
     best_cost = float(result.get("best_mip_cost", eval_cost))
     if not math.isfinite(best_cost):
         best_cost = eval_cost
+    best_cost = float(min(best_cost, eval_cost, lssp_cost, lssp_swprio_cost))
 
     logger.info(
-        "simulate_diff_GNN_order finished: best_cost=%.6f (eval_cost=%.6f, train_best_cost=%.6f, metric=%s, train_metric=%s)",
+        "simulate_diff_GNN_order finished: best_cost=%.6f (eval_cost=%.6f, lssp_cost=%.6f, lssp_swprio_cost=%.6f, train_best_cost=%.6f, metric=%s, train_metric=%s)",
         best_cost,
         eval_cost,
+        lssp_cost,
+        lssp_swprio_cost if math.isfinite(lssp_swprio_cost) else float("nan"),
         result.get("best_train_cost", float("nan")),
         selection_metric,
         result.get("selection_metric_train", "unknown"),
     )
+    simulate_diff_GNN_order.last_run_meta = {
+        "eval_cost": float(eval_cost),
+        "lssp_cost": float(lssp_cost),
+        "lssp_swprio_cost": (float(lssp_swprio_cost) if math.isfinite(lssp_swprio_cost) else None),
+        "sw_priority_scores": (dict(sw_priority_scores) if isinstance(sw_priority_scores, Mapping) else None),
+        "selection_metric": selection_metric,
+        "selection_metric_train": str(result.get("selection_metric_train", "unknown")),
+    }
     return best_cost, sol_arr

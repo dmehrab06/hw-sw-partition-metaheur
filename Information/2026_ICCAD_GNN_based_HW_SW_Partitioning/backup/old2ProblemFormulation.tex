@@ -1,0 +1,150 @@
+\subsection{Problem formulation}
+We are given a task graph $\gG(\gV, \gE)$ with $|\gV| = n$ nodes and $|\gE| = m$ edges, modeled as a directed acyclic graph (DAG) (Figure~\ref{fig:sampletaskgraph}). Each node $i$ has software and hardware execution costs $t^{sw}_i$ and $t^{hw}_i$, respectively, and requires area $A_i$ if assigned to hardware. Each edge $(i,j)$ represents communication with cost $C_{ij}$.
+
+The goal is to partition $\gV$ into disjoint sets $\gV_S$ (software) and $\gV_H$ (hardware), such that $\gV = \gV_H \cup \gV_S$ and $\gV_H \cap \gV_S = \emptyset$. Communication cost is incurred only for edges whose endpoints are assigned to different partitions.
+
+We represent a partition using an assignment vector $\vx \in \{0,1\}^n$, where $x_i = 1$ denotes hardware assignment and $x_i = 0$ denotes software assignment for node $i$.
+
+\paragraph{\textbf{Classical objective.}}
+\citet{arato2005algorithmic} propose the following objective combining the execution time on the assigned resource (HW or SW) and the inter-partition communication time:
+\begin{align}
+    \arg\min_{\vx \in \{0,1\}^n} \;\;
+    & \underbrace{\sum_{i \in \gV} \big(x_i t^{hw}_i + (1 - x_i) t^{sw}_i\big)}_{\mathrm{Exec}(\vx)}
+    + \underbrace{\sum_{(i,j) \in \gE} \mathbb{I}[x_i \neq x_j] C_{ij}}_{\mathrm{Comm}(\vx)} \\
+    \textrm{s.t.} \;\;
+    & \sum_{i \in \gV} x_i A_i \leq A_{\max}.
+\end{align}
+
+However, this formulation does not explicitly model the \emph{makespan}, i.e., the total execution time under a scheduling policy.
+
+\paragraph{\textbf{Proposed objective.}}
+Our goal is makespan minimization under the hardware area budget. We therefore formulate the problem as
+\begin{align}
+\min_{\vx \in \{0,1\}^n,\;\pi}\quad & \max_{i\in\gV} f_i
+\label{eq:true_obj}\\
+\text{s.t.}\quad
+& \sum_{i\in\gV} x_i A_i \le A_{\max},
+\label{eq:true_area}\\
+& (\vs,\vf)=\mathrm{Sched}(\vx,\pi).
+\label{eq:true_sched}
+\end{align}
+
+Here $\mathrm{Sched}(\vx, \pi)$ denotes a scheduling procedure that produces start times $\vs$ and finish times $\vf$ for all tasks under assignment $\vx$ and ordering $\pi$. The ordering $\pi$ captures the scheduling priorities used to resolve resource contention while respecting precedence constraints. Specifically, $i \prec_\pi j$ indicates that, under ordering $\pi$, task $i$ has higher priority than task $j$ and is therefore scheduled before $j$ when both are eligible to execute on the same resource.
+
+\subsection{Differentiable Relaxation of the Discrete Problem}
+
+Directly optimizing Equations~\eqref{eq:true_obj}--\eqref{eq:true_sched} is difficult because both the placement decisions and the induced schedule are discrete. In Diff-GNN, instead of searching over binary assignments $\vx$, we predict a continuous probability vector $\vp \in [0,1]^n$, where $p_i$ denotes the confidence of assigning task $i$ to hardware. We also predict software ordering scores $\vq^{sw}\in[-1,1]^n$, which parameterize scheduling priorities. These scores encode relative precedence: if $q_i^{sw} > q_j^{sw}$, then the ordering head prefers $i \prec j$, meaning that task $i$ should execute before task $j$ on the software processor.
+
+Under this relaxation, we define the soft execution cost
+\begin{equation}
+\widehat{\mathrm{Exec}}(\vp)=
+\sum_{i\in\gV}
+\left(
+p_i t_i^{hw} + (1-p_i)t_i^{sw}
+\right),
+\label{eq:soft_exec}
+\end{equation}
+the soft communication cost
+\begin{equation}
+\widehat{\mathrm{Comm}}(\vp)=
+\sum_{(i,j)\in\gE}
+|p_i-p_j|\, C_{ij},
+\label{eq:soft_comm}
+\end{equation}
+and the expected hardware area usage
+\begin{equation}
+\widehat{\mathrm{Area}}(\vp)=\sum_{i\in\gV} p_i A_i.
+\label{eq:soft_area}
+\end{equation}
+
+The main challenge is the makespan term, since the true makespan depends on a discrete scheduling procedure. We therefore introduce a differentiable surrogate
+\begin{equation}
+\widehat{\mathrm{Makespan}}(\vp,\vq^{sw}),
+\label{eq:soft_makespan_symbol}
+\end{equation}
+which approximates the behavior of $\mathrm{Sched}(\vx,\pi)$ using soft execution times, soft communication delays, and soft ordering constraints.
+
+To handle the hardware budget during optimization, we replace the hard constraint with a differentiable penalty:
+\begin{equation}
+\mathcal{L}_{\mathrm{area}}(\vp)=
+\left[
+\max\left(
+0,\;
+\widehat{\mathrm{Area}}(\vp)-A_{\max}
+\right)
+\right]^2.
+\label{eq:l_area}
+\end{equation}
+
+Diff-GNN then optimizes the following relaxed objective:
+\begin{equation}
+\mathcal{L}_{\mathrm{relax}}(\vp,\vq^{sw}) =
+\widehat{\mathrm{Makespan}}(\vp,\vq^{sw})
++ \lambda_a \mathcal{L}_{\mathrm{area}}(\vp)
++ \lambda_e \widehat{\mathrm{Exec}}(\vp)
++ \lambda_c \widehat{\mathrm{Comm}}(\vp).
+\label{eq:relaxed_obj}
+\end{equation}
+Here, $\widehat{\mathrm{Makespan}}(\vp,\vq^{sw})$ is the primary term, while the execution and communication terms act as auxiliary shaping terms that guide the optimization toward efficient assignments. The area term encourages feasibility with respect to the hardware budget during training.
+
+Thus, while the original combinatorial problem is makespan minimization under a hard area constraint, the GNN is trained to solve the continuous surrogate in Equation~\eqref{eq:relaxed_obj}. Additional regularization terms used in practice to stabilize optimization and encourage desirable properties of the relaxed solution are introduced later.
+
+
+\paragraph{\textbf{Makespan Objective.}}
+Let $\mathrm{Sched}(\vx)$ denote a scheduling procedure that produces start times $\vs$ and finish times $\vf$ for all tasks under assignment $\vx$. Our goal is to minimize:
+\begin{align}
+\label{eq:objective}
+    \arg\min_{\vx \in \{0,1\}^n} \;\;
+    & \underbrace{\max_{i \in \gV} f_i}_{\mathrm{Makespan}(\vx)}
+    + \mathrm{Exec}(\vx)
+    + \mathrm{Comm}(\vx) \\
+    \textrm{s.t.} \;\;
+    & \sum_{i \in \gV} x_i A_i \leq A_{\max},
+\end{align}
+where $(\vs, \vf) = \mathrm{Sched}(\vx)$.
+
+While makespan depends on the scheduler, the execution and communication terms regularize the optimization by discouraging slow assignments and excessive cross-partition communication, thereby aiding makespan minimization.
+
+\subsection{Differentiable Relaxation of the Discrete Problem}
+
+In \diffgnn, instead of searching over binary assignments $\vx$, we predict a continuous probability vector $\vp\in [0,1]^n$ where $p_i$ denotes the probability or confidence of assigning task $i$ to hardware. Under this relaxation, the execution term of Equation~\ref{eq:objective} becomes
+
+\begin{equation}
+\widetilde{\mathrm{Exec}}(\vp)
+=
+\sum_{i \in \gV}
+\left(
+p_i t_i^{hw} + (1-p_i)t_i^{sw}
+\right),
+\end{equation}
+
+which can be interpreted as the expected execution cost under the soft assignment.
+Similarly, the communication term is approximated by
+\begin{equation}
+\widetilde{\mathrm{Comm}}(\vp)
+=
+\sum_{(i,j)\in\gE}
+|p_i - p_j|\, C_{ij},
+\end{equation}
+which smoothly captures the cost of assigning two communicating tasks to different platforms. We can also obtain the expected hardware area usage as $\widetilde{\mathrm{Area}(\vp)}=\sum_{i\in \gV} p_i A_i$.
+
+The main challenge is the makespan term, since $\mathrm{Makespan}(\vx)$ depends on a discrete scheduling procedure. We therefore introduce a differentiable surrogate 
+\begin{equation}
+\widetilde{\mathrm{Makespan}}(\vp, \vq^{sw}),
+\end{equation} 
+which approximates the behavior of $\mathrm{Sched}(\vx)$ using soft execution times, soft communication delays, and soft ordering constraints. Here, $\vq^{sw}\in[-1,1]^n$ is the software ordering scores that encode how software tasks should be prioritized. 
+\diffgnn jointly optimizes the following relaxed objective:
+\begin{align}
+\label{eq:relaxed_objective}
+    \arg\min_{\vp \in [0,1]^n, \vq^{sw}} \;\;
+    & \widetilde{\mathrm{Makespan}}(\vp, \vq^{sw})
+    + \widetilde{\mathrm{Exec}}(\vp)
+    + \widetilde{\mathrm{Comm}}(\vp) \\
+    \textrm{s.t.} \;\;
+    & \sum_{i \in \gV} p_i A_i \leq A_{\max}.
+\end{align}
+
+In the following section, we detail how \diffgnn approximates scheduling behavior through the proposed soft-makespan surrogate.
+% \input{4.1Notations}
+
+\end{comment}

@@ -1,0 +1,154 @@
+\appendix
+\section{Vanilla Partitioning Problem}
+
+\subsection{Problem Definition}
+
+We are given a graph $G=\left(V,E\right)$ with $n$ nodes and $m$ edges. Each node has two node weights $h_i$ and $s_i$ to denote hardware and software costs.
+The edges denote communication between the nodes and have associated communication cost $c_{ij}$ for the edge $e$ connecting nodes $i$ and $j$.
+The aim is to partition the nodes $V$ into non-overlapping sets $V_S$ and $V_H$ denoting software and hardware nodes respectively; $V=V_H \cup V_S$ and $V_H \cap V_S = \emptyset$.
+We denote the set of edges between the two sets by $E_{\cP}$. 
+Note that we will only consider communication cost for these edges which are between hardware and software nodes.
+The hardware cost for a partition $\cP$ is defined as sum of hardware cost for the nodes belonging to the hardware nodes 
+$H_{\cP} = \sum_{v\in V_H}h_v$. Similarly, the software cost for the partition is $S_{\cP} = \sum_{v\in V_S}s_v$.
+The communication cost is defined as $C_{\cP} = \sum_{e:(i,j) \in E_\cP} c_{ij}$.
+
+\subsection{Optimization Formulation}
+We define binary variable $x_i$ for each node $i \in V$; $x_i=1$ if node $i$ is a software node in partitioning $\cP$, else $x_i=0$ for a hardware node.
+Additionally, we denote the edge weighted adjacency matrix for the graph $G$ to be $\bC$, where the element along the $i^{th}$ row and $j^{th}$ column $C_{ij}$ is \[C_{ij}=\begin{cases}c_{ij},~ \textrm{if } e:(i,j) \in E \\ 0,~ \textrm{otherwise}\end{cases}\] Note that $\bC$ is symmetric.
+The communication cost for the partition $\cP$ is 
+\[C_{\cP} = \sum_{e:(i,j) \in E_\cP} c_{ij}=\sum_{i\in V}\sum_{j\in V}x_i C_{ij} (1-x_j)\]
+We can stack the entries $h_i$, $s_i$ and $x_i$ in $n$-length vectors $\bh$, $\bs$ and $\bx$ respectively. For the partition $\cP$, the hardware cost is $H_{\cP}=\bh^T\left(\ones-\bx\right)$, the software cost is $S_{\cP}=\bs^T\bx$, and the communication cost $C_\cP=\left(\ones-\bx\right)\bC\bx$.
+The hardware-software partitioning problem can be stated as
+\begin{align*}
+    \cP^\star = \arg \min & ~ H_\cP\\
+    \textrm{s.t.} & ~ S_\cP + C_\cP \leq R_0
+\end{align*}
+which we can write as
+\begin{subequations}
+\begin{align}
+    \bx^\star = \arg \min & ~ \bh^T\left(\ones - \bx\right)\\
+\textrm{s.t.} & ~ \bs^T\bx + \left(\ones - \bx\right)^T\bC\bx \leq R_0\\
+& ~ x_i \in \{0,1\},~\forall i=1,2,\cdots,n
+\end{align}
+\end{subequations}
+\begin{relaxation}
+    We relax the integer constraint $x_i \in \{0,1\}$ to $0 \leq x_i \leq 1,~ \forall i=1,2,\cdots,n$. 
+\end{relaxation}
+The relaxed optimization problem is a quadratic constrained linear problem
+\begin{subequations}
+\begin{align}
+    \bx^\star = \arg \min & ~ \bh^T\left(\ones - \bx\right)\\
+\textrm{s.t.} & ~ \left(\bs+\bC\ones\right)^T\bx - \bx^T\bC\bx \leq R_0\\
+& ~ \zeros \leq \bx \leq \ones
+\end{align}
+\end{subequations}
+Note that $\bC \succeq 0$, and hence, the constraint $\left(\bs+\bC\ones\right)^T\bx - \bx^T\bC\bx \leq R_0$ is non-convex.
+We now define $(n+1)\times(n+1)$ matrices
+\[\bX=\begin{bmatrix}\bx\bx^T & \bx \\ \bx^T & 1\end{bmatrix} \textrm { and } \bH=\begin{bmatrix}0 & \frac{\bh}{2} \\ \frac{\bh^T}{2} & 0\end{bmatrix}\]
+to pose the above problem as a semidefinite program (SDP). Using the linearity and cyclic properties of \emph{trace} of a matrix, we have
+\begin{subequations}
+    \begin{align}
+        & \tr{\bH\bX} = \bh^T\bx\\
+        & \tr{\begin{bmatrix}\bC&-\frac{\bs+\bC\ones}{2}\\-\frac{\left(\bs+\bC\ones\right)^T}{2}&R_0\end{bmatrix}\bX} = \bx^T\bC\bx - \left(\bs + \bC\ones\right)^T\bx + R_0
+    \end{align}
+\end{subequations}
+Additionally, we want to add some more constraints to make the problem more tight. These include
+\begin{subequations}
+    \begin{align}
+        \forall i=1,2,\cdots,n \quad &0 \leq x_i \leq 1 ~~ \Rightarrow 0 \leq \be_i^T\bx \leq 1\\
+        \forall i=1,2,\cdots,n \quad &X_{ii} = x_i ~~ \Rightarrow \bx^T\bE_{ii}\bx = \be_i^T\bx\\
+        \forall i,j=1,2,\cdots,n \quad &X_{ij} \leq x_i ~~ \Rightarrow \bx^T\bE_{ij}\bx \leq \be_i^T\bx\\
+        \forall i,j=1,2,\cdots,n \quad &X_{ij} \leq x_j ~~ \Rightarrow \bx^T\bE_{ij}\bx \leq \be_j^T\bx\\
+        \forall i,j=1,2,\cdots,n \quad &X_{ij} \geq 0 ~~ \Rightarrow \bx^T\bE_{ij}\bx \geq 0
+    \end{align}
+    \label{eq:tight}
+\end{subequations}
+Here, $\bE_{ij}$ denotes a $n\times n$ matrix with all zeros, except the element along the $i^{th}$ row and $j^{th}$ column being $1$, and the vector $\be_i$ denotes the $i^{th}$ column of the $n\times n$ identity matrix.
+Using the linearity and cyclic properties of \emph{trace} of a matrix, we have the following identities
+\begin{subequations}
+    \begin{align}
+        &  \tr{\begin{bmatrix}\zeros&\frac{\be_i}{2}\\\frac{\be_i^T}{2}&0\end{bmatrix}\bX} = \be_i^T\bx\\
+        & \tr{\begin{bmatrix}\bE_{ij}&-\frac{\be_i}{2}\\-\frac{\be_i^T}{2}&0\end{bmatrix} \bX} = \bx^T\bE_{ij}\bx - \be_i^T\bx
+    \end{align}
+    \label{eq:identities}
+\end{subequations}
+The SDP problem is
+\begin{subequations}
+\begin{align}
+\textrm{minimize} & ~ \bh^T\ones - \textrm{Tr}(\bH\bX)\\
+\textrm{subject to} & ~ \tr{\begin{bmatrix}\bC&-\frac{\bs+\bC\ones}{2}\\-\frac{\left(\bs+\bC\ones\right)^T}{2}&R_0\end{bmatrix}\bX}\geq 0\\
+& ~ 0\leq \tr{\begin{bmatrix}\zeros&\frac{\be_i}{2}\\\frac{\be_i^T}{2}&0\end{bmatrix}\bX}\leq 1,~~ \tr{\begin{bmatrix}\bE_{ii}&-\frac{\be_i}{2}\\-\frac{\be_i^T}{2}&0\end{bmatrix}\bX}= 0, ~~ \forall i\\
+& ~ \tr{\begin{bmatrix}\bE_{ij}&-\frac{\be_i}{2}\\-\frac{\be_i^T}{2}&0\end{bmatrix}\bX}\leq 0,~~\tr{\begin{bmatrix}\bE_{ij}&-\frac{\be_j}{2}\\-\frac{\be_j^T}{2}&0\end{bmatrix}\bX}\leq 0 ~~\forall i,j\\
+& ~ \tr{\begin{bmatrix}\bE_{ij}&\zeros\\\zeros^T&0\end{bmatrix}\bX}\geq 0~~\forall i,j, ~~ \bX \succeq 0\\
+& ~ \textrm{rank}(\bX) = 1
+\end{align}
+\end{subequations}
+
+\section{Scheduling Constrained Partitioning Problem}
+
+\subsection{Problem Definition}
+We are given a graph $G=\left(V,E\right)$ with $n$ nodes and $m$ edges. 
+Each node has weights $h_i$ and $s_i$ to denote hardware and software execution times.
+Also, each node has an associated hardware area cost $a_i$.
+The edges denote communication between the nodes and have associated communication cost $c_{ij}$ for the edge $e$ connecting nodes $i$ and $j$.
+The communication delay is taken into account only when the adjacent nodes belong to different partitions.
+The aim is to partition the nodes $V$ into non-overlapping sets $V_S$ and $V_H$ denoting software and hardware nodes respectively; $V=V_H \cup V_S$ and $V_H \cap V_S = \emptyset$.
+We denote the set of edges between the two sets by $E_{\cP}$. 
+Additionally, we need to ensure that software nodes are executed sequentially, while hardware nodes can execute in parallel if their dependent nodes are executed.
+Our objective is to minimize the overall execution time given a limited available area for hardware nodes.
+
+\subsection{Optimization Formulation}
+
+\noindent\textbf{Decision variables.}~We define binary variable $x_i=0$ if node $i$ is assigned to hardware partition, $x_i=1$ if assigned to software partition.
+We also define binary variable $z_{ij}$ for each edge $e:=\left(i,j\right)\in E$connecting nodes $i$ and $j$. We denote $z_{ij}=1$ if the nodes $i$ and $j$ belong to different partitions.
+Let $t_i$ and $f_i$ denote the start and end time of the node $i$. The total execution time of the task graph is denoted by $T$.
+We also define binary variable $y_{ij}$ for each pair of nodes $i,j$, $i \neq j$.
+This binary variable is used to ensure that if the pair of nodes $i,j$ are assigned to software partition, they need to be executed sequentially; i.e., if $y_{ij}=1$, then node $i$ precedes node $j$, and for $y_{ij}=0$, the opposite happens.
+However, we need to ensure that this sequential constraint is activated for only a pair of software nodes.
+
+\noindent\textbf{Hardware area constraint.}~The overall hardware area is constrained by the maximum allowable hardware area $A_{\textrm{max}}$.
+\begin{equation}
+    \sum_{i=1}^{n}a_i\left(1-x_i\right) \leq A_{\textrm{max}}
+    \label{eq:hardware-area}
+\end{equation}
+
+\noindent\textbf{Binary edge variable.}~The binary variable $z_{ij}$ and the partition variable $x_i,x_j$ corresponding to the adjacent nodes are related by
+\begin{subequations}
+    \begin{align}
+        &z_{ij} \geq x_i - x_j, \quad &\forall \left(i,j\right) \in E\\
+        &z_{ij} \geq x_j - x_i, \quad &\forall \left(i,j\right) \in E\\
+        &z_{ij} \leq x_i + x_j, \quad &\forall \left(i,j\right) \in E\\
+        &z_{ij} \leq 2 - x_i - x_j, \quad &\forall \left(i,j\right) \in E
+    \end{align}
+    \label{eq:edge-selection}
+\end{subequations}
+
+\noindent\textbf{Execution time constraints.}~The execution time of each node is denoted 
+\begin{subequations}
+    \begin{align}
+        & T \geq f_i, \quad &\forall i \in V\\
+        & f_i = t_i + h_i\left(1-x_i\right) + s_ix_i, \quad &\forall i\in V\\
+        & f_i + c_{ij}z_{ij} \leq t_j, \quad &\forall \left(i,j\right) \in E
+    \end{align}
+    \label{eq:exec-time}
+\end{subequations}
+
+\noindent\textbf{Sequential execution of software nodes.}We define the following pair of constraints with $M$ being a large positive number.
+\begin{subequations}
+    \begin{align}
+        & f_i \leq t_j + M \left(1 - y_{ij}\right) + M \left(2 - x_i -x_j\right), \quad &\forall i,j \in V, i \neq j\\
+        & f_j \leq t_i + M y_{ij} + M \left(2 - x_i -x_j\right), \quad &\forall i,j \in V, i \neq j
+    \end{align}
+    \label{eq:sw-seq}
+\end{subequations}
+Note that, the constraints are activated only when $x_i=x_j=1$ or the nodes $i,j$ are both software nodes, when the term $2-x_i-x_j=0$.
+For other cases, the constraints are not active since $M$ is sufficiently large.
+Once the constraints are activated, the value of $y_{ij}$ denotes the precedence of the software node operations.
+
+The overall optimization problem is
+\begin{subequations}
+    \begin{align}
+        \textrm{minimize} & ~ T\\
+        \textrm{subject to} & ~ \left(\ref{eq:hardware-area}\right),\left(\ref{eq:edge-selection}\right),\left(\ref{eq:exec-time}\right),\left(\ref{eq:sw-seq}\right)
+    \end{align}
+\end{subequations}

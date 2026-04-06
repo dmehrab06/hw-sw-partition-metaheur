@@ -364,6 +364,31 @@ def compute_static_priorities(
     return priorities
 
 
+def _normalize_software_priority_scores(
+    problem: PartitionScheduleProblem,
+    software_priority_scores: Mapping[Hashable, Any] | Sequence[Any] | None,
+) -> dict[Hashable, float] | None:
+    if software_priority_scores is None:
+        return None
+
+    nodes = list(problem.graph.nodes())
+    if isinstance(software_priority_scores, Mapping):
+        normalized = {node: float(software_priority_scores.get(node, 0.0)) for node in nodes}
+        return normalized
+
+    if isinstance(software_priority_scores, Sequence) and not isinstance(
+        software_priority_scores, (str, bytes)
+    ):
+        if len(software_priority_scores) != len(nodes):
+            raise ValueError(
+                "software_priority_scores sequence length "
+                f"({len(software_priority_scores)}) does not match number of nodes ({len(nodes)})."
+            )
+        return {node: float(software_priority_scores[idx]) for idx, node in enumerate(nodes)}
+
+    raise TypeError("software_priority_scores must be a mapping, a sequence, or None.")
+
+
 def make_partition_valid(
     problem_or_task_graph: Any,
     partition_assignment: Mapping[Hashable, Any] | Sequence[Any],
@@ -527,6 +552,7 @@ def evaluate_partition_lssp(
     partition_assignment: Mapping[Hashable, Any] | Sequence[Any],
     auto_repair: bool = True,
     repair_strategy: str = "benefit_per_area",
+    software_priority_scores: Mapping[Hashable, Any] | Sequence[Any] | None = None,
 ) -> dict[str, Any]:
     problem, original_partition, partition, repair_info = _prepare_partition(
         problem_or_task_graph=problem_or_task_graph,
@@ -537,6 +563,7 @@ def evaluate_partition_lssp(
     topo = _require_dag(problem)
     topo_idx = {node: idx for idx, node in enumerate(topo)}
     priorities = compute_static_priorities(problem, partition)
+    software_priority = _normalize_software_priority_scores(problem, software_priority_scores)
 
     start_times: dict[Hashable, float] = {}
     finish_times: dict[Hashable, float] = {}
@@ -557,7 +584,23 @@ def evaluate_partition_lssp(
         if not ready:
             raise RuntimeError("LSSP scheduler stalled: no ready node found in the remaining subgraph.")
 
-        ready.sort(key=lambda node: (-priorities[node], topo_idx[node], _node_label(node)))
+        def _ready_order_key(node: Hashable) -> tuple[float, float, int, str]:
+            static_key = -float(priorities[node])
+            if software_priority is not None and int(partition[node]) == 0:
+                return (
+                    -float(software_priority.get(node, 0.0)),
+                    static_key,
+                    topo_idx[node],
+                    _node_label(node),
+                )
+            return (
+                static_key,
+                static_key,
+                topo_idx[node],
+                _node_label(node),
+            )
+
+        ready.sort(key=_ready_order_key)
 
         for node in ready:
             dep_ready = 0.0
@@ -633,6 +676,12 @@ def evaluate_partition_lssp(
     result.update(
         {
             "static_priorities": {node: float(priority) for node, priority in priorities.items()},
+            "software_priority_scores": (
+                {node: float(software_priority[node]) for node in topo}
+                if software_priority is not None
+                else None
+            ),
+            "software_priority_used": bool(software_priority is not None),
             "edge_start_times": {edge: float(time) for edge, time in edge_start_times.items()},
             "edge_finish_times": {edge: float(time) for edge, time in edge_finish_times.items()},
             "bus_schedule": bus_schedule,
