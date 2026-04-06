@@ -5,9 +5,9 @@ hw-scale-variance: 0.1
 comm-scale-factor: 1.0
 seed: 42
 solver-tool: cvxpy
-solution-dir: /qfs/people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/paper_fig3_11node/mip/partitions
+solution-dir: /people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/paper_fig3_11node/mip/partitions
 result-file-prefix: dataset_area05_10seed_paper_fig3_11node_mip
-output-dir: /qfs/people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/paper_fig3_11node/mip
+output-dir: /people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/paper_fig3_11node/mip
 taskgraph-dir: inputs/task_graph_complete
 taskgraph-pickle: inputs/task_graph_complete/taskgraph-paper_fig3_11node-instance-config-config_fig3_taskgraph_gnn.pkl
 opt-cost-type: makespan

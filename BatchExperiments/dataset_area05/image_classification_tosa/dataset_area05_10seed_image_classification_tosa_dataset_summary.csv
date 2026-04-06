@@ -1,2 +1,3 @@
 graph_name,family,nodes,area_constraint,method,mean_makespan,median_makespan,min_makespan,max_makespan,p10_makespan,p90_makespan,mean_dag_makespan,num_runs,num_invalid_runs,num_repaired_runs,mean_over_dag,validity_note_summary
+image_classification_tosa,tflite-graphs,125,0.5,gcps,6519.840570100629,6494.2280972128565,5457.041601652214,7533.1560040305885,5705.05605973086,7293.5952985581725,4803.824509253029,10,0,0,1.357218723861008,Valid solution; no area repair needed.
 image_classification_tosa,tflite-graphs,125,0.5,greedy,7558.284450793921,7442.691925586165,6459.858130108229,8632.785196938186,6613.127050087083,8527.14531756617,4747.274871640109,10,0,0,1.5921312026709444,Valid solution; no area repair needed.

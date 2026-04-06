@@ -1,2 +1,3 @@
 graph_name,family,nodes,area_constraint,method,mean_makespan,median_makespan,min_makespan,max_makespan,p10_makespan,p90_makespan,mean_dag_makespan,num_runs,num_invalid_runs,num_repaired_runs,mean_over_dag,validity_note_summary
+squeeze_net_tosa,pytorch-graphs,179,0.5,gcps,9882.349427888726,9953.506226093947,8470.770585115486,11161.588220256695,8909.063194644,10911.231665531377,7628.876708439971,10,0,0,1.2953872248263885,Valid solution; no area repair needed.
 squeeze_net_tosa,pytorch-graphs,179,0.5,greedy,11534.323590918793,11339.718278351556,10327.712265027534,13006.392279007683,10577.043473759324,12986.3621697862,6525.830145143948,10,0,0,1.767487558575487,Valid solution; no area repair needed.

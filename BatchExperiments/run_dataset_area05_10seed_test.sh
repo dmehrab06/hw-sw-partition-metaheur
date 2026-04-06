@@ -23,8 +23,8 @@ ALL_METHODS_ORDER=(
 
 # Comment out any method you do not want to run.
 METHODS=(
-  "mip"
-  # "diff_gnn_order"
+  # "mip"
+  "diff_gnn_order"
   # "gl25"
   # "gcps"
   # "esa"
@@ -42,7 +42,7 @@ METHODS=(
 # Comment out any dataset you do not want to include.
 DATASETS=(
   "paper_fig3_11node"
-  "mobile_net_tosa"
+  # "mobile_net_tosa"
   # "rez_net_tosa"
   # "squeeze_net_tosa"
   # "anomaly_detection_tosa"

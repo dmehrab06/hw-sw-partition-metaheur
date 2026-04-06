@@ -15,6 +15,7 @@ RESULT_CSV_ENV="${HWSW_RESULT_CSV:-${RESULT_CSV:-}}"
 RESULT_PREFIX_ENV="${HWSW_RESULT_PREFIX:-${RESULT_PREFIX:-}}"
 CSV_DIR_ENV="${HWSW_CSV_DIR:-${CSV_DIR:-}}"
 RUN_TAG_ENV="${HWSW_RUN_TAG:-${RUN_TAG:-}}"
+INPROC_RUNNER="$ROOT/tools/run_gnn_configs_inproc.py"
 
 cd "$ROOT"
 
@@ -42,84 +43,28 @@ if [[ -n "$RUN_TAG_ENV" ]]; then
   echo "Run tag: $RUN_TAG_ENV"
 fi
 
-batch_start_sec=$SECONDS
+run_env=( )
+if [[ -n "$METHODS_ENV" ]]; then
+  run_env+=(HWSW_METHODS="$METHODS_ENV")
+fi
+if [[ -n "$RESULT_CSV_ENV" ]]; then
+  run_env+=(HWSW_RESULT_CSV="$RESULT_CSV_ENV")
+fi
+if [[ -n "$RESULT_PREFIX_ENV" ]]; then
+  run_env+=(HWSW_RESULT_PREFIX="$RESULT_PREFIX_ENV")
+fi
+if [[ -n "$CSV_DIR_ENV" ]]; then
+  run_env+=(HWSW_CSV_DIR="$CSV_DIR_ENV")
+fi
+if [[ -n "$RUN_TAG_ENV" ]]; then
+  run_env+=(HWSW_RUN_TAG="$RUN_TAG_ENV")
+fi
 
-for config in "${CONFIGS[@]}"; do
-  config_base="$(basename "$config" .yaml)"
-  if [[ -n "$RUN_TAG_ENV" ]]; then
-    log_file="$OUTDIR/gnn_main_${config_base}__run-${RUN_TAG_ENV}.log"
-  else
-    log_file="$OUTDIR/gnn_main_${config_base}.log"
-  fi
-  config_start_sec=$SECONDS
-
-  echo "---- [METHOD] $config_base ----"
-  run_env=( )
-  if [[ -n "$METHODS_ENV" ]]; then
-    run_env+=(HWSW_METHODS="$METHODS_ENV")
-  fi
-  if [[ -n "$RESULT_CSV_ENV" ]]; then
-    run_env+=(HWSW_RESULT_CSV="$RESULT_CSV_ENV")
-  fi
-  if [[ -n "$RESULT_PREFIX_ENV" ]]; then
-    run_env+=(HWSW_RESULT_PREFIX="$RESULT_PREFIX_ENV")
-  fi
-  if [[ -n "$CSV_DIR_ENV" ]]; then
-    run_env+=(HWSW_CSV_DIR="$CSV_DIR_ENV")
-  fi
-  if [[ -n "$RUN_TAG_ENV" ]]; then
-    run_env+=(HWSW_RUN_TAG="$RUN_TAG_ENV")
-  fi
-
-  if [[ ${#run_env[@]} -gt 0 ]]; then
-    env "${run_env[@]}" "$PYTHON" gnn_main.py -c "$config" >"$log_file" 2>&1 || {
-      echo "gnn_main.py failed for $config (see $log_file)"
-      continue
-    }
-  else
-    "$PYTHON" gnn_main.py -c "$config" >"$log_file" 2>&1 || {
-      echo "gnn_main.py failed for $config (see $log_file)"
-      continue
-    }
-  fi
-
-  out_src=$(env \
-    HWSW_CSV_DIR="${CSV_DIR_ENV}" \
-    HWSW_RESULT_CSV="${RESULT_CSV_ENV}" \
-    HWSW_RESULT_PREFIX="${RESULT_PREFIX_ENV}" \
-    "$PYTHON" - <<'PY' "$config" "$ROOT"
-from omegaconf import OmegaConf
-import os
-import sys
-cfg = OmegaConf.load(sys.argv[1])
-root = sys.argv[2]
-out_dir = os.getenv("HWSW_CSV_DIR") or cfg.get('output-dir', 'outputs')
-csv_override = os.getenv("HWSW_RESULT_CSV") or cfg.get("result-csv") or cfg.get("result-csv-name")
-result_prefix = os.getenv("HWSW_RESULT_PREFIX") or cfg.get('result-file-prefix', 'results')
-if csv_override:
-    out_path = csv_override if os.path.isabs(csv_override) else os.path.join(out_dir, csv_override)
-else:
-    out_path = os.path.join(out_dir, f"{result_prefix}-result-summary-soda-graphs-config.csv")
-if not os.path.isabs(out_path):
-    out_path = os.path.join(root, out_path)
-print(out_path)
-PY
-)
-
-  if [[ -f "$out_src" ]]; then
-    out_copy="$OUTDIR/$(basename "$out_src")"
-    if [[ "$(realpath "$out_src")" != "$(realpath "$out_copy" 2>/dev/null || echo "")" ]]; then
-      cp "$out_src" "$out_copy"
-    fi
-  fi
-
-  config_elapsed_sec=$((SECONDS - config_start_sec))
-  echo "Completed $config_base in ${config_elapsed_sec}s"
-
-done
-
-batch_elapsed_sec=$((SECONDS - batch_start_sec))
-echo "Method batch complete in ${batch_elapsed_sec}s. CSV copies are in $OUTDIR"
+if [[ ${#run_env[@]} -gt 0 ]]; then
+  env "${run_env[@]}" "$PYTHON" "$INPROC_RUNNER" --root "$ROOT" --outdir "$OUTDIR" "${CONFIGS[@]}"
+else
+  "$PYTHON" "$INPROC_RUNNER" --root "$ROOT" --outdir "$OUTDIR" "${CONFIGS[@]}"
+fi
 
 
 # commands

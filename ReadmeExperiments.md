@@ -11,7 +11,7 @@ export PYTHONNOUSERSITE=1
 ```
 
 ```
-nohup ./BatchExperiments/run_dataset_area05_10seed.sh > ./BatchExperiments/others_area05_5_57.log 2>&1 &
+nohup ./BatchExperiments/run_dataset_area05_10seed.sh > ./BatchExperiments/otherss_area05_6_43.log 2>&1 &
 ```
 
 
