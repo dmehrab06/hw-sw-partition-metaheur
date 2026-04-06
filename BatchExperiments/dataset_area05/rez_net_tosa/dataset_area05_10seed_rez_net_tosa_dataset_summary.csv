@@ -1,0 +1,2 @@
+graph_name,family,nodes,area_constraint,method,mean_makespan,median_makespan,min_makespan,max_makespan,p10_makespan,p90_makespan,mean_dag_makespan,num_runs,num_invalid_runs,num_repaired_runs,mean_over_dag,validity_note_summary
+rez_net_tosa,pytorch-graphs,362,0.5,greedy,21803.940225274677,21687.064922943428,19880.599701807,23525.1366496158,20177.603135001616,23466.3209443098,10951.138294760856,10,0,0,1.9910204435739725,Valid solution; no area repair needed.

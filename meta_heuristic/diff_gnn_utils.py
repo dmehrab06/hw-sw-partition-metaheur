@@ -327,7 +327,10 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         - Adam optimizer updates the model
     """
     import random
-    from utils.scheduler_utils import compute_dag_makespan
+    try:
+        from .partition_schedule_evaluator import evaluate_partition_dag
+    except ImportError:
+        from partition_schedule_evaluator import evaluate_partition_dag
 
     lr = float(config.get("lr", 1e-3))
     epochs = int(config.get("epochs", 400))
@@ -420,12 +423,16 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                 if violation:
                     current_mip_cost = TG.violation_cost
                 else:
-                    mip_assignment = [1 - solution[k] for k in TG.rounak_graph]
                     try:
-                        makespan, _ = compute_dag_makespan(TG.rounak_graph, mip_assignment)
-                        current_mip_cost = makespan
+                        current_mip_cost = float(
+                            evaluate_partition_dag(
+                                TG,
+                                solution,
+                                auto_repair=False,
+                            )["makespan"]
+                        )
                     except Exception as e:
-                        logger.warning("compute_dag_makespan failed during training eval: %s", str(e))
+                        logger.warning("fast DAG makespan failed during training eval: %s", str(e))
                         current_mip_cost = float('inf')
 
                 if current_mip_cost < best_mip_cost:
@@ -459,12 +466,16 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         if violation:
             final_mip_cost = TG.violation_cost
         else:
-            mip_assignment = [1 - final_solution[k] for k in TG.rounak_graph]
             try:
-                final_makespan, _ = compute_dag_makespan(TG.rounak_graph, mip_assignment)
-                final_mip_cost = final_makespan
+                final_mip_cost = float(
+                    evaluate_partition_dag(
+                        TG,
+                        final_solution,
+                        auto_repair=False,
+                    )["makespan"]
+                )
             except Exception as e:
-                logger.warning("compute_dag_makespan failed at final eval: %s", str(e))
+                logger.warning("fast DAG makespan failed at final eval: %s", str(e))
                 final_mip_cost = float('inf')
 
     # choose best between tracked best and final

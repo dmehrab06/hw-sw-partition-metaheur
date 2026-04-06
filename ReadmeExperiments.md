@@ -10,6 +10,11 @@ conda activate combopt
 export PYTHONNOUSERSITE=1
 ```
 
+```
+nohup ./BatchExperiments/run_dataset_area05_10seed.sh > ./BatchExperiments/others_area05_5_57.log 2>&1 &
+```
+
+
 ## MIP (single run)
 ```bash
 ./run_mip_local.sh

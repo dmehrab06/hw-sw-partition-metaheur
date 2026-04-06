@@ -570,7 +570,7 @@ def _resolve_regularizer_config(config, TG):
 def _evaluate_discrete_solution(TG, solution, metric="legacy_lp"):
     """
     Evaluate a binary solution with selectable metric:
-      - legacy_lp: historical diff_gnn evaluation via compute_dag_makespan
+      - legacy_lp: historical diff_gnn evaluation key, now mapped to fast DAG makespan
       - queue: TaskGraph queue simulator
     """
     if TG.violates(solution):
@@ -579,13 +579,20 @@ def _evaluate_discrete_solution(TG, solution, metric="legacy_lp"):
     metric_key = str(metric or "legacy_lp").lower()
     if metric_key in {"legacy_lp", "legacy", "lp", "dag_lp", "cvxpy"}:
         try:
-            from utils.scheduler_utils import compute_dag_makespan
-            graph = getattr(TG, "rounak_graph", None) or TG.graph
-            lp_assignment = [1 - int(solution[n]) for n in graph.nodes()]
-            makespan, _ = compute_dag_makespan(graph, lp_assignment)
-            return float(makespan)
+            try:
+                from .partition_schedule_evaluator import evaluate_partition_dag
+            except ImportError:
+                from partition_schedule_evaluator import evaluate_partition_dag
+
+            return float(
+                evaluate_partition_dag(
+                    TG,
+                    solution,
+                    auto_repair=False,
+                )["makespan"]
+            )
         except Exception as e:
-            logger.warning("Legacy LP evaluation failed; falling back to queue metric: %s", str(e))
+            logger.warning("Fast DAG evaluation failed; falling back to queue metric: %s", str(e))
 
     try:
         return float(TG.evaluate_makespan(solution)["makespan"])

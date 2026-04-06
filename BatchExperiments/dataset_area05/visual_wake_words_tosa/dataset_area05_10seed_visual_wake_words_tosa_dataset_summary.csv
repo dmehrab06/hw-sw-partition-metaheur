@@ -1,0 +1,2 @@
+graph_name,family,nodes,area_constraint,method,mean_makespan,median_makespan,min_makespan,max_makespan,p10_makespan,p90_makespan,mean_dag_makespan,num_runs,num_invalid_runs,num_repaired_runs,mean_over_dag,validity_note_summary
+visual_wake_words_tosa,tflite-graphs,211,0.5,greedy,12367.917748486598,12564.663192738519,10905.693946964711,13897.520014588292,10947.059891327546,13795.173959723104,8368.2147391794,10,0,0,1.477963715555824,Valid solution; no area repair needed.

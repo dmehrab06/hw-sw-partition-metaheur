@@ -9,7 +9,6 @@ if __name__ == "__main__":
     sys.path.append(parent_dir)
 
 from utils.logging_utils import LogManager
-from utils.scheduler_utils import compute_dag_makespan
 
 # Set up logging
 if __name__ == "__main__":
@@ -63,6 +62,26 @@ class TaskGraph:
         self.hardware_area = {}
         self.communication_costs = {}
         self.area_constraint = area_constraint
+
+    def _compute_fast_dag_makespan(self, solution):
+        """
+        Fast DAG surrogate used during optimization.
+
+        This avoids the legacy CVXPY LP formulation and instead evaluates the
+        partition with the repository's fast topological DAG scheduler.
+        """
+        try:
+            from .partition_schedule_evaluator import evaluate_partition_dag
+        except ImportError:
+            from partition_schedule_evaluator import evaluate_partition_dag
+
+        return float(
+            evaluate_partition_dag(
+                self,
+                solution,
+                auto_repair=False,
+            )["makespan"]
+        )
         self.violation_cost = 1e9
         self.node_to_num = {}
         self.num_to_node = {}
@@ -255,9 +274,9 @@ class TaskGraph:
 
     def optimize_gcomopt_makespan_mip(self, assignment_candidates):
         """
-        Evaluate makespan via MIP path for GNN-produced scores.
+        Evaluate makespan via the fast DAG surrogate for GNN-produced scores.
         Converts scores to binary placement using threshold 0.5. If area constraint
-        is violated returns violation_cost, otherwise computes makespan via compute_dag_makespan.
+        is violated returns violation_cost, otherwise computes a direct DAG makespan.
         """
         assert assignment_candidates.shape[1] == len(self.software_costs), \
             f"Dimension {assignment_candidates.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
@@ -275,9 +294,7 @@ class TaskGraph:
             if violation:
                 all_costs.append(self.violation_cost)
             else:
-                mip_assignment = [1 - solution[k] for k in self.rounak_graph]
-                makespan, _ = compute_dag_makespan(self.rounak_graph, mip_assignment)
-                all_costs.append(makespan)
+                all_costs.append(self._compute_fast_dag_makespan(solution))
 
         return np.array(all_costs)
 
@@ -346,7 +363,7 @@ class TaskGraph:
 
     def optimize_swarm_makespan_mip(self, swarms):
         """
-        Evaluate costs for a batch of particle swarm solutions based on mip makespan
+        Evaluate costs for a batch of particle swarm solutions based on the fast DAG surrogate.
         
         This method is designed to work with particle swarm optimization algorithms
         that provide solutions as matrices of continuous values.
@@ -375,9 +392,7 @@ class TaskGraph:
             if violation:
                 all_costs.append(self.violation_cost)
             else:
-                mip_assignment = [1-solution[k] for k in self.rounak_graph]
-                makespan,_ = compute_dag_makespan(self.rounak_graph,mip_assignment)
-                all_costs.append(makespan)
+                all_costs.append(self._compute_fast_dag_makespan(solution))
         
         return np.array(all_costs)
     
@@ -436,7 +451,7 @@ class TaskGraph:
 
     def optimize_single_point_makespan_mip(self, x, type='random'):
         """
-        Evaluate costs for a single solution based on mip makespan calculation
+        Evaluate costs for a single solution based on the fast DAG surrogate.
         
         This method is designed to work with particle swarm optimization algorithms
         that provide solutions as matrices of continuous values.
@@ -462,9 +477,7 @@ class TaskGraph:
         violation = self.violates(solution)
         if violation:
             return self.violation_cost
-        mip_assignment = [1-solution[k] for k in self.rounak_graph]
-        makespan,_ = compute_dag_makespan(self.rounak_graph,mip_assignment)
-        return makespan
+        return self._compute_fast_dag_makespan(solution)
     
     def optimize_random(self,assignment_candidates):
         """
@@ -512,7 +525,7 @@ class TaskGraph:
 
     def optimize_random_makespan_mip(self,assignment_candidates):
         """
-        Evaluate costs for a batch of assignment probabilities based on mip makespan.
+        Evaluate costs for a batch of assignment probabilities based on the fast DAG surrogate.
         
         This method is designed to work with assignment probabilities directly; should NOT be DIRECTLY called with PSO.
         
@@ -532,9 +545,7 @@ class TaskGraph:
             if violation:
                 all_costs.append(self.violation_cost)
             else:
-                mip_assignment = [1-solution[k] for k in self.rounak_graph]
-                makespan,_ = compute_dag_makespan(self.rounak_graph,mip_assignment)
-                all_costs.append(makespan)
+                all_costs.append(self._compute_fast_dag_makespan(solution))
         
         return np.array(all_costs)
 

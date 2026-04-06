@@ -1,0 +1,3 @@
+graph_name,family,nodes,area_constraint,method,mean_makespan,median_makespan,min_makespan,max_makespan,p10_makespan,p90_makespan,mean_dag_makespan,num_runs,num_invalid_runs,num_repaired_runs,mean_over_dag,validity_note_summary
+anomaly_detection_tosa,tflite-graphs,68,0.5,greedy,3335.917412823374,3406.6907061368247,2249.994982076263,4018.625503272376,2757.8184926684694,3845.9782866225737,2405.3047468279005,10,0,0,1.386900107864818,Valid solution; no area repair needed.
+anomaly_detection_tosa,tflite-graphs,68,0.5,mip,3483.776915050394,3483.776915050394,3483.776915050394,3483.776915050394,3483.776915050394,3483.776915050394,2497.2680142870518,1,0,1,1.3950352525717917,Invalid before post-processing; repaired with benefit_per_area greedy fixing to satisfy the area constraint.
