@@ -1,0 +1,14 @@
+graph_name,family,nodes,area_constraint,method,mean_makespan,median_makespan,min_makespan,max_makespan,p10_makespan,p90_makespan,mean_dag_makespan,num_runs,mean_over_dag
+paper_fig3_11node,custom,11,0.5,ccpso,32.0,32.0,32.0,32.0,32.0,32.0,32.0,1,1.0
+paper_fig3_11node,custom,11,0.5,clpso,29.0,29.0,29.0,29.0,29.0,29.0,29.0,1,1.0
+paper_fig3_11node,custom,11,0.5,dbpso,30.0,30.0,30.0,30.0,30.0,30.0,30.0,1,1.0
+paper_fig3_11node,custom,11,0.5,diff_gnn_order,29.0,29.0,29.0,29.0,29.0,29.0,31.0,1,0.9354838709677419
+paper_fig3_11node,custom,11,0.5,esa,29.0,29.0,29.0,29.0,29.0,29.0,29.0,1,1.0
+paper_fig3_11node,custom,11,0.5,gcps,29.0,29.0,29.0,29.0,29.0,29.0,29.0,1,1.0
+paper_fig3_11node,custom,11,0.5,gl25,29.0,29.0,29.0,29.0,29.0,29.0,29.0,1,1.0
+paper_fig3_11node,custom,11,0.5,greedy,32.0,32.0,32.0,32.0,32.0,32.0,32.0,1,1.0
+paper_fig3_11node,custom,11,0.5,jade,29.0,29.0,29.0,29.0,29.0,29.0,29.0,1,1.0
+paper_fig3_11node,custom,11,0.5,mip,29.0,29.0,29.0,29.0,29.0,29.0,29.0,1,1.0
+paper_fig3_11node,custom,11,0.5,pso,29.0,29.0,29.0,29.0,29.0,29.0,29.0,1,1.0
+paper_fig3_11node,custom,11,0.5,random,30.0,30.0,30.0,30.0,30.0,30.0,30.0,1,1.0
+paper_fig3_11node,custom,11,0.5,shade,29.0,29.0,29.0,29.0,29.0,29.0,29.0,1,1.0

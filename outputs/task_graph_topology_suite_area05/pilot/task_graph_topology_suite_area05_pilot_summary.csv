@@ -1,0 +1,4 @@
+graph_name,family,nodes,method,mean_reported_makespan,mean_reported_over_dag,mean_dag_makespan,num_runs
+paper_fig3_11node,custom,11,greedy,429.3070488786155,1.3276088691089638,323.36862073447026,1
+paper_fig3_11node,custom,11,mip,248.6700673060808,0.7689987567169445,323.36862073447026,1
+paper_fig3_11node,custom,11,random,508.3573265207045,1.5720675845605168,323.36862073447026,1

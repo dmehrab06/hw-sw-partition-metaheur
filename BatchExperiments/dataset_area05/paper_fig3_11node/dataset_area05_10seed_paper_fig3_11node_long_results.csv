@@ -1,0 +1,14 @@
+graph_name,seed,area_constraint,hw_scale_factor,hw_scale_variance,comm_scale_factor,method,reported_makespan,dag_makespan,key,family,nodes,edges
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,ccpso,32.0,32.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,clpso,29.0,29.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,dbpso,30.0,30.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,diff_gnn_order,29.0,31.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,esa,29.0,29.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,gcps,29.0,29.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,gl25,29.0,29.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,greedy,32.0,32.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,jade,29.0,29.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,pso,29.0,29.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,random,30.0,30.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,shade,29.0,29.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12
+paper_fig3_11node,42,0.5,1.0,0.1,1.0,mip,29.0,29.0,"('paper_fig3_11node', 42, 0.5, 1.0, 0.1, 1.0)",custom,11,12

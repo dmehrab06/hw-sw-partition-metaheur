@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$ROOT/configs"
-OUTDIR="$ROOT/outputs/logs"
+OUTDIR="${OUTDIR:-$ROOT/outputs/logs}"
 mkdir -p "$OUTDIR"
 
 export PYTHONNOUSERSITE=1

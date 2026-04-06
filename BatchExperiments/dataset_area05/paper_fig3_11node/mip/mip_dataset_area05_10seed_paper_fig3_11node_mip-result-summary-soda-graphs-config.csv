@@ -1,0 +1,2 @@
+SimTime,Config,GraphName,N,HW_Scale_Factor,HW_Scale_Var,Comm_Scale_Var,Area_Percentage,Seed,LB_Naive,mip_opt_cost,mip_opt_ratio,mip_partition_cost,mip_bb,mip_makespan,mip_time
+2026-04-06 10:51:01,001__paper_fig3_11node_area-0.50_hwscale-1.00_hwvar-0.10_comm-1.00_seed-42,inputs/task_graph_topology/custom/paper_fig3_11node.dot,11,1.0,0.1,1.0,0.5,42,41.0,29.0,0.7073170731707317,64.0,milp_eval,29.0,0.0
