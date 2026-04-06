@@ -1,0 +1,13 @@
+graph_name,family,nodes,edges,hw_scale_factor,hw_scale_variance,comm_scale_factor,param_source,param_source_csv
+paper_fig3_11node,custom,11,12,1.0,0.1,1.0,graph_best,outputs/all_methods_fig3_small/fig3_all_methods_small-result-summary-soda-graphs-config.csv
+mobile_net_tosa,pytorch-graphs,830,1066,0.1,0.5,1.0,default,
+rez_net_tosa,pytorch-graphs,362,457,0.1,0.5,1.0,default,
+squeeze_net_tosa,pytorch-graphs,179,234,0.1,0.5,1.0,graph_best,outputs/iccad_pilot_squeeze/iccad_pilot_squeeze-result-summary-soda-graphs-config.csv
+anomaly_detection_tosa,tflite-graphs,68,63,0.1,0.5,1.0,default,
+image_classification_tosa,tflite-graphs,125,144,0.1,0.5,1.0,default,
+keyword_spotting_tosa,tflite-graphs,123,139,0.1,0.5,1.0,default,
+visual_wake_words_tosa,tflite-graphs,211,227,0.1,0.5,1.0,default,
+squeezenet_like_1000,synthetic,1000,1307,0.1,0.5,1.0,squeeze_fallback,outputs/iccad_pilot_squeeze/iccad_pilot_squeeze-result-summary-soda-graphs-config.csv
+squeezenet_like_10000,synthetic,10000,13073,0.1,0.5,1.0,squeeze_fallback,outputs/iccad_pilot_squeeze/iccad_pilot_squeeze-result-summary-soda-graphs-config.csv
+squeezenet_like_11,synthetic,11,14,0.1,0.5,1.0,squeeze_fallback,outputs/iccad_pilot_squeeze/iccad_pilot_squeeze-result-summary-soda-graphs-config.csv
+squeezenet_like_50,synthetic,50,65,0.1,0.5,1.0,graph_best,outputs/iccad_pilot_synth50/iccad_pilot_synth50-result-summary-soda-graphs-config.csv

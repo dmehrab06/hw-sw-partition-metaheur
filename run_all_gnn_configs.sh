@@ -24,9 +24,9 @@ if [[ ${#CONFIGS[@]} -eq 0 ]]; then
 fi
 
 if [[ -n "$METHODS_ENV" ]]; then
-  echo "Running gnn_main.py on ${#CONFIGS[@]} configs (methods=$METHODS_ENV)"
+  echo "Running gnn_main.py on ${#CONFIGS[@]} configs (selected methods=$METHODS_ENV)"
 else
-  echo "Running gnn_main.py on ${#CONFIGS[@]} configs (methods=default)"
+  echo "Running gnn_main.py on ${#CONFIGS[@]} configs (selected methods=default)"
 fi
 if [[ -n "$RESULT_CSV_ENV" ]]; then
   echo "CSV output override: $RESULT_CSV_ENV"
@@ -38,11 +38,14 @@ if [[ -n "$CSV_DIR_ENV" ]]; then
   echo "CSV directory override: $CSV_DIR_ENV"
 fi
 
+batch_start_sec=$SECONDS
+
 for config in "${CONFIGS[@]}"; do
   config_base="$(basename "$config" .yaml)"
   log_file="$OUTDIR/gnn_main_${config_base}.log"
+  config_start_sec=$SECONDS
 
-  echo "---- [GNN] $config_base ----"
+  echo "---- [METHOD] $config_base ----"
   run_env=( )
   if [[ -n "$METHODS_ENV" ]]; then
     run_env+=(HWSW_METHODS="$METHODS_ENV")
@@ -99,9 +102,13 @@ PY
     fi
   fi
 
+  config_elapsed_sec=$((SECONDS - config_start_sec))
+  echo "Completed $config_base in ${config_elapsed_sec}s"
+
 done
 
-echo "GNN batch complete. CSV copies are in $OUTDIR"
+batch_elapsed_sec=$((SECONDS - batch_start_sec))
+echo "Method batch complete in ${batch_elapsed_sec}s. CSV copies are in $OUTDIR"
 
 
 # commands

@@ -58,11 +58,14 @@ if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
   echo "Fast MIP settings: mode=$MIP_SOLVE_MODE, sw=$MIP_SW_CONSTRAINT_MODE, tlimit=${MIP_TIME_LIMIT_SEC}s, gap=$MIP_GAP, nodes=$MIP_NODE_LIMIT"
 fi
 
+batch_start_sec=$SECONDS
+
 for config in "${CONFIGS[@]}"; do
   config_base="$(basename "$config" .yaml)"
   log_file="$OUTDIR/mip_eval_${config_base}.log"
   tmp_cfg=""
   run_config="$config"
+  config_start_sec=$SECONDS
 
   echo "---- [MIP] $config_base ----"
   if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
@@ -169,8 +172,9 @@ PY
   fi
 
   out_csv="$OUTDIR/mip_${result_prefix}-result-summary-soda-graphs-config.csv"
+  config_elapsed_sec=$((SECONDS - config_start_sec))
 
-  "$PYTHON" - <<'PY' "$config" "$partition_pkl" "$out_csv"
+  "$PYTHON" - <<'PY' "$config" "$partition_pkl" "$out_csv" "$config_elapsed_sec"
 import os
 import pickle
 import sys
@@ -191,6 +195,7 @@ from utils.partition_utils import ScheduleConstPartitionSolver
 config_path = Path(sys.argv[1])
 partition_path = Path(sys.argv[2])
 out_csv = Path(sys.argv[3])
+runtime_sec = float(sys.argv[4])
 
 cfg = OmegaConf.load(config_path)
 seed = cfg.get('seed', 42)
@@ -341,7 +346,7 @@ row = {
     f'{method}_partition_cost': partition_cost,
     f'{method}_bb': 'milp_eval',
     f'{method}_makespan': makespan,
-    f'{method}_time': 0.0,
+    f'{method}_time': runtime_sec,
     f'{method}_solution_valid': is_valid,
     f'{method}_initial_solution_valid': (not was_repaired),
     f'{method}_was_repaired': was_repaired,
@@ -365,7 +370,9 @@ else:
 PY
 
   [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
+  echo "Completed $config_base in ${config_elapsed_sec}s"
 
 done
 
-echo "MIP batch complete. CSVs are in $OUTDIR"
+batch_elapsed_sec=$((SECONDS - batch_start_sec))
+echo "MIP batch complete in ${batch_elapsed_sec}s. CSVs are in $OUTDIR"
