@@ -297,8 +297,28 @@ if task_graph is None:
     task_graph = build_taskgraph_like(graph, cfg['area-constraint'])
 
 naive_lb = sum(min(task_graph.software_costs[n], task_graph.hardware_costs[n]) for n in graph.nodes())
-makespan = float(evaluate_partition_lssp(task_graph, partition)['makespan'])
+lssp_result = evaluate_partition_lssp(task_graph, partition)
+makespan = float(lssp_result['makespan'])
 partition_cost = float(task_graph.evaluate_partition_cost(partition))
+
+is_valid = bool(lssp_result.get('is_valid', True))
+was_repaired = bool(lssp_result.get('was_repaired', False))
+repair_strategy = str(lssp_result.get('repair_strategy', 'benefit_per_area'))
+area_used = float(lssp_result.get('execution_summary', {}).get('area_used', 0.0))
+area_budget = float(lssp_result.get('execution_summary', {}).get('area_budget', 0.0))
+
+if is_valid and not was_repaired:
+    validity_note = "Valid solution; no area repair needed."
+elif is_valid and was_repaired:
+    validity_note = (
+        "Invalid before post-processing; repaired with "
+        f"{repair_strategy} greedy fixing to satisfy the area constraint."
+    )
+else:
+    validity_note = (
+        "Invalid solution after post-processing; area constraint still violated "
+        "and reported makespan reflects the violation penalty."
+    )
 
 base_data = {
     'SimTime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -322,6 +342,14 @@ row = {
     f'{method}_bb': 'milp_eval',
     f'{method}_makespan': makespan,
     f'{method}_time': 0.0,
+    f'{method}_solution_valid': is_valid,
+    f'{method}_initial_solution_valid': (not was_repaired),
+    f'{method}_was_repaired': was_repaired,
+    f'{method}_num_repaired_nodes': len(lssp_result.get('repaired_nodes', [])),
+    f'{method}_repair_strategy': repair_strategy,
+    f'{method}_area_used': area_used,
+    f'{method}_area_budget': area_budget,
+    f'{method}_validity_note': validity_note,
 }
 
 out_csv.parent.mkdir(parents=True, exist_ok=True)

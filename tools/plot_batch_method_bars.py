@@ -143,6 +143,22 @@ def _safe_float(value) -> float | None:
     return out
 
 
+def _safe_bool(value, default: bool) -> bool:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return default
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return bool(value)
+    if isinstance(value, str):
+        vv = value.strip().lower()
+        if vv in {"1", "true", "yes", "on"}:
+            return True
+        if vv in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
 def _key_tuple(frame: pd.DataFrame) -> list[tuple]:
     return list(
         zip(
@@ -188,6 +204,45 @@ def _reported_makespan(row: pd.Series, method: str) -> float | None:
     return static
 
 
+def _extract_validity_metadata(row: pd.Series, method: str) -> dict[str, object]:
+    solution_valid_raw = row.get(f"{method}_solution_valid")
+    initial_valid_raw = row.get(f"{method}_initial_solution_valid")
+    was_repaired_raw = row.get(f"{method}_was_repaired")
+    num_repaired_raw = row.get(f"{method}_num_repaired_nodes")
+
+    solution_valid = _safe_bool(solution_valid_raw, True)
+    initial_solution_valid = _safe_bool(initial_valid_raw, True)
+    was_repaired = _safe_bool(was_repaired_raw, False)
+    num_repaired_nodes = 0 if pd.isna(num_repaired_raw) else int(num_repaired_raw)
+
+    validity_note = row.get(f"{method}_validity_note")
+    if pd.isna(validity_note) or validity_note is None:
+        if solution_valid and not was_repaired:
+            validity_note = "Valid solution; no area repair needed."
+        elif solution_valid and was_repaired:
+            validity_note = "Invalid before post-processing; repaired to satisfy the area constraint."
+        else:
+            validity_note = "Invalid solution after post-processing."
+
+    repair_strategy = row.get(f"{method}_repair_strategy")
+    if pd.isna(repair_strategy):
+        repair_strategy = None
+
+    area_used = _safe_float(row.get(f"{method}_area_used"))
+    area_budget = _safe_float(row.get(f"{method}_area_budget"))
+
+    return {
+        "solution_valid": solution_valid,
+        "initial_solution_valid": initial_solution_valid,
+        "was_repaired": was_repaired,
+        "num_repaired_nodes": num_repaired_nodes,
+        "repair_strategy": repair_strategy,
+        "area_used": area_used,
+        "area_budget": area_budget,
+        "validity_note": str(validity_note),
+    }
+
+
 def _load_gnn_results(paths: Path | list[Path] | None, methods: list[str]) -> pd.DataFrame:
     rows: list[dict] = []
     dag_candidates = [f"{method}_dag_makespan" for method in methods if method != "mip"]
@@ -225,6 +280,7 @@ def _load_gnn_results(paths: Path | list[Path] | None, methods: list[str]) -> pd
                         "method": method,
                         "reported_makespan": float(report),
                         "dag_makespan": dag,
+                        **_extract_validity_metadata(row, method),
                     }
                 )
 
@@ -265,6 +321,14 @@ def _load_mip_results(paths: Path | list[Path] | None, dag_lookup: dict[tuple, f
         ].copy()
         out["method"] = "mip"
         out["reported_makespan"] = frame["mip_makespan"].astype(float)
+        out["solution_valid"] = frame.get("mip_solution_valid", True).map(lambda value: _safe_bool(value, True)) if "mip_solution_valid" in frame else True
+        out["initial_solution_valid"] = frame.get("mip_initial_solution_valid", True).map(lambda value: _safe_bool(value, True)) if "mip_initial_solution_valid" in frame else True
+        out["was_repaired"] = frame.get("mip_was_repaired", False).map(lambda value: _safe_bool(value, False)) if "mip_was_repaired" in frame else False
+        out["num_repaired_nodes"] = frame.get("mip_num_repaired_nodes", 0)
+        out["repair_strategy"] = frame.get("mip_repair_strategy", None)
+        out["area_used"] = frame.get("mip_area_used", np.nan)
+        out["area_budget"] = frame.get("mip_area_budget", np.nan)
+        out["validity_note"] = frame.get("mip_validity_note", "Valid solution; no area repair needed.")
         frames.append(out)
     if not frames:
         return pd.DataFrame()
@@ -293,10 +357,18 @@ def _compute_summary(frame: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame
             p90_makespan=("reported_makespan", q90),
             mean_dag_makespan=("dag_makespan", "mean"),
             num_runs=("reported_makespan", "count"),
+            num_invalid_runs=("solution_valid", lambda values: int((~pd.Series(values).map(lambda value: _safe_bool(value, True))).sum())),
+            num_repaired_runs=("was_repaired", lambda values: int(pd.Series(values).map(lambda value: _safe_bool(value, False)).sum())),
         )
         .reset_index()
     )
     summary["mean_over_dag"] = summary["mean_makespan"] / summary["mean_dag_makespan"]
+    note_frame = (
+        frame.groupby(group_cols + ["method"], dropna=False)["validity_note"]
+        .agg(lambda values: " | ".join(sorted({str(v) for v in values if pd.notna(v) and str(v).strip()})))
+        .reset_index(name="validity_note_summary")
+    )
+    summary = summary.merge(note_frame, on=group_cols + ["method"], how="left")
     return summary
 
 

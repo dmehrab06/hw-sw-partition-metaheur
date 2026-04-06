@@ -134,6 +134,24 @@ def _compute_schedule_metrics(
     }
 
 
+def _build_validity_note(schedule_result: Mapping[str, Any]) -> str:
+    is_valid = bool(schedule_result.get("is_valid", True))
+    was_repaired = bool(schedule_result.get("was_repaired", False))
+    repair_strategy = str(schedule_result.get("repair_strategy", "benefit_per_area"))
+
+    if is_valid and not was_repaired:
+        return "Valid solution; no area repair needed."
+    if is_valid and was_repaired:
+        return (
+            "Invalid before post-processing; repaired with "
+            f"{repair_strategy} greedy fixing to satisfy the area constraint."
+        )
+    return (
+        "Invalid solution after post-processing; area constraint still violated "
+        "and reported makespan reflects the violation penalty."
+    )
+
+
 def _get_naive_baseline(task_graph, opt_cost_type: str, config: dict | None) -> tuple[float, dict]:
     partition = {node: 0 for node in task_graph.graph.nodes()}
     mode = _resolve_objective_mode(opt_cost_type)
@@ -237,8 +255,14 @@ class MethodRegistry:
             partition_assignment = partition,
             optimization_time = opt_time,
             additional_metrics = {
+                "solution_valid": bool(schedule_result.get("is_valid", True)),
+                "initial_solution_valid": not bool(schedule_result.get("was_repaired", False)),
                 "was_repaired": bool(schedule_result.get("was_repaired", False)),
                 "num_repaired_nodes": len(schedule_result.get("repaired_nodes", [])),
+                "repair_strategy": schedule_result.get("repair_strategy"),
+                "area_used": float(schedule_result.get("execution_summary", {}).get("area_used", 0.0)),
+                "area_budget": float(schedule_result.get("execution_summary", {}).get("area_budget", 0.0)),
+                "validity_note": _build_validity_note(schedule_result),
                 "dag_makespan": dag_makespan,
                 "lssp_makespan": makespan,
                 "lssp_swprio_makespan": lssp_swprio_makespan,
@@ -276,8 +300,14 @@ class MethodRegistry:
             partition_assignment = partition,
             optimization_time = timing_info,
             additional_metrics = {
+                "solution_valid": bool(schedule_result.get("is_valid", True)),
+                "initial_solution_valid": not bool(schedule_result.get("was_repaired", False)),
                 "was_repaired": bool(schedule_result.get("was_repaired", False)),
                 "num_repaired_nodes": len(schedule_result.get("repaired_nodes", [])),
+                "repair_strategy": schedule_result.get("repair_strategy"),
+                "area_used": float(schedule_result.get("execution_summary", {}).get("area_used", 0.0)),
+                "area_budget": float(schedule_result.get("execution_summary", {}).get("area_budget", 0.0)),
+                "validity_note": _build_validity_note(schedule_result),
                 "dag_makespan": dag_makespan,
                 "lssp_makespan": makespan,
                 "lssp_swprio_makespan": lssp_swprio_makespan,
