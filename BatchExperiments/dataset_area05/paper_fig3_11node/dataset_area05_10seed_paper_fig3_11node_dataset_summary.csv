@@ -2,7 +2,7 @@ graph_name,family,nodes,area_constraint,method,mean_makespan,median_makespan,min
 paper_fig3_11node,custom,11,0.5,ccpso,31.5,32.0,29.0,35.0,29.0,34.1,31.5,10,0,0,1.0,Valid solution; no area repair needed.
 paper_fig3_11node,custom,11,0.5,clpso,31.0,31.0,29.0,35.0,29.0,32.3,31.1,10,0,0,0.9967845659163986,Valid solution; no area repair needed.
 paper_fig3_11node,custom,11,0.5,dbpso,30.0,30.0,29.0,32.0,29.0,31.1,30.2,10,0,0,0.9933774834437087,Valid solution; no area repair needed.
-paper_fig3_11node,custom,11,0.5,diff_gnn_order,29.0,29.0,29.0,29.0,29.0,29.0,29.0,10,0,0,1.0,Valid solution; no area repair needed.
+paper_fig3_11node,custom,11,0.5,diff_gnn_order,29.0,29.0,29.0,29.0,29.0,29.0,31.0,1,0,0,0.9354838709677419,Valid solution; no area repair needed.
 paper_fig3_11node,custom,11,0.5,esa,29.0,29.0,29.0,29.0,29.0,29.0,29.0,10,0,0,1.0,Valid solution; no area repair needed.
 paper_fig3_11node,custom,11,0.5,gcps,29.3,29.0,29.0,32.0,29.0,29.299999999999997,29.3,10,0,0,1.0,Valid solution; no area repair needed.
 paper_fig3_11node,custom,11,0.5,gl25,29.0,29.0,29.0,29.0,29.0,29.0,29.0,10,0,0,1.0,Valid solution; no area repair needed.

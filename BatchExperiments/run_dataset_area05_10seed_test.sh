@@ -41,14 +41,14 @@ METHODS=(
 # Default 8-dataset batch: 7 real SODA graphs + 1 paper sanity-check graph.
 # Comment out any dataset you do not want to include.
 DATASETS=(
-  "paper_fig3_11node"
-  # "mobile_net_tosa"
-  # "rez_net_tosa"
-  # "squeeze_net_tosa"
-  # "anomaly_detection_tosa"
-  # "image_classification_tosa"
-  # "keyword_spotting_tosa"
-  # "visual_wake_words_tosa"
+  # "paper_fig3_11node"
+  "mobile_net_tosa"
+  "rez_net_tosa"
+  "squeeze_net_tosa"
+  "anomaly_detection_tosa"
+  "image_classification_tosa"
+  "keyword_spotting_tosa"
+  "visual_wake_words_tosa"
 )
 
 # Edit this array to control the number of seeds.
@@ -105,6 +105,37 @@ MANIFEST="$CONFIG_PROFILE_ROOT/graph_suite_area05/manifest.csv"
 ROOT_MANIFEST="$OUTDIR/${RESULT_TAG}_selected_manifest.csv"
 ROOT_GNN_CSV="$OUTDIR/${RESULT_TAG}-result-summary-soda-graphs-config.csv"
 ROOT_MIP_CSV="$OUTDIR/mip_${RESULT_TAG}-result-summary-soda-graphs-config.csv"
+CPU_COUNT_OVERRIDE="${HWSW_CPU_COUNT_OVERRIDE:-${CPU_COUNT_OVERRIDE:-}}"
+CPU_COUNT_SOURCE="auto"
+if [[ -n "$CPU_COUNT_OVERRIDE" ]]; then
+  CPU_COUNT="$CPU_COUNT_OVERRIDE"
+  CPU_COUNT_SOURCE="override"
+else
+  CPU_COUNT="$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN || echo 1)"
+fi
+PARALLEL_DATASET_METHODS="${HWSW_PARALLEL_DATASET_METHODS:-0}"
+REQUESTED_INNER_CONFIG_JOBS="${HWSW_MAX_PARALLEL_CONFIGS:-${MAX_PARALLEL_CONFIGS:-}}"
+if [[ -n "$REQUESTED_INNER_CONFIG_JOBS" ]]; then
+  GROUP_CONFIG_PARALLEL_JOBS="$REQUESTED_INNER_CONFIG_JOBS"
+elif [[ "$PARALLEL_DATASET_METHODS" =~ ^(1|true|yes|on)$ ]]; then
+  GROUP_CONFIG_PARALLEL_JOBS=1
+else
+  GROUP_CONFIG_PARALLEL_JOBS=1
+fi
+MAX_PARALLEL_DATASET_METHODS="${HWSW_MAX_PARALLEL_DATASET_METHODS:-0}"
+if [[ "$PARALLEL_DATASET_METHODS" =~ ^(1|true|yes|on)$ ]]; then
+  if ! [[ "$GROUP_CONFIG_PARALLEL_JOBS" =~ ^[0-9]+$ ]] || (( GROUP_CONFIG_PARALLEL_JOBS < 1 )); then
+    GROUP_CONFIG_PARALLEL_JOBS=1
+  fi
+  if ! [[ "$MAX_PARALLEL_DATASET_METHODS" =~ ^[0-9]+$ ]] || (( MAX_PARALLEL_DATASET_METHODS <= 0 )); then
+    MAX_PARALLEL_DATASET_METHODS=$(( CPU_COUNT / GROUP_CONFIG_PARALLEL_JOBS ))
+    if (( MAX_PARALLEL_DATASET_METHODS < 1 )); then
+      MAX_PARALLEL_DATASET_METHODS=1
+    fi
+  fi
+else
+  MAX_PARALLEL_DATASET_METHODS=1
+fi
 
 print_banner() {
   local message="$1"
@@ -117,11 +148,119 @@ join_by_comma() {
 }
 
 cleanup() {
+  if (( ${#ACTIVE_GROUP_PIDS[@]} > 0 )); then
+    for pid in "${ACTIVE_GROUP_PIDS[@]}"; do
+      kill "$pid" >/dev/null 2>&1 || true
+    done
+  fi
   if [[ "$SELECTED_CONFIG_ROOT_WAS_TEMP" == "1" && -n "$SELECTED_CONFIG_ROOT" && -d "$SELECTED_CONFIG_ROOT" ]]; then
     rm -rf "$SELECTED_CONFIG_ROOT"
   fi
 }
 trap cleanup EXIT
+
+ACTIVE_GROUP_PIDS=()
+ACTIVE_GROUP_LABELS=()
+ACTIVE_GROUP_LOGS=()
+FAILED_GROUPS=0
+
+remove_active_group_at_index() {
+  local idx="$1"
+  unset 'ACTIVE_GROUP_PIDS[idx]'
+  unset 'ACTIVE_GROUP_LABELS[idx]'
+  unset 'ACTIVE_GROUP_LOGS[idx]'
+  ACTIVE_GROUP_PIDS=("${ACTIVE_GROUP_PIDS[@]}")
+  ACTIVE_GROUP_LABELS=("${ACTIVE_GROUP_LABELS[@]}")
+  ACTIVE_GROUP_LOGS=("${ACTIVE_GROUP_LOGS[@]}")
+}
+
+reap_finished_groups() {
+  local idx pid rc label log_path
+  for (( idx=${#ACTIVE_GROUP_PIDS[@]}-1; idx>=0; idx-- )); do
+    pid="${ACTIVE_GROUP_PIDS[idx]}"
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      continue
+    fi
+    label="${ACTIVE_GROUP_LABELS[idx]}"
+    log_path="${ACTIVE_GROUP_LOGS[idx]}"
+    if wait "$pid"; then
+      print_banner "Completed group: $label"
+      echo "  Group log: $log_path"
+    else
+      rc=$?
+      FAILED_GROUPS=$((FAILED_GROUPS + 1))
+      print_banner "Group failed: $label (exit=$rc)"
+      echo "  Group log: $log_path"
+    fi
+    remove_active_group_at_index "$idx"
+  done
+}
+
+wait_for_group_slot() {
+  while (( ${#ACTIVE_GROUP_PIDS[@]} >= MAX_PARALLEL_DATASET_METHODS )); do
+    sleep 1
+    reap_finished_groups
+  done
+}
+
+wait_for_all_groups() {
+  while (( ${#ACTIVE_GROUP_PIDS[@]} > 0 )); do
+    sleep 1
+    reap_finished_groups
+  done
+}
+
+launch_dataset_method_group() {
+  local dataset="$1"
+  local method="$2"
+  local dataset_cfg_dir="$3"
+  local method_dir="$4"
+  local method_prefix="$5"
+  local group_label="${dataset} / ${method}"
+  local group_log="$method_dir/${method_prefix}__batch.log"
+
+  wait_for_group_slot
+
+  if [[ "$method" == "mip" ]]; then
+    (
+      CONFIG_GLOB="$dataset_cfg_dir/*.yaml" \
+      OUTDIR="$method_dir" \
+      FAST_MIP="$FAST_MIP" \
+      MIP_TIME_LIMIT_SEC="$MIP_TIME_LIMIT_SEC" \
+      MIP_GAP="$MIP_GAP" \
+      MIP_NODE_LIMIT="$MIP_NODE_LIMIT" \
+      RUN_TIMEOUT_SEC="$RUN_TIMEOUT_SEC" \
+      TIMEOUT_KILL_AFTER_SEC="$TIMEOUT_KILL_AFTER_SEC" \
+      HWSW_OUTPUT_DIR="$method_dir" \
+      HWSW_SOLUTION_DIR="$method_dir/partitions" \
+      HWSW_RESULT_PREFIX="$method_prefix" \
+      HWSW_RUN_TAG="$RUN_TAG" \
+      PYTHON="$PYTHON" \
+      "$ROOT/run_all_mip_configs.sh"
+    ) >"$group_log" 2>&1 &
+  else
+    (
+      CONFIG_GLOB="$dataset_cfg_dir/*.yaml" \
+      OUTDIR="$method_dir" \
+      HWSW_METHODS="$method" \
+      HWSW_OUTPUT_DIR="$method_dir" \
+      HWSW_SOLUTION_DIR="$method_dir/partitions" \
+      HWSW_CSV_DIR="$method_dir" \
+      HWSW_RESULT_PREFIX="$method_prefix" \
+      HWSW_RUN_TAG="$RUN_TAG" \
+      HWSW_MAX_PARALLEL_CONFIGS="$GROUP_CONFIG_PARALLEL_JOBS" \
+      PYTHON="$PYTHON" \
+      "$ROOT/run_all_gnn_configs.sh"
+    ) >"$group_log" 2>&1 &
+  fi
+
+  ACTIVE_GROUP_PIDS+=("$!")
+  ACTIVE_GROUP_LABELS+=("$group_label")
+  ACTIVE_GROUP_LOGS+=("$group_log")
+  print_banner "Launched group: $group_label"
+  echo "  PID      : ${ACTIVE_GROUP_PIDS[-1]}"
+  echo "  Group log: $group_log"
+}
 
 generate_stable_topology_configs() {
   "$PYTHON" "$ROOT/tools/generate_task_graph_topology_configs.py" \
@@ -189,6 +328,10 @@ echo "  MIP timeout pad: ${MIP_TIMEOUT_BUFFER_SEC}s"
 echo "  MIP hard kill : ${RUN_TIMEOUT_SEC}s"
 echo "  MIP gap       : $MIP_GAP"
 echo "  MIP node limit: $MIP_NODE_LIMIT"
+echo "  CPU count     : $CPU_COUNT ($CPU_COUNT_SOURCE)"
+echo "  Outer parallel: $PARALLEL_DATASET_METHODS"
+echo "  Max group jobs: $MAX_PARALLEL_DATASET_METHODS"
+echo "  Inner cfg jobs: $GROUP_CONFIG_PARALLEL_JOBS"
 echo "  Plot step      : disabled in this script; run plot_dataset_area05_10seed.sh separately"
 
 if [[ ! -f "$MANIFEST" || "$FORCE_REGENERATE_CONFIGS" =~ ^(1|true|yes|on)$ ]]; then
@@ -361,43 +504,57 @@ merged.to_csv(out_path, index=False)
 print(f"Wrote cumulative method manifest to {out_path}")
 PY
 
-    if [[ "$method" == "mip" ]]; then
-      echo "  Launching MIP batch with shared dataset configs from $DATASET_CFG_DIR"
-      CONFIG_GLOB="$DATASET_CFG_DIR/*.yaml" \
-      OUTDIR="$METHOD_DIR" \
-      FAST_MIP="$FAST_MIP" \
-      MIP_TIME_LIMIT_SEC="$MIP_TIME_LIMIT_SEC" \
-      MIP_GAP="$MIP_GAP" \
-      MIP_NODE_LIMIT="$MIP_NODE_LIMIT" \
-      RUN_TIMEOUT_SEC="$RUN_TIMEOUT_SEC" \
-      TIMEOUT_KILL_AFTER_SEC="$TIMEOUT_KILL_AFTER_SEC" \
-      HWSW_OUTPUT_DIR="$METHOD_DIR" \
-      HWSW_SOLUTION_DIR="$METHOD_DIR/partitions" \
-      HWSW_RESULT_PREFIX="$METHOD_PREFIX" \
-      HWSW_RUN_TAG="$RUN_TAG" \
-      PYTHON="$PYTHON" \
-      "$ROOT/run_all_mip_configs.sh"
+    if [[ "$PARALLEL_DATASET_METHODS" =~ ^(1|true|yes|on)$ ]]; then
+      launch_dataset_method_group "$dataset" "$method" "$DATASET_CFG_DIR" "$METHOD_DIR" "$METHOD_PREFIX"
     else
-      echo "  Launching GNN/metaheuristic batch for method $method with shared dataset configs from $DATASET_CFG_DIR"
-      CONFIG_GLOB="$DATASET_CFG_DIR/*.yaml" \
-      OUTDIR="$METHOD_DIR" \
-      HWSW_METHODS="$method" \
-      HWSW_OUTPUT_DIR="$METHOD_DIR" \
-      HWSW_SOLUTION_DIR="$METHOD_DIR/partitions" \
-      HWSW_CSV_DIR="$METHOD_DIR" \
-      HWSW_RESULT_PREFIX="$METHOD_PREFIX" \
-      HWSW_RUN_TAG="$RUN_TAG" \
-      PYTHON="$PYTHON" \
-      "$ROOT/run_all_gnn_configs.sh"
+      if [[ "$method" == "mip" ]]; then
+        echo "  Launching MIP batch with shared dataset configs from $DATASET_CFG_DIR"
+        CONFIG_GLOB="$DATASET_CFG_DIR/*.yaml" \
+        OUTDIR="$METHOD_DIR" \
+        FAST_MIP="$FAST_MIP" \
+        MIP_TIME_LIMIT_SEC="$MIP_TIME_LIMIT_SEC" \
+        MIP_GAP="$MIP_GAP" \
+        MIP_NODE_LIMIT="$MIP_NODE_LIMIT" \
+        RUN_TIMEOUT_SEC="$RUN_TIMEOUT_SEC" \
+        TIMEOUT_KILL_AFTER_SEC="$TIMEOUT_KILL_AFTER_SEC" \
+        HWSW_OUTPUT_DIR="$METHOD_DIR" \
+        HWSW_SOLUTION_DIR="$METHOD_DIR/partitions" \
+        HWSW_RESULT_PREFIX="$METHOD_PREFIX" \
+        HWSW_RUN_TAG="$RUN_TAG" \
+        PYTHON="$PYTHON" \
+        "$ROOT/run_all_mip_configs.sh"
+      else
+        echo "  Launching GNN/metaheuristic batch for method $method with shared dataset configs from $DATASET_CFG_DIR"
+        CONFIG_GLOB="$DATASET_CFG_DIR/*.yaml" \
+        OUTDIR="$METHOD_DIR" \
+        HWSW_METHODS="$method" \
+        HWSW_OUTPUT_DIR="$METHOD_DIR" \
+        HWSW_SOLUTION_DIR="$METHOD_DIR/partitions" \
+        HWSW_CSV_DIR="$METHOD_DIR" \
+        HWSW_RESULT_PREFIX="$METHOD_PREFIX" \
+        HWSW_RUN_TAG="$RUN_TAG" \
+        HWSW_MAX_PARALLEL_CONFIGS="$GROUP_CONFIG_PARALLEL_JOBS" \
+        PYTHON="$PYTHON" \
+        "$ROOT/run_all_gnn_configs.sh"
+      fi
+      method_elapsed_sec=$((SECONDS - method_start_sec))
+      print_banner "Completed method: $dataset / $method (${method_elapsed_sec}s)"
     fi
-    method_elapsed_sec=$((SECONDS - method_start_sec))
-    print_banner "Completed method: $dataset / $method (${method_elapsed_sec}s)"
   done
 
   dataset_elapsed_sec=$((SECONDS - dataset_start_sec))
   print_banner "Completed dataset: $dataset (${dataset_elapsed_sec}s)"
 
 done
+
+if [[ "$PARALLEL_DATASET_METHODS" =~ ^(1|true|yes|on)$ ]]; then
+  print_banner "Waiting for ${#ACTIVE_GROUP_PIDS[@]} active dataset/method groups"
+  wait_for_all_groups
+  if (( FAILED_GROUPS > 0 )); then
+    echo "$FAILED_GROUPS dataset/method groups failed"
+    exit 1
+  fi
+fi
 
 batch_elapsed_sec=$((SECONDS - batch_start_sec))
 print_banner "Finished dataset-area batch run (${batch_elapsed_sec}s)"

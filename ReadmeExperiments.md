@@ -25,6 +25,29 @@ tail -f ./BatchExperiments/diff_gnn_parallel__area05_09_00.log
 ```
 
 
+METHODS_OVERRIDE='gl25 esa pso dbpso clpso ccpso shade jade' \
+SEEDS_OVERRIDE='42 43 44 45 46 47 48 49 50 51' \
+HWSW_PARALLEL_DATASET_METHODS=1 \
+HWSW_MAX_PARALLEL_CONFIGS=1 \
+OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 \
+MKL_NUM_THREADS=1 \
+NUMEXPR_NUM_THREADS=1 \
+nohup ./BatchExperiments/run_dataset_area05_10seed.sh \
+> ./BatchExperiments/classical_outer_parallel_area05.log 2>&1 &
+
+METHODS_OVERRIDE='diff_gnn_order' \
+SEEDS_OVERRIDE='42 43 44 45 46 47 48 49 50 51' \
+HWSW_PARALLEL_DATASET_METHODS=0 \
+HWSW_MAX_PARALLEL_CONFIGS=10 \
+nohup ./BatchExperiments/run_dataset_area05_10seed_test.sh \
+> ./BatchExperiments/diff_gnn_parallel__area05.log 2>&1 &
+
+
+tail -f ./BatchExperiments/classical_outer_parallel_area05.log
+tail -f ./BatchExperiments/diff_gnn_parallel__area05.log
+
+
 ## MIP (single run)
 ```bash
 ./run_mip_local.sh

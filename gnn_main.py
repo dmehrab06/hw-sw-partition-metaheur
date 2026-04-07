@@ -26,6 +26,10 @@ from meta_heuristic import (
 
 from meta_heuristic.metaheuristic_registry import MethodRegistry
 from meta_heuristic.partition_schedule_evaluator import synchronize_problem_with_config
+from meta_heuristic.Configuration import (
+    get_classical_search_objective_default,
+    is_classical_search_method,
+)
 try:
     from tools.visualize_schedule_from_partitions import generate_visualizations_for_run
 except Exception:
@@ -51,25 +55,13 @@ def _resolve_effective_search_objective(config, method_name):
     if requested == "partition":
         return requested
     method_key = str(method_name).lower()
-    if method_key not in {
-        "greedy",
-        "random",
-        "pso",
-        "dbpso",
-        "clpso",
-        "ccpso",
-        "esa",
-        "shade",
-        "jade",
-        "gl25",
-        "non_diffgnn",
-    }:
+    if not is_classical_search_method(method_key):
         return requested
 
     override = (
         os.getenv("HWSW_CLASSICAL_SEARCH_OBJECTIVE")
         or config.get("classical-search-objective")
-        or "lssp"
+        or get_classical_search_objective_default()
     )
     normalized = str(override).strip().lower()
     if normalized in {"requested", "same"}:
