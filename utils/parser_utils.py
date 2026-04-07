@@ -45,9 +45,15 @@ def parse_arguments() -> DictConfig:
     parser.add_argument('--seed', type=int,
                        help='Random seed for reproducibility')
     
-    # Add solver tool argument
-    parser.add_argument('-t', '--solver-tool', type=str, choices=['cvxpy', 'cuopt'], default='cvxpy',
-                       help='Solver tool to use for optimization')
+    # Add solver tool argument. Keep legacy aliases used by older MIP scripts.
+    parser.add_argument(
+        '-t',
+        '--solver-tool',
+        type=str,
+        choices=['cvxpy', 'cvxpy-scip', 'cvxpy-highs', 'cvxpy-gurobi', 'cvxpy-xpress', 'cuopt'],
+        default='cvxpy',
+        help='Solver tool to use for optimization',
+    )
     
     args = parser.parse_args()
 

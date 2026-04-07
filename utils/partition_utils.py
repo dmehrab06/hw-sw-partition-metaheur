@@ -57,6 +57,10 @@ class ScheduleConstPartitionSolver:
         self.z_sol = None  # communication variables
         self.T_sol = None  # makespan
         self.Y_sol = None  # software ordering
+        self.last_solve_status = None
+        self.last_solve_timed_out = False
+        self.last_solver_name = None
+        self.last_solver_stats = None
 
     def load_pickle_graph(self, graph_file):
         try:
@@ -212,6 +216,10 @@ class ScheduleConstPartitionSolver:
         - exact: MILP only
         - hybrid: MILP first, fallback to relaxed+rounding if no incumbent
         - relaxed: LP relaxation + rounding/repair (fast approximation)
+
+        Software sequencing modes (configured via solver_cfg["sw-constraint-mode"]):
+        - adjacent: lightweight topological-adjacent approximation
+        - pairwise_topo: main-branch legacy formulation with pairwise sequencing on incomparable SW node pairs
         """
         if self.S_source is None:
             raise ValueError("Problem matrices not created. Load a graph first.")
@@ -220,6 +228,10 @@ class ScheduleConstPartitionSolver:
         solve_mode = str(cfg.get("solve-mode", "exact")).lower()
         sw_constraint_mode = str(cfg.get("sw-constraint-mode", "pairwise_topo")).lower()
         round_threshold = float(cfg.get("round-threshold", 0.5))
+        self.last_solve_status = None
+        self.last_solve_timed_out = False
+        self.last_solver_name = None
+        self.last_solver_stats = None
 
         if solve_mode not in {"exact", "hybrid", "relaxed"}:
             logger.warning(f"Unknown solve mode '{solve_mode}', falling back to hybrid")
@@ -241,7 +253,22 @@ class ScheduleConstPartitionSolver:
             )
             if raw is not None and raw.get("x") is not None and raw.get("T") is not None:
                 status = str(raw.get("status", "unknown"))
+                self.last_solve_status = status
+                self.last_solve_timed_out = self._status_is_time_limited(status)
                 if status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE} or cfg.get("accept-nonoptimal", True):
+                    return self._finalize_solution(
+                        x_values=raw["x"],
+                        t_values=raw["t"],
+                        f_values=raw["f"],
+                        z_values=raw["z"],
+                        makespan_value=raw["T"],
+                        A_max=A_max,
+                        status=status,
+                    )
+                if self.last_solve_timed_out and cfg.get("record-incumbent-on-time-limit", True):
+                    logger.warning(
+                        "Exact MILP hit the time limit but produced an incumbent; preserving it for reporting."
+                    )
                     return self._finalize_solution(
                         x_values=raw["x"],
                         t_values=raw["t"],
@@ -288,8 +315,10 @@ class ScheduleConstPartitionSolver:
             "time-limit-sec": None,
             "mip-gap": None,
             "node-limit": None,
-            "accept-nonoptimal": True,
-            "sw-constraint-mode": "pairwise_topo",
+            "accept-nonoptimal": False,
+            "record-incumbent-on-time-limit": True,
+            "sw-constraint-mode": "adjacent",
+            "big-M": None,
             "round-threshold": 0.5,
             "use-reduced-sw-constraints": use_reduced_sw_constraints,
         }
@@ -317,9 +346,32 @@ class ScheduleConstPartitionSolver:
             cfg["preferred-solvers"] = defaults["preferred-solvers"]
 
         cfg["verbose"] = bool(cfg.get("verbose", False))
-        cfg["accept-nonoptimal"] = bool(cfg.get("accept-nonoptimal", True))
+        cfg["accept-nonoptimal"] = bool(cfg.get("accept-nonoptimal", False))
+        cfg["record-incumbent-on-time-limit"] = bool(cfg.get("record-incumbent-on-time-limit", True))
         cfg["use-reduced-sw-constraints"] = bool(cfg.get("use-reduced-sw-constraints", use_reduced_sw_constraints))
+
+        for key in ("time-limit-sec", "mip-gap", "node-limit", "big-M"):
+            value = cfg.get(key, None)
+            if value in ("", None):
+                cfg[key] = None
+                continue
+            try:
+                numeric = float(value)
+            except Exception:
+                cfg[key] = None
+                continue
+            if key == "mip-gap":
+                cfg[key] = None if numeric < 0 else numeric
+            elif key == "node-limit":
+                cfg[key] = None if numeric <= 0 else int(numeric)
+            else:
+                cfg[key] = None if numeric <= 0 else numeric
         return cfg
+
+    @staticmethod
+    def _status_is_time_limited(status: Any) -> bool:
+        text = str(status).strip().lower()
+        return any(token in text for token in ("user_limit", "time_limit", "timed_out", "timeout"))
 
     def _build_solver_kwargs(self, solver_name: str, solver_cfg: Dict[str, Any], relax_integrality: bool) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"verbose": bool(solver_cfg.get("verbose", False))}
@@ -360,8 +412,72 @@ class ScheduleConstPartitionSolver:
         elif solver_name == "CBC":
             if time_limit is not None:
                 kwargs["maximumSeconds"] = float(time_limit)
+        elif solver_name == "XPRESS":
+            solver_opts = {}
+            if time_limit is not None:
+                solver_opts["SOLTIMELIMIT"] = float(time_limit)
+            if solver_opts:
+                kwargs["solver_opts"] = solver_opts
 
         return kwargs
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, (list, tuple)):
+            return [ScheduleConstPartitionSolver._json_safe(v) for v in value]
+        if isinstance(value, dict):
+            return {str(k): ScheduleConstPartitionSolver._json_safe(v) for k, v in value.items()}
+        if hasattr(value, "__dict__"):
+            return {
+                str(k): ScheduleConstPartitionSolver._json_safe(v)
+                for k, v in vars(value).items()
+                if not str(k).startswith("_")
+            }
+        return str(value)
+
+    def _extract_solver_stats(
+        self,
+        problem: cp.Problem,
+        solver_name: str,
+        solver_cfg: Dict[str, Any],
+        relax_integrality: bool,
+    ) -> Dict[str, Any]:
+        stats: Dict[str, Any] = {
+            "backend": solver_name,
+            "status": str(problem.status),
+            "relaxed_integrality": bool(relax_integrality),
+        }
+        time_limit = solver_cfg.get("time-limit-sec", None)
+        mip_gap = solver_cfg.get("mip-gap", None)
+        node_limit = solver_cfg.get("node-limit", None)
+        if time_limit is not None:
+            stats["time_limit_sec"] = float(time_limit)
+        if mip_gap is not None:
+            stats["mip_gap"] = float(mip_gap)
+        if node_limit is not None:
+            stats["node_limit"] = int(node_limit)
+
+        solver_stats_obj = getattr(problem, "solver_stats", None)
+        if solver_stats_obj is not None:
+            for attr, key in (
+                ("solve_time", "cvxpy_solve_time_sec"),
+                ("setup_time", "cvxpy_setup_time_sec"),
+                ("num_iters", "num_iters"),
+                ("solver_name", "cvxpy_solver_name"),
+            ):
+                value = getattr(solver_stats_obj, attr, None)
+                if value is not None:
+                    stats[key] = self._json_safe(value)
+            extra_stats = getattr(solver_stats_obj, "extra_stats", None)
+            if extra_stats is not None:
+                stats["extra_stats"] = self._json_safe(extra_stats)
+        return stats
 
     def _solve_problem_with_preferred_solvers(
         self,
@@ -385,6 +501,8 @@ class ScheduleConstPartitionSolver:
             try:
                 logger.info(f"[cvxpy] Trying solver: {solver_name} with options={kwargs}")
                 problem.solve(solver=solver_attr, **kwargs)
+                self.last_solver_name = solver_name
+                self.last_solver_stats = self._extract_solver_stats(problem, solver_name, solver_cfg, relax_integrality)
                 return solver_name
             except Exception as err_with_opts:
                 last_err = err_with_opts
@@ -392,6 +510,8 @@ class ScheduleConstPartitionSolver:
                 try:
                     logger.info(f"[cvxpy] Retrying solver {solver_name} without solver-specific options")
                     problem.solve(solver=solver_attr, verbose=bool(solver_cfg.get("verbose", False)))
+                    self.last_solver_name = solver_name
+                    self.last_solver_stats = self._extract_solver_stats(problem, solver_name, solver_cfg, relax_integrality)
                     return solver_name
                 except Exception as err_no_opts:
                     last_err = err_no_opts
@@ -423,6 +543,12 @@ class ScheduleConstPartitionSolver:
         T = cp.Variable(nonneg=True)
         objective = cp.Minimize(T)
         constraints = []
+        big_m_value = solver_cfg.get("big-M", None)
+        if big_m_value is None:
+            if sw_constraint_mode in {"pairwise_topo", "full_pairwise_topo", "main_compat", "legacy_main"}:
+                big_m_value = float(np.sum(self.s))
+            else:
+                big_m_value = float(big_M)
 
         if relax_integrality:
             constraints.append(x >= 0)
@@ -439,8 +565,54 @@ class ScheduleConstPartitionSolver:
         constraints.append(z <= 2 - self.S_source @ x - self.S_target @ x)
 
         Y = None
-        use_reduced_sw_constraints = False
-        if use_reduced_sw_constraints:
+        if sw_constraint_mode in {"pairwise_topo", "full_pairwise_topo", "main_compat", "legacy_main"}:
+            if relax_integrality:
+                Y = cp.Variable((self.n_nodes, self.n_nodes))
+                constraints.append(Y >= 0)
+                constraints.append(Y <= 1)
+            else:
+                Y = cp.Variable((self.n_nodes, self.n_nodes), boolean=True)
+
+            topo_order = list(nx.topological_sort(self.graph))
+            reachable = np.zeros((self.n_nodes, self.n_nodes), dtype=np.uint8)
+
+            for node in reversed(topo_order):
+                i = self.node_to_index[node]
+                reachable[i, i] = 1
+                for successor in self.graph.successors(node):
+                    j = self.node_to_index[successor]
+                    reachable[i] |= reachable[j]
+                    reachable[i, j] = 1
+
+            pairwise_constraints = 0
+            for i in range(self.n_nodes):
+                for j in range(self.n_nodes):
+                    if i < j:
+                        i_reaches_j = bool(reachable[i, j])
+                        j_reaches_i = bool(reachable[j, i])
+                        if i_reaches_j:
+                            constraints.append(Y[i, j] == 1)
+                            pairwise_constraints += 1
+                        elif j_reaches_i:
+                            constraints.append(Y[i, j] == 0)
+                            pairwise_constraints += 1
+                        else:
+                            constraints.append(
+                                f[i] <= t[j] + big_m_value * (1 - Y[i, j]) + big_m_value * (2 - x[i] - x[j])
+                            )
+                            constraints.append(
+                                f[j] <= t[i] + big_m_value * Y[i, j] + big_m_value * (2 - x[i] - x[j])
+                            )
+                            constraints.append(Y[i, j] <= x[i])
+                            constraints.append(Y[i, j] <= x[j])
+                            pairwise_constraints += 4
+                    else:
+                        constraints.append(Y[i, j] == 0)
+            logger.info(
+                "Adding %d software sequencing constraints (main-compatible pairwise-topo)",
+                pairwise_constraints,
+            )
+        elif use_reduced_sw_constraints:
             topo_order = list(nx.topological_sort(self.graph))
             topo_indices = [self.node_to_index[node] for node in topo_order]
 
@@ -448,13 +620,13 @@ class ScheduleConstPartitionSolver:
                 for pos in range(len(topo_indices) - 1):
                     i = topo_indices[pos]
                     j = topo_indices[pos + 1]
-                    constraints.append(f[i] <= t[j] + big_M * (1 - x[i]) + big_M * (1 - x[j]))
+                    constraints.append(f[i] <= t[j] + big_m_value * (1 - x[i]) + big_m_value * (1 - x[j]))
             else:
                 for a in range(len(topo_indices) - 1):
                     i = topo_indices[a]
                     for b in range(a + 1, len(topo_indices)):
                         j = topo_indices[b]
-                        constraints.append(f[i] <= t[j] + big_M * (1 - x[i]) + big_M * (1 - x[j]))
+                        constraints.append(f[i] <= t[j] + big_m_value * (1 - x[i]) + big_m_value * (1 - x[j]))
         else:
             if relax_integrality:
                 Y = cp.Variable((self.n_nodes, self.n_nodes))
@@ -468,8 +640,8 @@ class ScheduleConstPartitionSolver:
                     # if i == j: #rounak
                         # continue 
                     if i<j:
-                        constraints.append(f[i] <= t[j] + big_M * (1 - Y[i, j]) + big_M * (2 - x[i] - x[j]))
-                        constraints.append(f[j] <= t[i] + big_M * Y[i, j] + big_M * (2 - x[i] - x[j]))
+                        constraints.append(f[i] <= t[j] + big_m_value * (1 - Y[i, j]) + big_m_value * (2 - x[i] - x[j]))
+                        constraints.append(f[j] <= t[i] + big_m_value * Y[i, j] + big_m_value * (2 - x[i] - x[j]))
                         constraints.append(Y[i, j] <= x[i])
                         constraints.append(Y[i, j] <= x[j])
 
@@ -609,7 +781,11 @@ class ScheduleConstPartitionSolver:
             "finish_times": finish_times_dict,
             "total_hardware_area": total_hw_area,
             "area_constraint": A_max,
+            "solver_backend": self.last_solver_name,
+            "solver_stats": self.last_solver_stats,
         }
+        self.last_solve_status = status
+        self.last_solve_timed_out = self._status_is_time_limited(status)
 
         logger.info(f"Optimization finished (status={status}) makespan={self.T_sol:.4f}")
         logger.info(f"Hardware nodes: {len(hw_nodes)} | Software nodes: {len(sw_nodes)}")

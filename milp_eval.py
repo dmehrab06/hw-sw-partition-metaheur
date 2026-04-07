@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import time
+import cvxpy as cp
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -65,21 +66,82 @@ def _build_problem_from_graph(graph, area_constraint: float) -> PartitionSchedul
         violation_cost=1e9,
     )
 
+
+def _graph_base_name(config) -> str:
+    graph_file = str(config.get("graph-file", "")).strip()
+    if graph_file:
+        return Path(graph_file).stem
+    return "taskgraph"
+
+
+def _json_safe(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    return str(value)
+
+
+def _normalize_solver_tool(config, logger) -> str:
+    tool = str(config.get("solver-tool", "cvxpy")).strip().lower()
+    if tool in {"cvxpy", "cuopt"}:
+        return tool
+
+    requested = None
+    if tool == "cvxpy-scip":
+        requested = "SCIP"
+    elif tool == "cvxpy-highs":
+        requested = "HIGHS"
+    elif tool == "cvxpy-gurobi":
+        requested = "GUROBI"
+    elif tool == "cvxpy-xpress":
+        requested = "XPRESS"
+    else:
+        logger.error(f"Unsupported solver tool: {tool}")
+        raise NotImplementedError(f"Unsupported solver tool: {tool}")
+
+    mip_cfg = dict(_to_plain_dict(config.get("mip", {})) or {})
+    preferred = [str(s).upper() for s in mip_cfg.get("preferred-solvers", [])]
+    preferred = [requested] + [solver for solver in preferred if solver != requested]
+    mip_cfg["preferred-solvers"] = preferred
+    config["mip"] = mip_cfg
+    config["solver-tool"] = "cvxpy"
+
+    installed = {str(s).upper() for s in cp.installed_solvers()}
+    if requested not in installed:
+        logger.warning(
+            "Requested solver %s via solver-tool=%s is not installed in this environment. "
+            "Will fall back using preferred-solvers=%s.",
+            requested,
+            tool,
+            preferred,
+        )
+    else:
+        logger.info("Using requested solver backend %s via solver-tool=%s", requested, tool)
+    return "cvxpy"
+
 def main():
     t0 = time.perf_counter()
     config = parse_arguments()
 
     LogManager.initialize(f"logs/run_milp_optimizer_area-{config['area-constraint']:.2f}_hw-{config['hw-scale-factor']:.1f}_seed-{config['seed']}.log")
     logger = LogManager.get_logger(__name__)
+    solver_tool = _normalize_solver_tool(config, logger)
 
     # Create solver instance
-    if config['solver-tool'] == 'cvxpy':
+    if solver_tool == 'cvxpy':
         solver = ScheduleConstPartitionSolver()
-    elif config['solver-tool'] == 'cuopt':
+    elif solver_tool == 'cuopt':
         solver = CuOptScheduleConstPartitionSolver()
     else:
-        logger.error(f"Unsupported solver tool: {config['solver-tool']}")
-        raise NotImplementedError(f"Unsupported solver tool: {config['solver-tool']}")
+        logger.error(f"Unsupported solver tool: {solver_tool}")
+        raise NotImplementedError(f"Unsupported solver tool: {solver_tool}")
     
     # Set random seeds for reproducibility
     random.seed(config['seed'])
@@ -122,15 +184,29 @@ def main():
     # Solve optimization with area constraint
     A_max = np.sum(solver.a) * config['area-constraint']
     t_solve0 = time.perf_counter()
-    if config['solver-tool'] == 'cvxpy':
+    if solver_tool == 'cvxpy':
         solution = solver.solve_optimization(A_max=A_max, solver_cfg=config.get('mip', None))
     else:
         solution = solver.solve_optimization(A_max=A_max)
     solve_sec = time.perf_counter() - t_solve0
+    timed_out = bool(getattr(solver, "last_solve_timed_out", False))
+    if solution is not None and not timed_out:
+        solver_stats = solution.get("solver_stats", {}) if isinstance(solution, dict) else {}
+        solver_stats_status = str(solver_stats.get("status", "")).strip().lower()
+        if "time limit reached" in solver_stats_status:
+            timed_out = True
 
     if solution is None:
-        logger.error("Solver did not return a valid solution")
-        raise RuntimeError("MILP/approx solver failed to produce a solution")
+        solver_status = getattr(solver, "last_solve_status", None)
+        logger.error("Solver did not return a valid solution (status=%s)", solver_status)
+        print("[mip] summary:")
+        print(f"  status: {solver_status}")
+        print(f"  area_limit: {float(A_max):.6f}")
+        print(f"  solve_time_sec: {solve_sec:.3f}")
+        print(f"  total_time_sec: {time.perf_counter() - t0:.3f}")
+        if timed_out:
+            raise SystemExit(124)
+        raise RuntimeError("MILP solver failed to produce an accepted exact solution")
     
     
 
@@ -170,6 +246,7 @@ def main():
     hwvar_str = f"{config['hw-scale-variance']:.2f}"
     seed_str = f"{config['seed']}"
     output_dir = f"{config['solution-dir']}"
+    graph_base = _graph_base_name(config)
     
     dir = Path(output_dir)
     if not dir.exists():
@@ -177,10 +254,26 @@ def main():
         os.chmod(dir, 0o777)
 
     logger.info(f"Saving partitions as pickle file in {output_dir}")
-    partition_base = f"taskgraph-squeeze_net_tosa_area-{area_constraint_str}_hwscale-{hwscale_str}_hwvar-{hwvar_str}_seed-{seed_str}"
+    partition_base = f"taskgraph-{graph_base}_area-{area_constraint_str}_hwscale-{hwscale_str}_hwvar-{hwvar_str}_seed-{seed_str}"
     partition_path = Path(output_dir) / f"{partition_base}_assignment-mip.pkl"
     with open(partition_path, 'wb') as f:
         pickle.dump(partition_assignment,f)
+
+    json_solution = dict(solution)
+    json_solution["partition_assignment"] = [partition_assignment]
+    json_solution["wall_time"] = float(time.perf_counter() - t0)
+    json_solution["lp_makespan"] = float(lp_makespan)
+    json_solution["final_lssp_makespan"] = float(lssp_makespan)
+    json_solution["solve_time_sec"] = float(solve_sec)
+    json_solution["total_time_sec"] = float(time.perf_counter() - t0)
+    json_solution["solver_tool"] = config.get("solver-tool")
+    json_solution["taskgraph_pickle"] = taskgraph_pickle_used
+    json_solution["graph_file"] = config.get("graph-file")
+    json_solution["time_limit_exceeded"] = bool(timed_out)
+    json_path = Path(output_dir) / f"{partition_base}_assignment-mip.json"
+    with open(json_path, "w") as f:
+        json.dump(_json_safe(json_solution), f, indent=2)
+    logger.info(f"Wrote main-compatible JSON solution to {json_path}")
 
     # Persist the exact TaskGraph pickle used for this solve (prevents later overwrite mismatches)
     taskgraph_copy_path = None
@@ -194,6 +287,7 @@ def main():
     meta = {
         "taskgraph_pickle": taskgraph_pickle_used,
         "taskgraph_pickle_copy": str(taskgraph_copy_path) if taskgraph_copy_path else None,
+        "assignment_json": str(json_path),
         "graph_file": config.get("graph-file"),
         "area_constraint": config.get("area-constraint"),
         "hw_scale_factor": config.get("hw-scale-factor"),
@@ -201,6 +295,15 @@ def main():
         "comm_scale_factor": config.get("comm-scale-factor"),
         "seed": config.get("seed"),
         "solver_tool": config.get("solver-tool"),
+        "solver_backend": solution.get("solver_backend"),
+        "solver_status": solution.get("status"),
+        "solver_stats": solution.get("solver_stats"),
+        "time_limit_exceeded": bool(timed_out),
+        "model_makespan": float(solution.get("makespan", float("nan"))),
+        "lp_makespan": float(lp_makespan),
+        "final_lssp_makespan": float(lssp_makespan),
+        "solve_time_sec": float(solve_sec),
+        "total_time_sec": float(time.perf_counter() - t0),
     }
     meta_path = Path(output_dir) / f"{partition_base}_assignment-mip.meta.json"
     with open(meta_path, "w") as f:
@@ -280,6 +383,10 @@ def main():
             except Exception as e:
                 logger.warning(f"Failed to generate shared visualizations: {e}", exc_info=True)
                 print(f"[mip] warning: shared visualization failed ({e})")
+
+    if timed_out:
+        logger.warning("MILP hit the time limit; incumbent artifacts were written for downstream reporting.")
+        raise SystemExit(124)
 
 
 if __name__ == "__main__":

@@ -310,6 +310,9 @@ def _load_gnn_results(paths: Path | list[Path] | None, methods: list[str]) -> pd
                         "_source_mtime_ns": row["_source_mtime_ns"],
                         "_source_index": row["_source_index"],
                         "_row_index": row["_row_index"],
+                        "status": "completed",
+                        "is_timeout": False,
+                        "is_failed": False,
                         **_extract_validity_metadata(row, method),
                     }
                 )
@@ -364,6 +367,9 @@ def _load_mip_results(paths: Path | list[Path] | None, dag_lookup: dict[tuple, f
         out["area_used"] = frame.get("mip_area_used", np.nan)
         out["area_budget"] = frame.get("mip_area_budget", np.nan)
         out["validity_note"] = frame.get("mip_validity_note", "Valid solution; no area repair needed.")
+        out["status"] = frame.get("mip_status", "optimal").fillna("optimal").astype(str)
+        out["is_timeout"] = out["status"].eq("time_limit_exceeded")
+        out["is_failed"] = out["status"].eq("failed")
         frames.append(out)
     if not frames:
         return pd.DataFrame()
@@ -394,6 +400,8 @@ def _compute_summary(frame: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame
             num_runs=("reported_makespan", "count"),
             num_invalid_runs=("solution_valid", lambda values: int((~pd.Series(values).map(lambda value: _safe_bool(value, True))).sum())),
             num_repaired_runs=("was_repaired", lambda values: int(pd.Series(values).map(lambda value: _safe_bool(value, False)).sum())),
+            num_timeout_runs=("is_timeout", lambda values: int(pd.Series(values).map(bool).sum())),
+            num_failed_runs=("is_failed", lambda values: int(pd.Series(values).map(bool).sum())),
         )
         .reset_index()
     )
@@ -421,7 +429,7 @@ def _figure_size(rows: int, cols: int) -> tuple[float, float]:
 
 
 def _draw_method_boxplots(ax, frame: pd.DataFrame, methods: list[str], title: str) -> None:
-    x, labels = _method_positions(methods)
+    x, method_labels = _method_positions(methods)
     box_data: list[list[float]] = []
     box_positions: list[int] = []
     mean_positions: list[int] = []
@@ -469,11 +477,40 @@ def _draw_method_boxplots(ax, frame: pd.DataFrame, methods: list[str], title: st
             zorder=3,
         )
 
+    ymin, ymax = ax.get_ylim()
+    yrange = ymax - ymin
+    if yrange <= 0:
+        yrange = 1.0
+        ymax = ymin + yrange
+        ax.set_ylim(ymin, ymax)
+    status_y = ymin + 0.02 * yrange
+    status_font = max(10, int(GLOBAL_FONT_SIZE * 0.45))
+    for idx, method in enumerate(methods):
+        timeout_count = int(frame.loc[frame["method"] == method, "is_timeout"].sum()) if "is_timeout" in frame else 0
+        failed_count = int(frame.loc[frame["method"] == method, "is_failed"].sum()) if "is_failed" in frame else 0
+        status_labels = []
+        if timeout_count:
+            status_labels.append(f"TLE {timeout_count}")
+        if failed_count:
+            status_labels.append(f"FAIL {failed_count}")
+        if status_labels:
+            ax.text(
+                idx,
+                status_y,
+                "\n".join(status_labels),
+                ha="center",
+                va="bottom",
+                color="#c62828",
+                fontsize=status_font,
+                fontweight="bold",
+                zorder=4,
+            )
+
     ax.set_title(title, fontsize=GLOBAL_FONT_SIZE)
     ax.set_xlabel("")
     ax.set_ylabel("Makespan", fontsize=GLOBAL_FONT_SIZE)
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=35, ha="right")
+    ax.set_xticklabels(method_labels, rotation=35, ha="right")
     ax.tick_params(axis="both", labelsize=GLOBAL_FONT_SIZE)
     ax.grid(axis="y", linestyle="--", alpha=0.3)
     ax.set_axisbelow(True)

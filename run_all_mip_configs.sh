@@ -9,9 +9,17 @@ mkdir -p "$OUTDIR"
 export PYTHONNOUSERSITE=1
 
 PYTHON="${PYTHON:-/people/dass304/.conda/envs/combopt/bin/python}"
-SOLVER_TOOL="${SOLVER_TOOL:-cvxpy}"
+SOLVER_TOOL="${SOLVER_TOOL:-${MIP_SOLVER_TOOL:-cvxpy-scip}}"
 MIP_EVAL_PY="${MIP_EVAL_PY:-mip_eval.py}"
 CONFIG_GLOB="${CONFIG_GLOB:-$CONFIG_DIR/config_mkspan_default_gnn.yaml}"
+RESULT_CSV_ENV="${HWSW_RESULT_CSV:-${RESULT_CSV:-}}"
+RESULT_PREFIX_OVERRIDE="${HWSW_RESULT_PREFIX:-${RESULT_PREFIX:-}}"
+OUTPUT_DIR_OVERRIDE="${HWSW_OUTPUT_DIR:-${OUTPUT_DIR:-}}"
+SOLUTION_DIR_OVERRIDE="${HWSW_SOLUTION_DIR:-${SOLUTION_DIR:-}}"
+RUN_TAG_ENV="${HWSW_RUN_TAG:-${RUN_TAG:-}}"
+PARALLEL_RUNNER="$ROOT/tools/run_mip_configs_parallel.py"
+ATTACH_SOLVER_STATS_PY="$ROOT/tools/attach_mip_solver_stats.py"
+PARALLEL_CONFIG_JOBS="${HWSW_MAX_PARALLEL_CONFIGS:-${MAX_PARALLEL_CONFIGS:-1}}"
 
 if [[ -f "$MIP_EVAL_PY" ]]; then
   MIP_EVAL_ENTRY="$MIP_EVAL_PY"
@@ -26,26 +34,24 @@ else
   exit 1
 fi
 
-# Fast-mode defaults (can be overridden via env).
-# Set FAST_MIP=0 to run configs exactly as-is.
+# MIP override defaults (can be overridden via env).
+# Set FAST_MIP=0 to run configs exactly as they appear in YAML.
+# The default profile below is intentionally main-compat: pairwise-topo SW constraints
+# and a SCIP-first backend request, while still preserving the external timeout controls.
 FAST_MIP="${FAST_MIP:-1}"
-MIP_SOLVE_MODE="${MIP_SOLVE_MODE:-hybrid}"
-MIP_SW_CONSTRAINT_MODE="${MIP_SW_CONSTRAINT_MODE:-adjacent}"
-MIP_USE_REDUCED_SW="${MIP_USE_REDUCED_SW:-true}"
-MIP_TIME_LIMIT_SEC="${MIP_TIME_LIMIT_SEC:-30}"
-MIP_GAP="${MIP_GAP:-0.15}"
-MIP_NODE_LIMIT="${MIP_NODE_LIMIT:-20000}"
-MIP_ACCEPT_NONOPTIMAL="${MIP_ACCEPT_NONOPTIMAL:-true}"
-MIP_VERBOSE="${MIP_VERBOSE:-false}"
+MIP_SOLVE_MODE="${MIP_SOLVE_MODE:-exact}"
+MIP_SW_CONSTRAINT_MODE="${MIP_SW_CONSTRAINT_MODE:-pairwise_topo}"
+MIP_USE_REDUCED_SW="${MIP_USE_REDUCED_SW:-false}"
+MIP_TIME_LIMIT_SEC="${MIP_TIME_LIMIT_SEC:-600}"
+MIP_GAP="${MIP_GAP:-0}"
+MIP_NODE_LIMIT="${MIP_NODE_LIMIT:-0}"
+MIP_ACCEPT_NONOPTIMAL="${MIP_ACCEPT_NONOPTIMAL:-false}"
+MIP_VERBOSE="${MIP_VERBOSE:-true}"
 
 # Extra wall-clock guard for each config run.
 # 0 disables external timeout.
-RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-120}"
+RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-$MIP_TIME_LIMIT_SEC}"
 TIMEOUT_KILL_AFTER_SEC="${TIMEOUT_KILL_AFTER_SEC:-15}"
-RUN_TAG_ENV="${HWSW_RUN_TAG:-${RUN_TAG:-}}"
-RESULT_PREFIX_OVERRIDE="${HWSW_RESULT_PREFIX:-${RESULT_PREFIX:-}}"
-OUTPUT_DIR_OVERRIDE="${HWSW_OUTPUT_DIR:-${OUTPUT_DIR:-}}"
-SOLUTION_DIR_OVERRIDE="${HWSW_SOLUTION_DIR:-${SOLUTION_DIR:-}}"
 
 cd "$ROOT"
 
@@ -59,7 +65,7 @@ echo "Running MIP solver (${SOLVER_TOOL}) on ${#CONFIGS[@]} configs"
 echo "FAST_MIP=$FAST_MIP, RUN_TIMEOUT_SEC=$RUN_TIMEOUT_SEC"
 echo "MIP evaluator: $(basename "$MIP_EVAL_ENTRY")"
 if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
-  echo "Fast MIP settings: mode=$MIP_SOLVE_MODE, sw=$MIP_SW_CONSTRAINT_MODE, tlimit=${MIP_TIME_LIMIT_SEC}s, gap=$MIP_GAP, nodes=$MIP_NODE_LIMIT"
+  echo "MIP override settings: solver=$SOLVER_TOOL, mode=$MIP_SOLVE_MODE, sw=$MIP_SW_CONSTRAINT_MODE, tlimit=${MIP_TIME_LIMIT_SEC}s, gap=$MIP_GAP, nodes=$MIP_NODE_LIMIT, accept_nonoptimal=$MIP_ACCEPT_NONOPTIMAL"
 fi
 if [[ -n "$RUN_TAG_ENV" ]]; then
   echo "Run tag: $RUN_TAG_ENV"
@@ -67,14 +73,363 @@ fi
 if [[ -n "$RESULT_PREFIX_OVERRIDE" ]]; then
   echo "Result prefix override: $RESULT_PREFIX_OVERRIDE"
 fi
+if [[ -n "$RESULT_CSV_ENV" ]]; then
+  echo "CSV output override: $RESULT_CSV_ENV"
+fi
 if [[ -n "$OUTPUT_DIR_OVERRIDE" ]]; then
   echo "Output directory override: $OUTPUT_DIR_OVERRIDE"
 fi
 if [[ -n "$SOLUTION_DIR_OVERRIDE" ]]; then
   echo "Solution directory override: $SOLUTION_DIR_OVERRIDE"
 fi
+if [[ "${PARALLEL_CONFIG_JOBS}" =~ ^[0-9]+$ ]] && (( PARALLEL_CONFIG_JOBS > 1 )); then
+  echo "Parallel config jobs: $PARALLEL_CONFIG_JOBS"
+fi
+
+if [[ "${PARALLEL_CONFIG_JOBS}" =~ ^[0-9]+$ ]] && (( PARALLEL_CONFIG_JOBS > 1 )); then
+  env \
+    PYTHON="$PYTHON" \
+    SOLVER_TOOL="$SOLVER_TOOL" \
+    MIP_EVAL_PY="$MIP_EVAL_PY" \
+    FAST_MIP="$FAST_MIP" \
+    MIP_SOLVE_MODE="$MIP_SOLVE_MODE" \
+    MIP_SW_CONSTRAINT_MODE="$MIP_SW_CONSTRAINT_MODE" \
+    MIP_USE_REDUCED_SW="$MIP_USE_REDUCED_SW" \
+    MIP_TIME_LIMIT_SEC="$MIP_TIME_LIMIT_SEC" \
+    MIP_GAP="$MIP_GAP" \
+    MIP_NODE_LIMIT="$MIP_NODE_LIMIT" \
+    MIP_ACCEPT_NONOPTIMAL="$MIP_ACCEPT_NONOPTIMAL" \
+    MIP_VERBOSE="$MIP_VERBOSE" \
+    RUN_TIMEOUT_SEC="$RUN_TIMEOUT_SEC" \
+    TIMEOUT_KILL_AFTER_SEC="$TIMEOUT_KILL_AFTER_SEC" \
+    HWSW_RUN_TAG="$RUN_TAG_ENV" \
+    HWSW_RESULT_PREFIX="$RESULT_PREFIX_OVERRIDE" \
+    HWSW_RESULT_CSV="$RESULT_CSV_ENV" \
+    HWSW_OUTPUT_DIR="$OUTPUT_DIR_OVERRIDE" \
+    HWSW_SOLUTION_DIR="$SOLUTION_DIR_OVERRIDE" \
+    "$PYTHON" "$PARALLEL_RUNNER" --root "$ROOT" --outdir "$OUTDIR" --script "$ROOT/run_all_mip_configs.sh" --jobs "$PARALLEL_CONFIG_JOBS" "${CONFIGS[@]}"
+  exit $?
+fi
 
 batch_start_sec=$SECONDS
+
+append_mip_status_row() {
+  local config_path="$1"
+  local lookup_config_path="$2"
+  local out_csv="$3"
+  local runtime_sec="$4"
+  local status="$5"
+  local validity_note="$6"
+
+  "$PYTHON" - <<'PY' "$config_path" "$lookup_config_path" "$out_csv" "$runtime_sec" "$status" "$validity_note" "$ROOT"
+import csv
+import json
+import os
+import pickle
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from omegaconf import OmegaConf
+
+from meta_heuristic.partition_schedule_evaluator import synchronize_problem_with_config
+
+config_path = Path(sys.argv[1])
+lookup_config_path = Path(sys.argv[2])
+out_csv = Path(sys.argv[3])
+runtime_sec = float(sys.argv[4])
+status = str(sys.argv[5])
+validity_note = str(sys.argv[6])
+root = Path(sys.argv[7]).resolve()
+
+cfg = OmegaConf.load(config_path)
+lookup_cfg = OmegaConf.load(lookup_config_path)
+
+def _resolve_path(value):
+    path = Path(str(value))
+    return path if path.is_absolute() else root / path
+
+task_graph = None
+node_count = np.nan
+naive_lb = np.nan
+area_budget = np.nan
+taskgraph_pickle = lookup_cfg.get("taskgraph-pickle", cfg.get("taskgraph-pickle", None))
+if taskgraph_pickle:
+    tg_path = _resolve_path(taskgraph_pickle)
+    if tg_path.exists():
+        try:
+            with open(tg_path, "rb") as handle:
+                task_graph = pickle.load(handle)
+            task_graph = synchronize_problem_with_config(task_graph, cfg)
+            node_count = len(task_graph.graph.nodes())
+            naive_lb = sum(
+                min(task_graph.software_costs[node], task_graph.hardware_costs[node])
+                for node in task_graph.graph.nodes()
+            )
+            total_area = getattr(task_graph, "total_area", None)
+            if total_area is not None:
+                area_budget = float(total_area) * float(cfg.get("area-constraint", 0.0))
+        except Exception:
+            pass
+
+
+def _resolve_solution_dir():
+    value = lookup_cfg.get("solution-dir", cfg.get("solution-dir", ""))
+    if not value:
+        return None
+    return _resolve_path(value)
+
+
+def _config_keys():
+    return (
+        f"{float(cfg.get('area-constraint', 0.0)):.2f}",
+        f"{float(cfg.get('hw-scale-factor', 0.0)):.1f}",
+        f"{float(cfg.get('hw-scale-variance', 0.0)):.2f}",
+        str(cfg.get("seed", 42)),
+    )
+
+
+solution_dir = _resolve_solution_dir()
+partition_pkl = None
+partition_json = None
+partition_meta = None
+json_payload = {}
+
+if solution_dir and solution_dir.exists():
+    area_key, hw_key, hwvar_key, seed_key = _config_keys()
+    stem = f"*area-{area_key}_hwscale-{hw_key}_hwvar-{hwvar_key}_seed-{seed_key}_assignment-mip"
+    matches_pkl = sorted(solution_dir.glob(f"{stem}.pkl"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    matches_json = sorted(solution_dir.glob(f"{stem}.json"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    matches_meta = sorted(solution_dir.glob(f"{stem}.meta.json"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    if not matches_pkl:
+        matches_pkl = sorted(solution_dir.glob("*assignment-mip.pkl"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    if not matches_json:
+        matches_json = sorted(solution_dir.glob("*assignment-mip.json"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    if not matches_meta:
+        matches_meta = sorted(solution_dir.glob("*assignment-mip.meta.json"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    partition_pkl = matches_pkl[0] if matches_pkl else None
+    partition_json = matches_json[0] if matches_json else None
+    partition_meta = matches_meta[0] if matches_meta else None
+
+if partition_json and partition_json.exists():
+    try:
+        json_payload = json.loads(partition_json.read_text())
+    except Exception:
+        json_payload = {}
+
+base_data = {
+    "SimTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    "RunTag": os.getenv("HWSW_RUN_TAG", ""),
+    "Config": config_path.stem,
+    "GraphName": cfg.get("graph-file", ""),
+    "N": node_count,
+    "HW_Scale_Factor": cfg.get("hw-scale-factor", np.nan),
+    "HW_Scale_Var": cfg.get("hw-scale-variance", np.nan),
+    "Comm_Scale_Var": cfg.get("comm-scale-factor", np.nan),
+    "Area_Percentage": cfg.get("area-constraint", np.nan),
+    "Seed": cfg.get("seed", np.nan),
+    "LB_Naive": naive_lb,
+}
+
+model_makespan = np.nan
+lp_makespan = np.nan
+lssp_makespan = np.nan
+makespan = np.nan
+partition_cost = np.nan
+solution_valid = False
+initial_solution_valid = False
+was_repaired = False
+num_repaired_nodes = 0
+repair_strategy = ""
+area_used = np.nan
+timeout_note = "Time limit exceeded; no incumbent solution artifact was recorded."
+validity_note_out = validity_note
+
+if json_payload:
+    try:
+        model_makespan = float(json_payload.get("makespan", np.nan))
+    except Exception:
+        pass
+    try:
+        lp_makespan = float(json_payload.get("lp_makespan", np.nan))
+    except Exception:
+        pass
+    try:
+        lssp_makespan = float(json_payload.get("final_lssp_makespan", np.nan))
+    except Exception:
+        pass
+    if np.isfinite(lssp_makespan):
+        makespan = lssp_makespan
+    elif np.isfinite(model_makespan):
+        makespan = model_makespan
+    timeout_note = "Time limit exceeded; CSV row records the best incumbent artifact written before timeout."
+    validity_note_out = "Incumbent solution recorded from a timed-out exact MIP run."
+
+if partition_pkl and partition_pkl.exists() and task_graph is not None:
+    try:
+        with open(partition_pkl, "rb") as handle:
+            partition = pickle.load(handle)
+        missing = [n for n in task_graph.graph.nodes() if n not in partition]
+        for n in missing:
+            partition[n] = 0
+        from meta_heuristic.partition_schedule_evaluator import evaluate_partition_lssp
+        lssp_result = evaluate_partition_lssp(task_graph, partition)
+        makespan = float(lssp_result["makespan"])
+        lssp_makespan = makespan
+        partition_cost = float(task_graph.evaluate_partition_cost(partition))
+        solution_valid = bool(lssp_result.get("is_valid", True))
+        was_repaired = bool(lssp_result.get("was_repaired", False))
+        initial_solution_valid = (not was_repaired)
+        num_repaired_nodes = len(lssp_result.get("repaired_nodes", []))
+        repair_strategy = str(lssp_result.get("repair_strategy", "benefit_per_area"))
+        area_used = float(lssp_result.get("execution_summary", {}).get("area_used", np.nan))
+        if np.isfinite(area_budget):
+            area_budget = float(lssp_result.get("execution_summary", {}).get("area_budget", area_budget))
+        timeout_note = "Time limit exceeded; CSV row records the best incumbent artifact written before timeout."
+        if solution_valid and not was_repaired:
+            validity_note_out = "Valid incumbent solution; no area repair needed."
+        elif solution_valid and was_repaired:
+            validity_note_out = (
+                "Incumbent solution was invalid before post-processing; repaired with "
+                f"{repair_strategy} greedy fixing to satisfy the area constraint."
+            )
+        else:
+            validity_note_out = (
+                "Incumbent solution remained invalid after post-processing; reported makespan "
+                "reflects the violation penalty."
+            )
+    except Exception:
+        pass
+
+row = {
+    **base_data,
+    "mip_status": status,
+    "mip_model_makespan": model_makespan,
+    "mip_lp_makespan": lp_makespan,
+    "mip_lssp_makespan": lssp_makespan,
+    "mip_opt_cost": makespan,
+    "mip_opt_ratio": (makespan / naive_lb) if np.isfinite(makespan) and np.isfinite(naive_lb) and naive_lb > 0 else np.nan,
+    "mip_partition_cost": partition_cost,
+    "mip_bb": "milp_eval",
+    "mip_makespan": makespan,
+    "mip_time": runtime_sec,
+    "mip_solution_valid": solution_valid,
+    "mip_initial_solution_valid": initial_solution_valid,
+    "mip_was_repaired": was_repaired,
+    "mip_num_repaired_nodes": num_repaired_nodes,
+    "mip_repair_strategy": repair_strategy,
+    "mip_area_used": area_used,
+    "mip_area_budget": area_budget,
+    "mip_validity_note": validity_note_out,
+    "mip_timeout_note": timeout_note,
+}
+
+result_df = pd.DataFrame([row])
+out_csv.parent.mkdir(parents=True, exist_ok=True)
+
+if out_csv.exists():
+    with out_csv.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.reader(handle))
+
+    if not rows:
+        result_df.to_csv(out_csv, mode="w", index=False, header=True)
+    else:
+        existing_cols = list(rows[0])
+        ordered_cols = existing_cols + [c for c in result_df.columns if c not in existing_cols]
+
+        row_dicts = []
+        for raw in rows[1:]:
+            padded = list(raw) + [""] * max(0, len(ordered_cols) - len(raw))
+            row_dicts.append(dict(zip(ordered_cols, padded[: len(ordered_cols)])))
+
+        if len(ordered_cols) != len(existing_cols):
+            existing_df = pd.DataFrame(row_dicts, columns=ordered_cols)
+            result_df = result_df.reindex(columns=ordered_cols)
+            combined_df = pd.concat([existing_df, result_df], ignore_index=True)
+            combined_df.to_csv(out_csv, mode="w", index=False, header=True)
+        else:
+            result_df = result_df.reindex(columns=ordered_cols)
+            result_df.to_csv(out_csv, mode="a", index=False, header=False)
+else:
+    result_df.to_csv(out_csv, mode="a", index=False, header=True)
+PY
+}
+
+resolve_mip_artifacts() {
+  local solution_dir="$1"
+  local area_key="$2"
+  local hw_key="$3"
+  local hwvar_key="$4"
+  local seed_key="$5"
+  local stem=""
+  local partition_pkl=""
+  local partition_json=""
+  local partition_meta=""
+
+  stem="*area-${area_key}_hwscale-${hw_key}_hwvar-${hwvar_key}_seed-${seed_key}_assignment-mip"
+  partition_pkl=$(ls -t "$solution_dir"/$stem.pkl 2>/dev/null | head -n1 || true)
+  partition_json=$(ls -t "$solution_dir"/$stem.json 2>/dev/null | head -n1 || true)
+  partition_meta=$(ls -t "$solution_dir"/$stem.meta.json 2>/dev/null | head -n1 || true)
+
+  if [[ -z "$partition_pkl" ]]; then
+    partition_pkl=$(ls -t "$solution_dir"/*assignment-mip.pkl 2>/dev/null | head -n1 || true)
+  fi
+  if [[ -z "$partition_json" ]]; then
+    partition_json=$(ls -t "$solution_dir"/*assignment-mip.json 2>/dev/null | head -n1 || true)
+  fi
+  if [[ -z "$partition_meta" ]]; then
+    partition_meta=$(ls -t "$solution_dir"/*assignment-mip.meta.json 2>/dev/null | head -n1 || true)
+  fi
+
+  printf '%s\n%s\n%s\n' "$partition_pkl" "$partition_json" "$partition_meta"
+}
+
+attach_mip_solver_stats() {
+  local log_file="$1"
+  local partition_json="$2"
+  local partition_meta="$3"
+
+  if [[ ! -f "$ATTACH_SOLVER_STATS_PY" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$log_file" ]]; then
+    return 0
+  fi
+  if [[ -z "$partition_json" && -z "$partition_meta" ]]; then
+    return 0
+  fi
+
+  local cmd=( "$PYTHON" "$ATTACH_SOLVER_STATS_PY" --log-file "$log_file" )
+  if [[ -n "$partition_json" && -f "$partition_json" ]]; then
+    cmd+=( --json-path "$partition_json" )
+  fi
+  if [[ -n "$partition_meta" && -f "$partition_meta" ]]; then
+    cmd+=( --meta-path "$partition_meta" )
+  fi
+  "${cmd[@]}" >/dev/null 2>&1 || true
+}
+
+copy_versioned_mip_artifacts() {
+  local partition_pkl="$1"
+  if [[ -z "$RUN_TAG_ENV" || -z "$partition_pkl" || ! -f "$partition_pkl" ]]; then
+    return 0
+  fi
+
+  local versioned_partition="${partition_pkl%.pkl}__run-${RUN_TAG_ENV}.pkl"
+  cp -f "$partition_pkl" "$versioned_partition"
+
+  local meta_src="${partition_pkl%.pkl}.meta.json"
+  if [[ -f "$meta_src" ]]; then
+    cp -f "$meta_src" "${versioned_partition%.pkl}.meta.json"
+  fi
+
+  local json_src="${partition_pkl%.pkl}.json"
+  if [[ -f "$json_src" ]]; then
+    cp -f "$json_src" "${versioned_partition%.pkl}.json"
+  fi
+}
 
 for config in "${CONFIGS[@]}"; do
   config_base="$(basename "$config" .yaml)"
@@ -113,28 +468,44 @@ def as_bool(v, default=False):
         return False
     return default
 
+def as_optional_float(v):
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    value = float(s)
+    return None if value <= 0 else value
+
+def as_optional_int(v):
+    numeric = as_optional_float(v)
+    return None if numeric is None else int(numeric)
+
 cfg = OmegaConf.load(src)
+solver_tool = os.getenv("SOLVER_TOOL", "").strip()
+if solver_tool:
+    cfg["solver-tool"] = solver_tool
 if fast_mode_enabled:
     mip = dict(cfg.get("mip", {}))
-    mip["solve-mode"] = os.getenv("MIP_SOLVE_MODE", "hybrid")
-    mip["sw-constraint-mode"] = os.getenv("MIP_SW_CONSTRAINT_MODE", "adjacent")
-    mip["use-reduced-sw-constraints"] = as_bool(os.getenv("MIP_USE_REDUCED_SW", "true"), True)
-    mip["time-limit-sec"] = float(os.getenv("MIP_TIME_LIMIT_SEC", "30"))
-    mip["mip-gap"] = float(os.getenv("MIP_GAP", "0.15"))
-    mip["node-limit"] = int(float(os.getenv("MIP_NODE_LIMIT", "20000")))
-    mip["accept-nonoptimal"] = as_bool(os.getenv("MIP_ACCEPT_NONOPTIMAL", "true"), True)
+    mip["solve-mode"] = os.getenv("MIP_SOLVE_MODE", "exact")
+    mip["sw-constraint-mode"] = os.getenv("MIP_SW_CONSTRAINT_MODE", "pairwise_topo")
+    mip["use-reduced-sw-constraints"] = as_bool(os.getenv("MIP_USE_REDUCED_SW", "false"), False)
+    mip["time-limit-sec"] = as_optional_float(os.getenv("MIP_TIME_LIMIT_SEC", "600"))
+    mip["mip-gap"] = as_optional_float(os.getenv("MIP_GAP", "0"))
+    mip["node-limit"] = as_optional_int(os.getenv("MIP_NODE_LIMIT", "0"))
+    mip["accept-nonoptimal"] = as_bool(os.getenv("MIP_ACCEPT_NONOPTIMAL", "false"), False)
     mip["verbose"] = as_bool(os.getenv("MIP_VERBOSE", "false"), False)
     cfg["mip"] = mip
 
-result_prefix = os.getenv("HWSW_RESULT_PREFIX", "").strip()
+result_prefix = (os.getenv("HWSW_RESULT_PREFIX", "") or os.getenv("RESULT_PREFIX", "")).strip()
 if result_prefix:
     cfg["result-file-prefix"] = result_prefix
 
-output_dir = os.getenv("HWSW_OUTPUT_DIR", "").strip()
+output_dir = (os.getenv("HWSW_OUTPUT_DIR", "") or os.getenv("OUTPUT_DIR", "")).strip()
 if output_dir:
     cfg["output-dir"] = output_dir
 
-solution_dir = os.getenv("HWSW_SOLUTION_DIR", "").strip()
+solution_dir = (os.getenv("HWSW_SOLUTION_DIR", "") or os.getenv("SOLUTION_DIR", "")).strip()
 if solution_dir:
     cfg["solution-dir"] = solution_dir
 
@@ -143,27 +514,21 @@ PY
     run_config="$tmp_cfg"
   fi
 
-  run_cmd=( "$PYTHON" "$MIP_EVAL_ENTRY" -c "$run_config" -t "$SOLVER_TOOL" )
-  rc=0
-  set +e
-  if command -v timeout >/dev/null 2>&1 && [[ "$RUN_TIMEOUT_SEC" =~ ^[0-9]+$ ]] && (( RUN_TIMEOUT_SEC > 0 )); then
-    timeout --signal=TERM --kill-after="${TIMEOUT_KILL_AFTER_SEC}s" "${RUN_TIMEOUT_SEC}s" "${run_cmd[@]}" >"$log_file" 2>&1
-    rc=$?
+  result_prefix=$("$PYTHON" - <<'PY' "$run_config"
+from omegaconf import OmegaConf
+import sys
+cfg = OmegaConf.load(sys.argv[1])
+print(cfg.get('result-file-prefix', 'mip_solver'))
+PY
+)
+  if [[ -n "$RESULT_CSV_ENV" ]]; then
+    if [[ "$RESULT_CSV_ENV" = /* ]]; then
+      out_csv="$RESULT_CSV_ENV"
+    else
+      out_csv="$OUTDIR/$RESULT_CSV_ENV"
+    fi
   else
-    "${run_cmd[@]}" >"$log_file" 2>&1
-    rc=$?
-  fi
-  set -e
-
-  if (( rc == 124 || rc == 137 )); then
-    echo "MIP timed out for $config after ${RUN_TIMEOUT_SEC}s (see $log_file)"
-    [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
-    continue
-  fi
-  if (( rc != 0 )); then
-    echo "MIP solver failed for $config (exit=$rc, see $log_file)"
-    [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
-    continue
+    out_csv="$OUTDIR/mip_${result_prefix}-result-summary-soda-graphs-config.csv"
   fi
 
   mapfile -t cfg_vals < <("$PYTHON" - <<'PY' "$run_config" "$ROOT"
@@ -183,7 +548,7 @@ PY
   solution_dir="${cfg_vals[0]}"
   result_prefix="${cfg_vals[1]}"
 
-  mapfile -t cfg_key < <("$PYTHON" - <<'PY' "$config"
+  mapfile -t cfg_key < <("$PYTHON" - <<'PY' "$run_config"
 from omegaconf import OmegaConf
 import sys
 cfg = OmegaConf.load(sys.argv[1])
@@ -198,26 +563,45 @@ PY
   hwvar_key="${cfg_key[2]}"
   seed_key="${cfg_key[3]}"
 
-  partition_pkl=$(ls -t "$solution_dir"/*area-"$area_key"_hwscale-"$hw_key"_hwvar-"$hwvar_key"_seed-"$seed_key"_assignment-mip.pkl 2>/dev/null | head -n1 || true)
-  if [[ -z "$partition_pkl" ]]; then
-    partition_pkl=$(ls -t "$solution_dir"/*assignment-mip.pkl 2>/dev/null | head -n1 || true)
+  run_cmd=( "$PYTHON" "$MIP_EVAL_ENTRY" -c "$run_config" -t "$SOLVER_TOOL" )
+  rc=0
+  set +e
+  if command -v timeout >/dev/null 2>&1 && [[ "$RUN_TIMEOUT_SEC" =~ ^[0-9]+$ ]] && (( RUN_TIMEOUT_SEC > 0 )); then
+    timeout --signal=TERM --kill-after="${TIMEOUT_KILL_AFTER_SEC}s" "${RUN_TIMEOUT_SEC}s" "${run_cmd[@]}" >"$log_file" 2>&1
+    rc=$?
+  else
+    "${run_cmd[@]}" >"$log_file" 2>&1
+    rc=$?
+  fi
+  set -e
+  config_elapsed_sec=$((SECONDS - config_start_sec))
+
+  mapfile -t artifact_paths < <(resolve_mip_artifacts "$solution_dir" "$area_key" "$hw_key" "$hwvar_key" "$seed_key")
+  partition_pkl="${artifact_paths[0]}"
+  partition_json="${artifact_paths[1]}"
+  partition_meta="${artifact_paths[2]}"
+  attach_mip_solver_stats "$log_file" "$partition_json" "$partition_meta"
+  copy_versioned_mip_artifacts "$partition_pkl"
+  if (( rc == 0 )) && grep -q "SCIP Status[[:space:]]*: solving was interrupted \\[time limit reached\\]" "$log_file" 2>/dev/null; then
+    rc=124
+  fi
+
+  if (( rc == 124 || rc == 137 )); then
+    echo "MIP timed out for $config after ${RUN_TIMEOUT_SEC}s (see $log_file)"
+    append_mip_status_row "$config" "$run_config" "$out_csv" "$config_elapsed_sec" "time_limit_exceeded" "Time limit exceeded; no accepted exact MIP solution was recorded."
+    [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
+    continue
+  fi
+  if (( rc != 0 )); then
+    echo "MIP solver failed for $config (exit=$rc, see $log_file)"
+    append_mip_status_row "$config" "$run_config" "$out_csv" "$config_elapsed_sec" "failed" "MIP solver failed before producing an accepted exact solution."
+    [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
+    continue
   fi
   if [[ -z "$partition_pkl" ]]; then
     echo "No assignment-mip.pkl found in $solution_dir (skipping CSV row)"
     [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
     continue
-  fi
-
-  out_csv="$OUTDIR/mip_${result_prefix}-result-summary-soda-graphs-config.csv"
-  config_elapsed_sec=$((SECONDS - config_start_sec))
-
-  if [[ -n "$RUN_TAG_ENV" && -f "$partition_pkl" ]]; then
-    versioned_partition="${partition_pkl%.pkl}__run-${RUN_TAG_ENV}.pkl"
-    cp -f "$partition_pkl" "$versioned_partition"
-    meta_src="${partition_pkl%.pkl}.meta.json"
-    if [[ -f "$meta_src" ]]; then
-      cp -f "$meta_src" "${versioned_partition%.pkl}.meta.json"
-    fi
   fi
 
   "$PYTHON" - <<'PY' "$config" "$partition_pkl" "$out_csv" "$config_elapsed_sec"
@@ -248,6 +632,7 @@ cfg = OmegaConf.load(config_path)
 seed = cfg.get('seed', 42)
 
 task_graph = None
+meta = {}
 
 
 def build_taskgraph_like(graph, area_constraint: float):
@@ -352,6 +737,10 @@ naive_lb = sum(min(task_graph.software_costs[n], task_graph.hardware_costs[n]) f
 lssp_result = evaluate_partition_lssp(task_graph, partition)
 makespan = float(lssp_result['makespan'])
 partition_cost = float(task_graph.evaluate_partition_cost(partition))
+solver_status = meta.get('solver_status', 'optimal')
+model_makespan = float(meta.get('model_makespan', np.nan))
+lp_makespan = float(meta.get('lp_makespan', np.nan))
+lssp_makespan = float(meta.get('final_lssp_makespan', makespan))
 
 is_valid = bool(lssp_result.get('is_valid', True))
 was_repaired = bool(lssp_result.get('was_repaired', False))
@@ -389,6 +778,10 @@ base_data = {
 method = 'mip'
 row = {
     **base_data,
+    f'{method}_status': solver_status,
+    f'{method}_model_makespan': model_makespan,
+    f'{method}_lp_makespan': lp_makespan,
+    f'{method}_lssp_makespan': lssp_makespan,
     f'{method}_opt_cost': makespan,
     f'{method}_opt_ratio': (makespan / naive_lb) if naive_lb > 0 else 0,
     f'{method}_partition_cost': partition_cost,
@@ -403,6 +796,7 @@ row = {
     f'{method}_area_used': area_used,
     f'{method}_area_budget': area_budget,
     f'{method}_validity_note': validity_note,
+    f'{method}_timeout_note': "",
 }
 
 out_csv.parent.mkdir(parents=True, exist_ok=True)

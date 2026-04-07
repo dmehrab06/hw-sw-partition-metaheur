@@ -91,12 +91,19 @@ if [[ -n "${CONFIG_SEEDS_OVERRIDE:-}" ]]; then
 fi
 
 # MIP runtime controls for the dataset batch.
-# These defaults are intentionally higher than the fast smoke-test settings.
+# By default this batch forces strict exact MIP with a 10-minute solver timeout.
+# Keep a small outer grace period so timed-out runs can flush incumbent artifacts.
 FAST_MIP="${FAST_MIP:-1}"
-MIP_TIME_LIMIT_SEC="${MIP_TIME_LIMIT_SEC:-300}"
-MIP_GAP="${MIP_GAP:-0.05}"
-MIP_NODE_LIMIT="${MIP_NODE_LIMIT:-100000}"
-MIP_TIMEOUT_BUFFER_SEC="${MIP_TIMEOUT_BUFFER_SEC:-180}"
+MIP_SOLVER_TOOL="${MIP_SOLVER_TOOL:-cvxpy-scip}"
+MIP_SOLVE_MODE="${MIP_SOLVE_MODE:-exact}"
+MIP_SW_CONSTRAINT_MODE="${MIP_SW_CONSTRAINT_MODE:-pairwise_topo}"
+MIP_USE_REDUCED_SW="${MIP_USE_REDUCED_SW:-false}"
+MIP_ACCEPT_NONOPTIMAL="${MIP_ACCEPT_NONOPTIMAL:-false}"
+MIP_VERBOSE="${MIP_VERBOSE:-true}"
+MIP_TIME_LIMIT_SEC="${MIP_TIME_LIMIT_SEC:-600}"
+MIP_GAP="${MIP_GAP:-0}"
+MIP_NODE_LIMIT="${MIP_NODE_LIMIT:-0}"
+MIP_TIMEOUT_BUFFER_SEC="${MIP_TIMEOUT_BUFFER_SEC:-30}"
 RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-$((MIP_TIME_LIMIT_SEC + MIP_TIMEOUT_BUFFER_SEC))}"
 TIMEOUT_KILL_AFTER_SEC="${TIMEOUT_KILL_AFTER_SEC:-30}"
 
@@ -225,7 +232,13 @@ launch_dataset_method_group() {
     (
       CONFIG_GLOB="$dataset_cfg_dir/*.yaml" \
       OUTDIR="$method_dir" \
+      SOLVER_TOOL="$MIP_SOLVER_TOOL" \
       FAST_MIP="$FAST_MIP" \
+      MIP_SOLVE_MODE="$MIP_SOLVE_MODE" \
+      MIP_SW_CONSTRAINT_MODE="$MIP_SW_CONSTRAINT_MODE" \
+      MIP_USE_REDUCED_SW="$MIP_USE_REDUCED_SW" \
+      MIP_ACCEPT_NONOPTIMAL="$MIP_ACCEPT_NONOPTIMAL" \
+      MIP_VERBOSE="$MIP_VERBOSE" \
       MIP_TIME_LIMIT_SEC="$MIP_TIME_LIMIT_SEC" \
       MIP_GAP="$MIP_GAP" \
       MIP_NODE_LIMIT="$MIP_NODE_LIMIT" \
@@ -511,6 +524,7 @@ PY
         echo "  Launching MIP batch with shared dataset configs from $DATASET_CFG_DIR"
         CONFIG_GLOB="$DATASET_CFG_DIR/*.yaml" \
         OUTDIR="$METHOD_DIR" \
+        SOLVER_TOOL="$MIP_SOLVER_TOOL" \
         FAST_MIP="$FAST_MIP" \
         MIP_TIME_LIMIT_SEC="$MIP_TIME_LIMIT_SEC" \
         MIP_GAP="$MIP_GAP" \
