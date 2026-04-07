@@ -72,7 +72,12 @@ OUTDIR="$ROOT/BatchExperiments/dataset_area05"
 CONFIG_ROOT="${CONFIG_ROOT:-$ROOT/BatchExperiments/dataset_area05_configs}"
 FORCE_REGENERATE_CONFIGS="${FORCE_REGENERATE_CONFIGS:-0}"
 RUN_TAG="${RUN_TAG:-$(date '+%Y%m%d-%H%M%S')}"
-SELECTED_CONFIG_ROOT="${SELECTED_CONFIG_ROOT:-$ROOT/BatchExperiments/${RESULT_TAG}_configs}"
+SELECTED_CONFIG_ROOT="${SELECTED_CONFIG_ROOT:-}"
+SELECTED_CONFIG_ROOT_WAS_TEMP=0
+if [[ -z "$SELECTED_CONFIG_ROOT" ]]; then
+  SELECTED_CONFIG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/${RESULT_TAG}_configs.XXXXXX")"
+  SELECTED_CONFIG_ROOT_WAS_TEMP=1
+fi
 
 DEFAULT_FULL_CONFIG_SEEDS=(42 43 44 45 46 47 48 49 50 51)
 DEFAULT_PILOT_CONFIG_SEEDS=(42 43 44)
@@ -110,6 +115,13 @@ join_by_comma() {
   local IFS=', '
   echo "$*"
 }
+
+cleanup() {
+  if [[ "$SELECTED_CONFIG_ROOT_WAS_TEMP" == "1" && -n "$SELECTED_CONFIG_ROOT" && -d "$SELECTED_CONFIG_ROOT" ]]; then
+    rm -rf "$SELECTED_CONFIG_ROOT"
+  fi
+}
+trap cleanup EXIT
 
 generate_stable_topology_configs() {
   "$PYTHON" "$ROOT/tools/generate_task_graph_topology_configs.py" \
@@ -262,6 +274,13 @@ for dataset in "${DATASETS[@]}"; do
   mkdir -p "$DATASET_DIR"
 
   DATASET_CFG_DIR="$SELECTED_CONFIG_ROOT/$dataset/_dataset"
+  if [[ -d "$SELECTED_CONFIG_ROOT/$dataset" ]]; then
+    for legacy_cfg_dir in "$SELECTED_CONFIG_ROOT/$dataset"/*; do
+      [[ -d "$legacy_cfg_dir" ]] || continue
+      [[ "$(basename "$legacy_cfg_dir")" == "_dataset" ]] && continue
+      rm -rf "$legacy_cfg_dir"
+    done
+  fi
   "$PYTHON" "$ROOT/tools/select_configs_from_manifest.py" \
     --manifest "$ROOT_MANIFEST" \
     --out-dir "$DATASET_CFG_DIR" \
@@ -310,12 +329,10 @@ PY
     print_banner "Dataset [$dataset_idx/$total_datasets] Method [$method_idx/$total_methods]: $dataset / $method"
     method_start_sec=$SECONDS
     METHOD_DIR="$DATASET_DIR/$method"
-    METHOD_CFG_DIR="$SELECTED_CONFIG_ROOT/$dataset/$method"
     METHOD_PREFIX="${RESULT_TAG}_${dataset}_${method}"
     METHOD_MANIFEST="$METHOD_DIR/${METHOD_PREFIX}_selected_manifest.csv"
 
-    rm -rf "$METHOD_CFG_DIR"
-    mkdir -p "$METHOD_DIR" "$METHOD_CFG_DIR"
+    mkdir -p "$METHOD_DIR"
 
     "$PYTHON" - <<'PY' "$DATASET_CFG_DIR/selected_manifest.csv" "$METHOD_MANIFEST"
 from pathlib import Path
@@ -343,32 +360,10 @@ merged = merged.drop_duplicates(subset=subset, keep="last")
 merged.to_csv(out_path, index=False)
 print(f"Wrote cumulative method manifest to {out_path}")
 PY
-    cp -a "$DATASET_CFG_DIR"/. "$METHOD_CFG_DIR"/
-    rm -f "$METHOD_CFG_DIR/selected_manifest.csv"
-
-    for cfg in "$METHOD_CFG_DIR"/*.yaml; do
-      src_cfg="$cfg"
-      tmp_cfg="${cfg}.tmp"
-      "$PYTHON" - <<'PY' "$src_cfg" "$tmp_cfg" "$METHOD_DIR" "$METHOD_PREFIX"
-from omegaconf import OmegaConf
-import sys
-
-src, dst, out_dir, result_prefix = sys.argv[1:]
-cfg = OmegaConf.load(src)
-cfg["output-dir"] = out_dir
-cfg["solution-dir"] = f"{out_dir}/partitions"
-cfg["result-file-prefix"] = result_prefix
-vis = dict(cfg.get("visualization", {}))
-vis["enabled"] = False
-cfg["visualization"] = vis
-OmegaConf.save(config=cfg, f=dst)
-PY
-      mv "$tmp_cfg" "$cfg"
-    done
 
     if [[ "$method" == "mip" ]]; then
-      echo "  Launching MIP batch with configs from $METHOD_CFG_DIR"
-      CONFIG_GLOB="$METHOD_CFG_DIR/*.yaml" \
+      echo "  Launching MIP batch with shared dataset configs from $DATASET_CFG_DIR"
+      CONFIG_GLOB="$DATASET_CFG_DIR/*.yaml" \
       OUTDIR="$METHOD_DIR" \
       FAST_MIP="$FAST_MIP" \
       MIP_TIME_LIMIT_SEC="$MIP_TIME_LIMIT_SEC" \
@@ -376,14 +371,19 @@ PY
       MIP_NODE_LIMIT="$MIP_NODE_LIMIT" \
       RUN_TIMEOUT_SEC="$RUN_TIMEOUT_SEC" \
       TIMEOUT_KILL_AFTER_SEC="$TIMEOUT_KILL_AFTER_SEC" \
+      HWSW_OUTPUT_DIR="$METHOD_DIR" \
+      HWSW_SOLUTION_DIR="$METHOD_DIR/partitions" \
+      HWSW_RESULT_PREFIX="$METHOD_PREFIX" \
       HWSW_RUN_TAG="$RUN_TAG" \
       PYTHON="$PYTHON" \
       "$ROOT/run_all_mip_configs.sh"
     else
-      echo "  Launching GNN/metaheuristic batch for method $method with configs from $METHOD_CFG_DIR"
-      CONFIG_GLOB="$METHOD_CFG_DIR/*.yaml" \
+      echo "  Launching GNN/metaheuristic batch for method $method with shared dataset configs from $DATASET_CFG_DIR"
+      CONFIG_GLOB="$DATASET_CFG_DIR/*.yaml" \
       OUTDIR="$METHOD_DIR" \
       HWSW_METHODS="$method" \
+      HWSW_OUTPUT_DIR="$METHOD_DIR" \
+      HWSW_SOLUTION_DIR="$METHOD_DIR/partitions" \
       HWSW_CSV_DIR="$METHOD_DIR" \
       HWSW_RESULT_PREFIX="$METHOD_PREFIX" \
       HWSW_RUN_TAG="$RUN_TAG" \

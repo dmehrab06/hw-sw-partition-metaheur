@@ -43,6 +43,9 @@ MIP_VERBOSE="${MIP_VERBOSE:-false}"
 RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-120}"
 TIMEOUT_KILL_AFTER_SEC="${TIMEOUT_KILL_AFTER_SEC:-15}"
 RUN_TAG_ENV="${HWSW_RUN_TAG:-${RUN_TAG:-}}"
+RESULT_PREFIX_OVERRIDE="${HWSW_RESULT_PREFIX:-${RESULT_PREFIX:-}}"
+OUTPUT_DIR_OVERRIDE="${HWSW_OUTPUT_DIR:-${OUTPUT_DIR:-}}"
+SOLUTION_DIR_OVERRIDE="${HWSW_SOLUTION_DIR:-${SOLUTION_DIR:-}}"
 
 cd "$ROOT"
 
@@ -61,6 +64,15 @@ fi
 if [[ -n "$RUN_TAG_ENV" ]]; then
   echo "Run tag: $RUN_TAG_ENV"
 fi
+if [[ -n "$RESULT_PREFIX_OVERRIDE" ]]; then
+  echo "Result prefix override: $RESULT_PREFIX_OVERRIDE"
+fi
+if [[ -n "$OUTPUT_DIR_OVERRIDE" ]]; then
+  echo "Output directory override: $OUTPUT_DIR_OVERRIDE"
+fi
+if [[ -n "$SOLUTION_DIR_OVERRIDE" ]]; then
+  echo "Solution directory override: $SOLUTION_DIR_OVERRIDE"
+fi
 
 batch_start_sec=$SECONDS
 
@@ -76,15 +88,20 @@ for config in "${CONFIGS[@]}"; do
   config_start_sec=$SECONDS
 
   echo "---- [MIP] $config_base ----"
-  if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
+  if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ || -n "$RESULT_PREFIX_OVERRIDE" || -n "$OUTPUT_DIR_OVERRIDE" || -n "$SOLUTION_DIR_OVERRIDE" ]]; then
     tmp_cfg="$(mktemp "$OUTDIR/${config_base}.fast_mip.XXXXXX.yaml")"
-    "$PYTHON" - <<'PY' "$config" "$tmp_cfg"
+    fast_mode_enabled=0
+    if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
+      fast_mode_enabled=1
+    fi
+    "$PYTHON" - <<'PY' "$config" "$tmp_cfg" "$fast_mode_enabled"
 import os
 import sys
 from omegaconf import OmegaConf
 
 src = sys.argv[1]
 dst = sys.argv[2]
+fast_mode_enabled = sys.argv[3] == "1"
 
 def as_bool(v, default=False):
     if v is None:
@@ -97,18 +114,30 @@ def as_bool(v, default=False):
     return default
 
 cfg = OmegaConf.load(src)
-mip = dict(cfg.get("mip", {}))
+if fast_mode_enabled:
+    mip = dict(cfg.get("mip", {}))
+    mip["solve-mode"] = os.getenv("MIP_SOLVE_MODE", "hybrid")
+    mip["sw-constraint-mode"] = os.getenv("MIP_SW_CONSTRAINT_MODE", "adjacent")
+    mip["use-reduced-sw-constraints"] = as_bool(os.getenv("MIP_USE_REDUCED_SW", "true"), True)
+    mip["time-limit-sec"] = float(os.getenv("MIP_TIME_LIMIT_SEC", "30"))
+    mip["mip-gap"] = float(os.getenv("MIP_GAP", "0.15"))
+    mip["node-limit"] = int(float(os.getenv("MIP_NODE_LIMIT", "20000")))
+    mip["accept-nonoptimal"] = as_bool(os.getenv("MIP_ACCEPT_NONOPTIMAL", "true"), True)
+    mip["verbose"] = as_bool(os.getenv("MIP_VERBOSE", "false"), False)
+    cfg["mip"] = mip
 
-mip["solve-mode"] = os.getenv("MIP_SOLVE_MODE", "hybrid")
-mip["sw-constraint-mode"] = os.getenv("MIP_SW_CONSTRAINT_MODE", "adjacent")
-mip["use-reduced-sw-constraints"] = as_bool(os.getenv("MIP_USE_REDUCED_SW", "true"), True)
-mip["time-limit-sec"] = float(os.getenv("MIP_TIME_LIMIT_SEC", "30"))
-mip["mip-gap"] = float(os.getenv("MIP_GAP", "0.15"))
-mip["node-limit"] = int(float(os.getenv("MIP_NODE_LIMIT", "20000")))
-mip["accept-nonoptimal"] = as_bool(os.getenv("MIP_ACCEPT_NONOPTIMAL", "true"), True)
-mip["verbose"] = as_bool(os.getenv("MIP_VERBOSE", "false"), False)
+result_prefix = os.getenv("HWSW_RESULT_PREFIX", "").strip()
+if result_prefix:
+    cfg["result-file-prefix"] = result_prefix
 
-cfg["mip"] = mip
+output_dir = os.getenv("HWSW_OUTPUT_DIR", "").strip()
+if output_dir:
+    cfg["output-dir"] = output_dir
+
+solution_dir = os.getenv("HWSW_SOLUTION_DIR", "").strip()
+if solution_dir:
+    cfg["solution-dir"] = solution_dir
+
 OmegaConf.save(config=cfg, f=dst)
 PY
     run_config="$tmp_cfg"

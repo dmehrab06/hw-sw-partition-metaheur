@@ -59,10 +59,12 @@ def __dir__():
 
 def random_assignment(dim, func_to_optimize, config):
     import numpy as np
+    from .Configuration import resolve_classical_method_config
 
+    random_cfg = resolve_classical_method_config(config, "random")
     all_samples = []
-    for _ in range(config["random"]["num_samples"]):
-        bernoulli_samples = np.random.binomial(n=1, p=config["random"]["p"], size=dim)
+    for _ in range(int(random_cfg["num_samples"])):
+        bernoulli_samples = np.random.binomial(n=1, p=float(random_cfg["p"]), size=dim)
         all_samples.append(bernoulli_samples)
 
     sample_array = np.array(all_samples)

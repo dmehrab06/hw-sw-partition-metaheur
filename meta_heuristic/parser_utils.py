@@ -16,6 +16,21 @@ if __name__ == "__main__":
 
 logger = LogManager.get_logger(__name__)
 
+
+def _apply_environment_overrides(config: DictConfig) -> DictConfig:
+    env_overrides = (
+        (("HWSW_OUTPUT_DIR", "OUTPUT_DIR"), "output-dir"),
+        (("HWSW_SOLUTION_DIR", "SOLUTION_DIR"), "solution-dir"),
+        (("HWSW_RESULT_PREFIX", "RESULT_PREFIX"), "result-file-prefix"),
+    )
+    for env_keys, config_key in env_overrides:
+        for env_key in env_keys:
+            value = os.getenv(env_key)
+            if value:
+                config[config_key] = value
+                break
+    return config
+
 def parse_arguments() -> DictConfig:
     """
     Parse command line arguments with proper validation.
@@ -78,6 +93,7 @@ def parse_arguments() -> DictConfig:
     
     # Merge configurations (CLI arguments override YAML)
     config = OmegaConf.merge(yaml_config, cli_config)
+    config = _apply_environment_overrides(config)
 
     # Fill default seed if not provided anywhere
     if config.get('seed', None) is None:

@@ -47,6 +47,8 @@ def _compute_queue_makespan(task_graph, partition: dict) -> float:
 
 def _compute_lp_makespan(task_graph, partition: dict) -> float:
     """Compute LP/legacy makespan using compute_dag_makespan()."""
+    if task_graph.violates(partition):
+        return task_graph.violation_cost
     return float(
         evaluate_partition_dag(
             task_graph,
@@ -62,19 +64,31 @@ def _resolve_objective_mode(opt_cost_type: str) -> str:
         return "partition"
     if opt_key == "mip":
         return "lp"
+    if opt_key == "lssp":
+        return "lssp"
     return "queue"
 
 
 def _compute_objective_value(task_graph, partition: dict, mode: str) -> float:
     if mode == "lp":
         return _compute_lp_makespan(task_graph, partition)
+    if mode == "lssp":
+        return _compute_lssp_makespan(task_graph, partition)
     if mode == "queue":
         return _compute_queue_makespan(task_graph, partition)
     raise ValueError(f"Unsupported objective mode: {mode}")
 
 
 def _compute_lssp_makespan(task_graph, partition: dict) -> float:
-    return float(evaluate_partition_lssp(task_graph, partition)["makespan"])
+    if task_graph.violates(partition):
+        return task_graph.violation_cost
+    return float(
+        evaluate_partition_lssp(
+            task_graph,
+            partition,
+            auto_repair=False,
+        )["makespan"]
+    )
 
 
 def _extract_diff_gnn_order_meta(func: Callable) -> dict:

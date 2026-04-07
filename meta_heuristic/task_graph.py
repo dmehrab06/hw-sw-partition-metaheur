@@ -90,6 +90,29 @@ class TaskGraph:
             )["makespan"]
         )
 
+    def _compute_lssp_makespan(self, solution):
+        """
+        LSSP makespan used during optimization.
+
+        Mirrors the fast-DAG optimization path by treating area violations as an
+        immediate penalty and otherwise evaluating the partition without auto-repair.
+        """
+        if self.violates(solution):
+            return self.violation_cost
+
+        try:
+            from .partition_schedule_evaluator import evaluate_partition_lssp
+        except ImportError:
+            from partition_schedule_evaluator import evaluate_partition_lssp
+
+        return float(
+            evaluate_partition_lssp(
+                self,
+                solution,
+                auto_repair=False,
+            )["makespan"]
+        )
+
     def load_graph_from_pydot(self, pydot_file, k=1.5, l=0.2, mu=0.5, A_max=100, seed=42, reproduce=True):
         """
         Load a graph from a PyDot file and assign random cost attributes.
@@ -298,6 +321,27 @@ class TaskGraph:
 
         return np.array(all_costs)
 
+    def optimize_gcomopt_makespan_lssp(self, assignment_candidates):
+        """
+        Evaluate makespan via LSSP for GNN-produced scores.
+        Converts scores to binary placement using threshold 0.5.
+        """
+        assert assignment_candidates.shape[1] == len(self.software_costs), \
+            f"Dimension {assignment_candidates.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+
+        if np.any(assignment_candidates < 0) or np.any(assignment_candidates > 1):
+            probs = 1.0 / (1 + np.exp(-assignment_candidates))
+        else:
+            probs = assignment_candidates
+
+        all_costs = []
+        for assignment in probs:
+            solution = {node: (0 if assignment[self.node_to_num[node]] < 0.5 else 1)
+                        for node in self.graph.nodes()}
+            all_costs.append(self._compute_lssp_makespan(solution))
+
+        return np.array(all_costs)
+
     #--------------------
 
     
@@ -395,6 +439,22 @@ class TaskGraph:
                 all_costs.append(self._compute_fast_dag_makespan(solution))
         
         return np.array(all_costs)
+
+    def optimize_swarm_makespan_lssp(self, swarms):
+        """
+        Evaluate costs for a batch of particle swarm solutions based on LSSP.
+        """
+        exp_swarms = 1.0 / (1 + np.exp(-swarms))
+
+        assert exp_swarms.shape[1] == len(self.software_costs), \
+            f"Swarm dimension {exp_swarms.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+
+        all_costs = []
+        for swarm in exp_swarms:
+            solution = {node: (0 if swarm[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
+            all_costs.append(self._compute_lssp_makespan(solution))
+
+        return np.array(all_costs)
     
     def optimize_single_point(self, x, type='random'):
         """
@@ -478,6 +538,19 @@ class TaskGraph:
         if violation:
             return self.violation_cost
         return self._compute_fast_dag_makespan(solution)
+
+    def optimize_single_point_makespan_lssp(self, x, type='random'):
+        """
+        Evaluate costs for a single solution based on LSSP.
+        """
+        if type=='vanilla' or type=='pso':
+            x = 1.0 / (1 + np.exp(-x))
+
+        assert x.shape[0] == len(self.software_costs), \
+            f"Swarm dimension {x.shape[0]} doesn't match number of nodes {len(self.software_costs)}"
+
+        solution = {node: (0 if x[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
+        return self._compute_lssp_makespan(solution)
     
     def optimize_random(self,assignment_candidates):
         """
@@ -547,6 +620,20 @@ class TaskGraph:
             else:
                 all_costs.append(self._compute_fast_dag_makespan(solution))
         
+        return np.array(all_costs)
+
+    def optimize_random_makespan_lssp(self,assignment_candidates):
+        """
+        Evaluate costs for a batch of assignment probabilities based on LSSP.
+        """
+        assert assignment_candidates.shape[1] == len(self.software_costs), \
+            f"Swarm dimension {assignment_candidates.shape[1]} doesn't match number of nodes {len(self.software_costs)}"
+
+        all_costs = []
+        for assignment in assignment_candidates:
+            solution = {node: (0 if assignment[self.node_to_num[node]]<0.5 else 1) for node in self.graph.nodes()}
+            all_costs.append(self._compute_lssp_makespan(solution))
+
         return np.array(all_costs)
 
     def find_best_cost(self, swarms):

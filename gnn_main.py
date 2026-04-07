@@ -44,16 +44,43 @@ def _greedy_adapter(dim, func_to_optimize, config, task_graph=None, **kwargs):
 
 
 def _resolve_effective_search_objective(config, method_name):
-    """Use a fast DAG-style surrogate during search for all non-order methods."""
+    """Resolve the search-time objective used by each method."""
     requested = str(config.get("opt-cost-type", "partition")).strip().lower()
-    if requested not in {"partition", "makespan", "mip"}:
+    if requested not in {"partition", "makespan", "mip", "lssp"}:
         return requested
     if requested == "partition":
         return requested
-    if str(method_name).lower() == "diff_gnn_order":
+    method_key = str(method_name).lower()
+    if method_key not in {
+        "greedy",
+        "random",
+        "pso",
+        "dbpso",
+        "clpso",
+        "ccpso",
+        "esa",
+        "shade",
+        "jade",
+        "gl25",
+        "non_diffgnn",
+    }:
         return requested
-    # Final reporting still uses LSSP, but the search loop should use the fast DAG path.
-    return "mip"
+
+    override = (
+        os.getenv("HWSW_CLASSICAL_SEARCH_OBJECTIVE")
+        or config.get("classical-search-objective")
+        or "lssp"
+    )
+    normalized = str(override).strip().lower()
+    if normalized in {"requested", "same"}:
+        return requested
+    if normalized in {"lssp"}:
+        return "lssp"
+    if normalized in {"mip", "dag", "fast-dag", "fast_dag"}:
+        return "mip"
+    if normalized in {"makespan", "queue", "taskgraph"}:
+        return "makespan"
+    return requested
 
 
 def _describe_objective_mode(mode):
@@ -61,6 +88,8 @@ def _describe_objective_mode(mode):
         return "partition-cost"
     if mode == "mip":
         return "fast-dag"
+    if mode == "lssp":
+        return "lssp-makespan"
     if mode == "makespan":
         return "queue-makespan"
     return str(mode)
@@ -71,6 +100,8 @@ def _select_optimization_callable(task_graph, method_name, objective_mode):
         return (
             task_graph.optimize_gcomopt_makespan
             if objective_mode == "makespan"
+            else task_graph.optimize_gcomopt_makespan_lssp
+            if objective_mode == "lssp"
             else task_graph.optimize_gcomopt_makespan_mip
             if objective_mode == "mip"
             else task_graph.optimize_gcomopt
@@ -79,6 +110,8 @@ def _select_optimization_callable(task_graph, method_name, objective_mode):
         return (
             task_graph.optimize_swarm_makespan
             if objective_mode == "makespan"
+            else task_graph.optimize_swarm_makespan_lssp
+            if objective_mode == "lssp"
             else task_graph.optimize_swarm_makespan_mip
             if objective_mode == "mip"
             else task_graph.optimize_swarm
@@ -87,6 +120,8 @@ def _select_optimization_callable(task_graph, method_name, objective_mode):
         return (
             task_graph.optimize_random_makespan
             if objective_mode == "makespan"
+            else task_graph.optimize_random_makespan_lssp
+            if objective_mode == "lssp"
             else task_graph.optimize_random_makespan_mip
             if objective_mode == "mip"
             else task_graph.optimize_random
@@ -94,6 +129,8 @@ def _select_optimization_callable(task_graph, method_name, objective_mode):
     return (
         task_graph.optimize_single_point_makespan
         if objective_mode == "makespan"
+        else task_graph.optimize_single_point_makespan_lssp
+        if objective_mode == "lssp"
         else task_graph.optimize_single_point_makespan_mip
         if objective_mode == "mip"
         else task_graph.optimize_single_point
@@ -295,8 +332,9 @@ def save_partition(args, solution, method='random'):
     if run_tag:
         filename = filename.replace(".pkl", f"__run-{run_tag}.pkl")
 
-    os.makedirs(args['solution-dir'], exist_ok=True)
-    with open(f"{args['solution-dir']}/{filename}", "wb") as file:
+    solution_dir = os.getenv("HWSW_SOLUTION_DIR") or args['solution-dir']
+    os.makedirs(solution_dir, exist_ok=True)
+    with open(os.path.join(solution_dir, filename), "wb") as file:
         pickle.dump(solution, file)
 
 def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):

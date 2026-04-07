@@ -9,6 +9,10 @@ if __name__ == "__main__":
     sys.path.append(parent_dir)
 
 from utils.logging_utils import LogManager
+try:
+    from .Configuration import resolve_classical_method_config
+except ImportError:
+    from Configuration import resolve_classical_method_config
 
 # Set up logging
 if __name__ == "__main__":
@@ -20,12 +24,17 @@ def simulate_GL25(dim, func_to_optimize,config):
     
     #logger = logging.getLogger(__name__)
     logger = logging.getLogger('__main__')
+    gl25_cfg = resolve_classical_method_config(config, "gl25")
     
     problem = {'fitness_function': func_to_optimize, 'ndim_problem': dim, 
                'lower_boundary': 0.0 * np.ones((dim,)), 'upper_boundary': 1.0 * np.ones((dim,))}
     
-    options = {'max_function_evaluations': config['gl25']['iter'], 'seed_rng': 2022,
-               'n_individuals':config['gl25']['n_pop'], 'verbose': config['gl25']['verbose']}
+    options = {
+        'max_function_evaluations': int(gl25_cfg['iter']),
+        'seed_rng': gl25_cfg.get('seed_rng', 2022),
+        'n_individuals': int(gl25_cfg['n_pop']),
+        'verbose': gl25_cfg['verbose'],
+    }
     
     model = GL25(problem, options)  # initialize the optimizer class
     results = model.optimize()  # run the optimization process
