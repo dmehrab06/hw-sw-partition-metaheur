@@ -526,6 +526,20 @@ def _draw_method_boxplots(ax, frame: pd.DataFrame, methods: list[str], title: st
     )
 
 
+def _annotate_no_results(ax) -> None:
+    ax.text(
+        0.5,
+        0.5,
+        "No results",
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=GLOBAL_FONT_SIZE,
+        color="#666666",
+        fontweight="bold",
+    )
+
+
 def _plot_dataset_grid(frame: pd.DataFrame, methods: list[str], datasets: list[str], output_path: Path) -> None:
     if not datasets:
         return
@@ -536,8 +550,11 @@ def _plot_dataset_grid(frame: pd.DataFrame, methods: list[str], datasets: list[s
     for ax, dataset in zip(axes.flat, datasets):
         sub = frame[frame["graph_name"] == dataset]
         area = float(sub["area_constraint"].iloc[0]) if not sub.empty else np.nan
-        title = f"{_pretty_dataset_name(dataset)} | AREA = {area:.2f}"
+        area_text = f"{area:.2f}" if np.isfinite(area) else "N/A"
+        title = f"{_pretty_dataset_name(dataset)} | AREA = {area_text}"
         _draw_method_boxplots(ax, sub, methods, title)
+        if sub.empty:
+            _annotate_no_results(ax)
 
     for ax in axes.flat[len(datasets):]:
         ax.axis("off")

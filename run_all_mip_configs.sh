@@ -37,7 +37,7 @@ fi
 # MIP override defaults (can be overridden via env).
 # Set FAST_MIP=0 to run configs exactly as they appear in YAML.
 # The default profile below is intentionally main-compat: pairwise-topo SW constraints
-# and a SCIP-first backend request, while still preserving the external timeout controls.
+# and a SCIP-first backend request.
 FAST_MIP="${FAST_MIP:-1}"
 MIP_SOLVE_MODE="${MIP_SOLVE_MODE:-exact}"
 MIP_SW_CONSTRAINT_MODE="${MIP_SW_CONSTRAINT_MODE:-pairwise_topo}"
@@ -48,9 +48,9 @@ MIP_NODE_LIMIT="${MIP_NODE_LIMIT:-0}"
 MIP_ACCEPT_NONOPTIMAL="${MIP_ACCEPT_NONOPTIMAL:-false}"
 MIP_VERBOSE="${MIP_VERBOSE:-true}"
 
-# Extra wall-clock guard for each config run.
-# 0 disables external timeout.
-RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-$MIP_TIME_LIMIT_SEC}"
+# Optional extra wall-clock guard for each config run.
+# Disabled by default so the solver's internal time-limit-sec can flush incumbent artifacts.
+RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-0}"
 TIMEOUT_KILL_AFTER_SEC="${TIMEOUT_KILL_AFTER_SEC:-15}"
 
 cd "$ROOT"
@@ -62,7 +62,7 @@ if [[ ${#CONFIGS[@]} -eq 0 ]]; then
 fi
 
 echo "Running MIP solver (${SOLVER_TOOL}) on ${#CONFIGS[@]} configs"
-echo "FAST_MIP=$FAST_MIP, RUN_TIMEOUT_SEC=$RUN_TIMEOUT_SEC"
+echo "FAST_MIP=$FAST_MIP"
 echo "MIP evaluator: $(basename "$MIP_EVAL_ENTRY")"
 if [[ "$FAST_MIP" =~ ^(1|true|yes|on)$ ]]; then
   echo "MIP override settings: solver=$SOLVER_TOOL, mode=$MIP_SOLVE_MODE, sw=$MIP_SW_CONSTRAINT_MODE, tlimit=${MIP_TIME_LIMIT_SEC}s, gap=$MIP_GAP, nodes=$MIP_NODE_LIMIT, accept_nonoptimal=$MIP_ACCEPT_NONOPTIMAL"
@@ -81,6 +81,11 @@ if [[ -n "$OUTPUT_DIR_OVERRIDE" ]]; then
 fi
 if [[ -n "$SOLUTION_DIR_OVERRIDE" ]]; then
   echo "Solution directory override: $SOLUTION_DIR_OVERRIDE"
+fi
+if [[ "$RUN_TIMEOUT_SEC" =~ ^[0-9]+$ ]] && (( RUN_TIMEOUT_SEC > 0 )); then
+  echo "External watchdog: ${RUN_TIMEOUT_SEC}s (kill-after ${TIMEOUT_KILL_AFTER_SEC}s)"
+else
+  echo "External watchdog: disabled; using solver internal time-limit-sec"
 fi
 if [[ "${PARALLEL_CONFIG_JOBS}" =~ ^[0-9]+$ ]] && (( PARALLEL_CONFIG_JOBS > 1 )); then
   echo "Parallel config jobs: $PARALLEL_CONFIG_JOBS"
@@ -196,6 +201,7 @@ partition_pkl = None
 partition_json = None
 partition_meta = None
 json_payload = {}
+partition_from_json = None
 
 if solution_dir and solution_dir.exists():
     area_key, hw_key, hwvar_key, seed_key = _config_keys()
@@ -218,7 +224,13 @@ if partition_json and partition_json.exists():
         json_payload = json.loads(partition_json.read_text())
     except Exception:
         json_payload = {}
+    partition_payload = json_payload.get("partition_assignment", None)
+    if isinstance(partition_payload, list) and partition_payload and isinstance(partition_payload[0], dict):
+        partition_from_json = partition_payload[0]
+    elif isinstance(partition_payload, dict):
+        partition_from_json = partition_payload
 
+solver_status = status
 base_data = {
     "SimTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "RunTag": os.getenv("HWSW_RUN_TAG", ""),
@@ -248,6 +260,9 @@ timeout_note = "Time limit exceeded; no incumbent solution artifact was recorded
 validity_note_out = validity_note
 
 if json_payload:
+    payload_status = str(json_payload.get("status", "")).strip()
+    if payload_status:
+        solver_status = payload_status
     try:
         model_makespan = float(json_payload.get("makespan", np.nan))
     except Exception:
@@ -267,10 +282,13 @@ if json_payload:
     timeout_note = "Time limit exceeded; CSV row records the best incumbent artifact written before timeout."
     validity_note_out = "Incumbent solution recorded from a timed-out exact MIP run."
 
-if partition_pkl and partition_pkl.exists() and task_graph is not None:
+if task_graph is not None and ((partition_pkl and partition_pkl.exists()) or isinstance(partition_from_json, dict)):
     try:
-        with open(partition_pkl, "rb") as handle:
-            partition = pickle.load(handle)
+        if partition_pkl and partition_pkl.exists():
+            with open(partition_pkl, "rb") as handle:
+                partition = pickle.load(handle)
+        else:
+            partition = {str(k): int(v) for k, v in partition_from_json.items()}
         missing = [n for n in task_graph.graph.nodes() if n not in partition]
         for n in missing:
             partition[n] = 0
@@ -305,7 +323,7 @@ if partition_pkl and partition_pkl.exists() and task_graph is not None:
 
 row = {
     **base_data,
-    "mip_status": status,
+    "mip_status": solver_status,
     "mip_model_makespan": model_makespan,
     "mip_lp_makespan": lp_makespan,
     "mip_lssp_makespan": lssp_makespan,
@@ -587,7 +605,11 @@ PY
   fi
 
   if (( rc == 124 || rc == 137 )); then
-    echo "MIP timed out for $config after ${RUN_TIMEOUT_SEC}s (see $log_file)"
+    if [[ -n "$partition_pkl" || -n "$partition_json" || -n "$partition_meta" ]]; then
+      echo "MIP hit a time limit for $config and wrote incumbent artifacts (see $log_file)"
+    else
+      echo "MIP hit a time limit for $config without writing artifacts (see $log_file)"
+    fi
     append_mip_status_row "$config" "$run_config" "$out_csv" "$config_elapsed_sec" "time_limit_exceeded" "Time limit exceeded; no accepted exact MIP solution was recorded."
     [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
     continue
@@ -598,13 +620,13 @@ PY
     [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
     continue
   fi
-  if [[ -z "$partition_pkl" ]]; then
-    echo "No assignment-mip.pkl found in $solution_dir (skipping CSV row)"
+  if [[ -z "$partition_pkl" && -z "$partition_json" ]]; then
+    echo "No assignment-mip artifact found in $solution_dir (skipping CSV row)"
     [[ -n "$tmp_cfg" ]] && rm -f "$tmp_cfg"
     continue
   fi
 
-  "$PYTHON" - <<'PY' "$config" "$partition_pkl" "$out_csv" "$config_elapsed_sec"
+  "$PYTHON" - <<'PY' "$config" "$partition_pkl" "$partition_json" "$out_csv" "$config_elapsed_sec"
 import os
 import pickle
 import sys
@@ -624,15 +646,17 @@ from meta_heuristic.partition_schedule_evaluator import evaluate_partition_lssp,
 from utils.partition_utils import ScheduleConstPartitionSolver
 
 config_path = Path(sys.argv[1])
-partition_path = Path(sys.argv[2])
-out_csv = Path(sys.argv[3])
-runtime_sec = float(sys.argv[4])
+partition_pkl_arg = Path(sys.argv[2]) if sys.argv[2] else None
+partition_json_arg = Path(sys.argv[3]) if sys.argv[3] else None
+out_csv = Path(sys.argv[4])
+runtime_sec = float(sys.argv[5])
 
 cfg = OmegaConf.load(config_path)
 seed = cfg.get('seed', 42)
 
 task_graph = None
 meta = {}
+json_payload = {}
 
 
 def build_taskgraph_like(graph, area_constraint: float):
@@ -674,15 +698,33 @@ def build_taskgraph_like(graph, area_constraint: float):
         violation_cost=1e9,
     )
 
-# Prefer the TaskGraph pickle used by the MIP run (metadata saved alongside partition)
-meta_path = partition_path.with_name(partition_path.name.replace('_assignment-mip.pkl', '_assignment-mip.meta.json'))
+# Prefer the TaskGraph pickle used by the MIP run (metadata saved alongside partition/json)
+meta_path = None
+for artifact_path in (partition_pkl_arg, partition_json_arg):
+    if not artifact_path:
+        continue
+    if artifact_path.name.endswith('_assignment-mip.pkl'):
+        candidate = artifact_path.with_name(artifact_path.name.replace('_assignment-mip.pkl', '_assignment-mip.meta.json'))
+    elif artifact_path.name.endswith('_assignment-mip.json'):
+        candidate = artifact_path.with_name(artifact_path.name.replace('_assignment-mip.json', '_assignment-mip.meta.json'))
+    else:
+        continue
+    if candidate.exists():
+        meta_path = candidate
+        break
 tg_pickle = None
-if meta_path.exists():
+if meta_path and meta_path.exists():
     try:
         meta = json.loads(meta_path.read_text())
         tg_pickle = meta.get('taskgraph_pickle_copy') or meta.get('taskgraph_pickle')
     except Exception:
         tg_pickle = None
+
+if partition_json_arg and partition_json_arg.exists():
+    try:
+        json_payload = json.loads(partition_json_arg.read_text())
+    except Exception:
+        json_payload = {}
 
 cfg_tg_pickle = cfg.get('taskgraph-pickle', None)
 if tg_pickle and not Path(tg_pickle).exists():
@@ -709,8 +751,19 @@ else:
         A_max=100,
     )
 
-with open(partition_path, 'rb') as f:
-    partition = pickle.load(f)
+partition = None
+if partition_pkl_arg and partition_pkl_arg.exists():
+    with open(partition_pkl_arg, 'rb') as f:
+        partition = pickle.load(f)
+else:
+    partition_payload = json_payload.get('partition_assignment', None)
+    if isinstance(partition_payload, list) and partition_payload and isinstance(partition_payload[0], dict):
+        partition = {str(k): int(v) for k, v in partition_payload[0].items()}
+    elif isinstance(partition_payload, dict):
+        partition = {str(k): int(v) for k, v in partition_payload.items()}
+
+if partition is None:
+    raise RuntimeError("No partition assignment found in MIP artifacts")
 
 # Ensure partition covers all nodes (fill missing with software=0)
 missing = [n for n in graph.nodes() if n not in partition]
@@ -737,10 +790,10 @@ naive_lb = sum(min(task_graph.software_costs[n], task_graph.hardware_costs[n]) f
 lssp_result = evaluate_partition_lssp(task_graph, partition)
 makespan = float(lssp_result['makespan'])
 partition_cost = float(task_graph.evaluate_partition_cost(partition))
-solver_status = meta.get('solver_status', 'optimal')
-model_makespan = float(meta.get('model_makespan', np.nan))
-lp_makespan = float(meta.get('lp_makespan', np.nan))
-lssp_makespan = float(meta.get('final_lssp_makespan', makespan))
+solver_status = meta.get('solver_status') or json_payload.get('status', 'optimal')
+model_makespan = float(meta.get('model_makespan', json_payload.get('makespan', np.nan)))
+lp_makespan = float(meta.get('lp_makespan', json_payload.get('lp_makespan', np.nan)))
+lssp_makespan = float(meta.get('final_lssp_makespan', json_payload.get('final_lssp_makespan', makespan)))
 
 is_valid = bool(lssp_result.get('is_valid', True))
 was_repaired = bool(lssp_result.get('was_repaired', False))

@@ -43,17 +43,17 @@ METHODS=(
 DATASETS=(
   # "paper_fig3_11node"
   "mobile_net_tosa"
-  "rez_net_tosa"
-  "squeeze_net_tosa"
-  "anomaly_detection_tosa"
-  "image_classification_tosa"
-  "keyword_spotting_tosa"
-  "visual_wake_words_tosa"
+  # "rez_net_tosa"
+  # "squeeze_net_tosa"
+  # "anomaly_detection_tosa"
+  # "image_classification_tosa"
+  # "keyword_spotting_tosa"
+  # "visual_wake_words_tosa"
 )
 
 # Edit this array to control the number of seeds.
-SEEDS=(42 43 44 45 46 47 48 49 50 51)
-# SEEDS=(42)
+# SEEDS=(42 43 44 45 46 47 48 49 50 51)
+SEEDS=(43)
 
 if [[ -n "${METHODS_OVERRIDE:-}" ]]; then
   read -r -a METHODS <<<"$METHODS_OVERRIDE"
@@ -91,8 +91,7 @@ if [[ -n "${CONFIG_SEEDS_OVERRIDE:-}" ]]; then
 fi
 
 # MIP runtime controls for the dataset batch.
-# By default this batch forces strict exact MIP with a 10-minute solver timeout.
-# Keep a small outer grace period so timed-out runs can flush incumbent artifacts.
+# The internal solver time-limit-sec is authoritative; the outer watchdog is disabled by default.
 FAST_MIP="${FAST_MIP:-1}"
 MIP_SOLVER_TOOL="${MIP_SOLVER_TOOL:-cvxpy-scip}"
 MIP_SOLVE_MODE="${MIP_SOLVE_MODE:-exact}"
@@ -103,8 +102,7 @@ MIP_VERBOSE="${MIP_VERBOSE:-true}"
 MIP_TIME_LIMIT_SEC="${MIP_TIME_LIMIT_SEC:-600}"
 MIP_GAP="${MIP_GAP:-0}"
 MIP_NODE_LIMIT="${MIP_NODE_LIMIT:-0}"
-MIP_TIMEOUT_BUFFER_SEC="${MIP_TIMEOUT_BUFFER_SEC:-30}"
-RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-$((MIP_TIME_LIMIT_SEC + MIP_TIMEOUT_BUFFER_SEC))}"
+RUN_TIMEOUT_SEC="${RUN_TIMEOUT_SEC:-0}"
 TIMEOUT_KILL_AFTER_SEC="${TIMEOUT_KILL_AFTER_SEC:-30}"
 
 CONFIG_PROFILE_ROOT="$CONFIG_ROOT/$PROFILE"
@@ -337,8 +335,11 @@ echo "  Methods  (${#METHODS[@]}): $(join_by_comma "${METHODS[@]}")"
 echo "  Seeds    (${#SEEDS[@]}): $(join_by_comma "${SEEDS[@]}")"
 echo "  Config cache seeds: $(join_by_comma "${CONFIG_CACHE_SEEDS[@]}")"
 echo "  MIP tlimit    : ${MIP_TIME_LIMIT_SEC}s"
-echo "  MIP timeout pad: ${MIP_TIMEOUT_BUFFER_SEC}s"
-echo "  MIP hard kill : ${RUN_TIMEOUT_SEC}s"
+if [[ "$RUN_TIMEOUT_SEC" =~ ^[0-9]+$ ]] && (( RUN_TIMEOUT_SEC > 0 )); then
+  echo "  MIP watchdog  : ${RUN_TIMEOUT_SEC}s (kill-after ${TIMEOUT_KILL_AFTER_SEC}s)"
+else
+  echo "  MIP watchdog  : disabled"
+fi
 echo "  MIP gap       : $MIP_GAP"
 echo "  MIP node limit: $MIP_NODE_LIMIT"
 echo "  CPU count     : $CPU_COUNT ($CPU_COUNT_SOURCE)"

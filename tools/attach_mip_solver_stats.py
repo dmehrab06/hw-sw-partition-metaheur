@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 
 
+def _status_is_time_limited(status: Any) -> bool:
+    text = str(status).strip().lower()
+    return any(token in text for token in ("time limit", "user_limit", "time_limit", "timed_out", "timeout"))
+
+
 def _extract_solver_stats(log_path: Path) -> dict[str, Any] | None:
     if not log_path.exists():
         return None
@@ -78,6 +83,8 @@ def _merge_solver_stats(path: Path, parsed_stats: dict[str, Any]) -> bool:
     merged = dict(existing)
     merged.update(parsed_stats)
     payload["solver_stats"] = merged
+    if _status_is_time_limited(merged.get("status")):
+        payload["time_limit_exceeded"] = True
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return True
 
