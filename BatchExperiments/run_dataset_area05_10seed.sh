@@ -23,19 +23,19 @@ ALL_METHODS_ORDER=(
 
 # Comment out any method you do not want to run.
 METHODS=(
-  "mip"
+  # "mip"
   # "diff_gnn_order"
-  # "gl25"
+  "gl25"
   # "gcps"
-  # "esa"
-  # "pso"
-  # "dbpso"
-  # "clpso"
-  # "ccpso"
-  # "shade"
-  # "jade"
-  # "random"
-  # "greedy"
+  "esa"
+  "pso"
+  "dbpso"
+  "clpso"
+  "ccpso"
+  "shade"
+  "jade"
+  "random"
+  "greedy"
 )
 
 # Default 8-dataset batch: 7 real SODA graphs + 1 paper sanity-check graph.

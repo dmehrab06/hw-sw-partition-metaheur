@@ -5,9 +5,9 @@ hw-scale-variance: 0.5
 comm-scale-factor: 1.0
 seed: 42
 solver-tool: cvxpy
-solution-dir: /people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/squeeze_net_tosa/diff_gnn_order/partitions
+solution-dir: /qfs/people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/squeeze_net_tosa/diff_gnn_order/partitions
 result-file-prefix: dataset_area05_10seed_squeeze_net_tosa_diff_gnn_order
-output-dir: /people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/squeeze_net_tosa/diff_gnn_order
+output-dir: /qfs/people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/squeeze_net_tosa/diff_gnn_order
 taskgraph-dir: inputs/task_graph_complete
 taskgraph-pickle: inputs/task_graph_complete/taskgraph-squeeze_net_tosa_area-0.50_hwscale-0.10_hwvar-0.50_comm-1.00_seed-42.pkl
 opt-cost-type: makespan

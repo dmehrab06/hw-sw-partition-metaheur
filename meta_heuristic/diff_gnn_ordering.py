@@ -91,7 +91,7 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "soft_makespan_mode": "jacobi",
     "jacobi_iters": 10,
     "soft_makespan_exact_mode": "sequential",
-    "soft_makespan_exact_every": 10,
+    "soft_makespan_exact_every": 1,
     "soft_makespan_exact_first_epoch": False,
     "resource_candidate_topk": 128,
     "resource_candidate_min_prob": 1e-5,
@@ -116,7 +116,7 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     "mode": "hybrid",
     "during_train": False,
     "eval_mode": "lssp",
-    "max_iters": 200,
+    "max_iters": 120,
     "adaptive_max_iters": False,
     "adaptive_large_n": 128,
     "adaptive_large_cap": 10,
@@ -129,7 +129,9 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     "candidate_include_neighbors": True,
     "candidate_include_cut_endpoints": True,
     "final_all_decode_candidates": True,
-    "dls_steps": 20,
+    "print_progress": True,
+    "print_every": 10,
+    "dls_steps": 2,
     "dls_flip_eta": 0.35,
     "dls_swap_eta": 0.18,
     "dls_score_temp": 0.70,
@@ -507,6 +509,9 @@ def _dual_lssp_postprocess(
     candidate_include_neighbors: bool,
     candidate_include_cut_endpoints: bool,
     sw_priority_scores: Mapping | None,
+    print_progress: bool = False,
+    print_every: int = 10,
+    print_prefix: str = "[diff_gnn_order][postprocess]",
 ):
     """
     Run LSSP local search in both modes and pick the lower LSSP cost:
@@ -530,6 +535,9 @@ def _dual_lssp_postprocess(
         TG,
         solution,
         software_priority_scores=None,
+        progress=print_progress,
+        progress_every=print_every,
+        progress_prefix=f"{print_prefix}[static]",
         **common_kwargs,
     )
     candidates = [("static", sol_static, info_static)]
@@ -539,6 +547,9 @@ def _dual_lssp_postprocess(
             TG,
             solution,
             software_priority_scores=sw_priority_scores,
+            progress=print_progress,
+            progress_every=print_every,
+            progress_prefix=f"{print_prefix}[sw_priority]",
             **common_kwargs,
         )
         candidates.append(("sw_priority", sol_sw, info_sw))
@@ -869,6 +880,10 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     post_final_all_decode_candidates = bool(
         post_cfg.get("final_all_decode_candidates", config.get("lssp_postprocess_final_all_decode_candidates", True))
     )
+    post_print_progress = bool(
+        post_cfg.get("print_progress", config.get("lssp_postprocess_print_progress", True))
+    )
+    post_print_every = max(1, int(post_cfg.get("print_every", config.get("lssp_postprocess_print_every", 10))))
     post_candidate_include_neighbors = bool(
         post_cfg.get("candidate_include_neighbors", config.get("lssp_postprocess_candidate_include_neighbors", True))
     )
@@ -982,7 +997,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         )
     if use_lssp_final:
         logger.info(
-            "DiffGNNOrder final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s search=%s top_k=%d slack_frac=%.3f all_decode_candidates=%s dual_lssp_compare=%s (legacy use_sw_priority=%s)",
+            "DiffGNNOrder final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s search=%s top_k=%d slack_frac=%.3f all_decode_candidates=%s print_progress=%s print_every=%d dual_lssp_compare=%s (legacy use_sw_priority=%s)",
             post_eval_mode,
             str(post_during_train),
             str(post_during_eval),
@@ -994,6 +1009,8 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             post_candidate_top_k,
             post_critical_slack_frac,
             str(post_final_all_decode_candidates),
+            str(post_print_progress),
+            post_print_every,
             str(True),
             str(post_use_sw_priority),
         )
@@ -1005,6 +1022,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     best_loss_value = float("inf")
     best_loss_epoch = 0
     stagnant_epochs = 0
+    early_stop_monitoring_started = False
     completed_epochs = 0
 
     tau = tau_start
@@ -1103,7 +1121,17 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         optimizer.step()
 
         current_loss_value = float(info["loss"])
-        if current_loss_value < (best_loss_value - early_stop_min_delta):
+        if early_stop_enabled and ep < early_stop_min_epochs:
+            if current_loss_value < best_loss_value:
+                best_loss_value = current_loss_value
+                best_loss_epoch = ep
+        elif early_stop_enabled and not early_stop_monitoring_started:
+            # Start patience tracking only after the warmup window ends.
+            best_loss_value = current_loss_value
+            best_loss_epoch = ep
+            stagnant_epochs = 0
+            early_stop_monitoring_started = True
+        elif current_loss_value < (best_loss_value - early_stop_min_delta):
             best_loss_value = current_loss_value
             best_loss_epoch = ep
             stagnant_epochs = 0
@@ -1348,6 +1376,16 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         np.asarray(final_probs_repaired, dtype=float).copy(),
                     )
                 ]
+            print(
+                "[diff_gnn_order] "
+                f"postprocess_start mode={post_mode} "
+                f"eval_mode={post_eval_mode} "
+                f"max_iters={post_max_iters} "
+                f"all_candidates={str(post_final_all_decode_candidates)} "
+                f"print_every={post_print_every} "
+                f"candidates={len(post_seed_candidates)}",
+                flush=True,
+            )
 
             selected_post_label = final_choice_label
             selected_post_mode = "decode"
@@ -1355,7 +1393,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             selected_post_static_cost = float("nan")
             selected_post_swprio_cost = float("nan")
 
-            for cand_label, cand_solution, _ in post_seed_candidates:
+            for cand_idx, (cand_label, cand_solution, _) in enumerate(post_seed_candidates, start=1):
+                print(
+                    "[diff_gnn_order] "
+                    f"postprocess_candidate_start idx={cand_idx}/{len(post_seed_candidates)} "
+                    f"label={cand_label} "
+                    f"current_best={final_sched_cost_train:.6f}",
+                    flush=True,
+                )
                 post_choice_mode, candidate_solution, post_info, post_candidates = _dual_lssp_postprocess(
                     TG,
                     cand_solution,
@@ -1370,6 +1415,9 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     candidate_include_neighbors=post_candidate_include_neighbors,
                     candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
                     sw_priority_scores=final_sw_priority_scores,
+                    print_progress=post_print_progress,
+                    print_every=post_print_every,
+                    print_prefix=f"[diff_gnn_order][postprocess][{cand_idx}/{len(post_seed_candidates)}:{cand_label}]",
                 )
                 static_cost = float("nan")
                 swprio_cost = float("nan")
@@ -1382,6 +1430,16 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     TG,
                     candidate_solution,
                     metric=selection_metric_train,
+                )
+                print(
+                    "[diff_gnn_order] "
+                    f"postprocess_candidate_done idx={cand_idx}/{len(post_seed_candidates)} "
+                    f"label={cand_label} "
+                    f"mode={post_choice_mode} "
+                    f"post_cost={post_cost:.6f} "
+                    f"static_cost={static_cost:.6f} "
+                    f"swprio_cost={swprio_cost:.6f}",
+                    flush=True,
                 )
                 if post_cost <= final_sched_cost_train:
                     final_choice_label = cand_label
@@ -1426,6 +1484,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     final_sched_cost_train,
                 )
             logger.info("DiffGNNOrder final postprocess elapsed: %.3fs", time.perf_counter() - post_t0)
+            print(
+                "[diff_gnn_order] "
+                f"postprocess_done best_label={final_choice_label} "
+                f"best_mode={selected_post_mode} "
+                f"best_cost={final_sched_cost_train:.6f} "
+                f"elapsed={time.perf_counter() - post_t0:.3f}s",
+                flush=True,
+            )
 
     if best_assign is None or final_sched_cost_train < best_sched_cost:
         best_assign = final_solution

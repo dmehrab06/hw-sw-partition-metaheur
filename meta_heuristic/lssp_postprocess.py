@@ -176,6 +176,9 @@ def improve_with_lssp_local_search(
     candidate_include_neighbors: bool = True,
     candidate_include_cut_endpoints: bool = True,
     software_priority_scores: Mapping[str, Any] | Sequence[Any] | None = None,
+    progress: bool = False,
+    progress_every: int = 10,
+    progress_prefix: str = "[lssp_postprocess]",
 ) -> Tuple[Dict[str, int], Dict]:
     """
     Optional post-process:
@@ -195,6 +198,12 @@ def improve_with_lssp_local_search(
     candidate_builds = 0
     candidate_pool_total = 0.0
     selected_candidate_total = 0.0
+    progress_every = max(1, int(progress_every))
+    progress_prefix = str(progress_prefix or "[lssp_postprocess]")
+
+    def _emit_progress(message: str) -> None:
+        if progress:
+            print(f"{progress_prefix} {message}", flush=True)
 
     def _flip(base: Dict[str, int], node: str, value: int) -> Dict[str, int]:
         out = dict(base)
@@ -213,14 +222,23 @@ def improve_with_lssp_local_search(
 
     cur_cost = _cost_count(part)
     improved = False
+    _emit_progress(
+        f"start eval_mode={eval_mode} max_iters={max_iters} "
+        f"area_fill={enable_area_fill} swap={enable_swap} "
+        f"init_cost={cur_cost:.6f} area={_hardware_area(TG, part):.3f}/{budget:.3f}"
+    )
 
     # Stage 1: consume unused HW area with useful flips when possible.
     if enable_area_fill:
-        for _ in range(max(1, max_iters // 2)):
+        for stage1_iter in range(1, max(1, max_iters // 2) + 1):
             stage1_iters += 1
             cur_area = _hardware_area(TG, part)
             remain = budget - cur_area
             if remain <= 1e-9:
+                _emit_progress(
+                    f"stage1 iter={stage1_iter} budget_full "
+                    f"cost={cur_cost:.6f} area={cur_area:.3f}/{budget:.3f}"
+                )
                 break
 
             best = None
@@ -244,19 +262,37 @@ def improve_with_lssp_local_search(
                     best_key = key
 
             if best is None:
+                _emit_progress(
+                    f"stage1 iter={stage1_iter} no_fill_move "
+                    f"cost={cur_cost:.6f} area={cur_area:.3f}/{budget:.3f}"
+                )
                 break
             if best_key[0] > float(fill_allow_worsen):
+                _emit_progress(
+                    f"stage1 iter={stage1_iter} stop delta={best_key[0]:.6f} "
+                    f"allow={float(fill_allow_worsen):.6f} cost={cur_cost:.6f}"
+                )
                 break
             part = best
             cur_cost = _cost_count(part)
             improved = True
+            cur_area = _hardware_area(TG, part)
+            if progress and (
+                stage1_iter == 1
+                or stage1_iter % progress_every == 0
+                or best_key[0] < -1e-9
+            ):
+                _emit_progress(
+                    f"stage1 iter={stage1_iter} accepted delta={best_key[0]:.6f} "
+                    f"cost={cur_cost:.6f} area={cur_area:.3f}/{budget:.3f}"
+                )
 
     strategy = str(search_strategy).lower()
     if strategy not in {"all", "critical"}:
         raise ValueError(f"Unsupported local-search strategy '{search_strategy}'. Use all|critical.")
 
     # Stage 2: local search by 1-flip and swap.
-    for _ in range(max_iters):
+    for stage2_iter in range(1, max_iters + 1):
         stage2_iters += 1
         best_part = None
         best_cost = cur_cost
@@ -301,13 +337,34 @@ def improve_with_lssp_local_search(
                         best_part = cand
 
         if best_part is None:
+            _emit_progress(
+                f"stage2 iter={stage2_iter} no_improvement "
+                f"cost={cur_cost:.6f} pool={candidate_info.get('candidate_pool_size', 0.0):.0f} "
+                f"selected={candidate_info.get('selected_candidates', 0.0):.0f}"
+            )
             break
+        move_delta = best_cost - cur_cost
         part = best_part
         cur_cost = best_cost
         improved = True
+        if progress and (
+            stage2_iter == 1
+            or stage2_iter % progress_every == 0
+            or move_delta < -1e-9
+        ):
+            _emit_progress(
+                f"stage2 iter={stage2_iter} accepted delta={move_delta:.6f} "
+                f"cost={cur_cost:.6f} pool={candidate_info.get('candidate_pool_size', 0.0):.0f} "
+                f"selected={candidate_info.get('selected_candidates', 0.0):.0f}"
+            )
 
     elapsed = time.perf_counter() - t0
     total_iters = stage1_iters + stage2_iters
+    _emit_progress(
+        f"done improved={improved} cost={cur_cost:.6f} "
+        f"area={_hardware_area(TG, part):.3f}/{budget:.3f} "
+        f"eval_calls={eval_calls} elapsed={elapsed:.3f}s"
+    )
     return part, {
         "cost": float(cur_cost),
         "hw_area": float(_hardware_area(TG, part)),
