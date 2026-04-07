@@ -50,33 +50,3 @@ diffgnn:
     fill_allow_worsen: 0.0
     enable_swap: false
 
-diffgnn_order:
-  iter: 400
-  hidden_dim: 64
-  device: "gpu"
-  speed_patch: true
-  fast_mode: true
-  feature_profile: "paper"
-  edge_weight_mode: "paper_cosine"
-  paper_sigma: 0.2
-  hard_eval_every: 80
-  sinkhorn_iters: 8
-  order_refine_steps: 1
-  gumbel_noise: false
-  gumbel_scale: 0.0
-  selection_metric_train: "queue"
-  selection_metric_final: "legacy_lp"
-  final_legacy_lp_if_mip: true
-  entropy_coeff: 0.0
-  usage_balance_coeff: 0.0
-  partition_cost_coeff: 0.0
-  perm_reg_coeff: 0.0
-  perm_entropy_coeff: 0.0
-  postprocess:
-    mode: "hybrid"
-    during_train: false
-    eval_mode: "taskgraph"
-    max_iters: 16
-    enable_area_fill: true
-    fill_allow_worsen: 0.0
-    enable_swap: false

@@ -32,10 +32,18 @@ def setup_logging(log_file_path: str) -> None:
     """
     # Path to the logging config file
     logging_config_path = Path("configs/logging_config.ini")
-    print(f"Reading logging config from: {logging_config_path}")
     if not logging_config_path.exists():
         raise FileNotFoundError(f"Logging config file not found: {logging_config_path}")
     
+    # Tear down existing handlers so repeated in-process runs do not keep stale streams.
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:
+            pass
+
 
     # Ensure the logs directory exists
     log_dir = Path(log_file_path).parent

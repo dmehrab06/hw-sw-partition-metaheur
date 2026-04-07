@@ -62,6 +62,13 @@ class TaskGraph:
         self.hardware_area = {}
         self.communication_costs = {}
         self.area_constraint = area_constraint
+        self.violation_cost = 1e9
+        self.node_to_num = {}
+        self.num_to_node = {}
+        self.total_area = 0.0
+        
+        # Use the same logger as the main module
+        logger.info("TaskGraph initialized with area constraint: %f", area_constraint)
 
     def _compute_fast_dag_makespan(self, solution):
         """
@@ -82,13 +89,6 @@ class TaskGraph:
                 auto_repair=False,
             )["makespan"]
         )
-        self.violation_cost = 1e9
-        self.node_to_num = {}
-        self.num_to_node = {}
-        self.total_area = 0.0
-        
-        # Use the same logger as the main module
-        logger.info("TaskGraph initialized with area constraint: %f", area_constraint)
 
     def load_graph_from_pydot(self, pydot_file, k=1.5, l=0.2, mu=0.5, A_max=100, seed=42, reproduce=True):
         """

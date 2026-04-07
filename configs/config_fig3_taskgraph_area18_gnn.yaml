@@ -29,13 +29,3 @@ diffgnn:
   model: "default"
   hard_eval_every: 50
 
-diffgnn_order:
-  iter: 250
-  verbose: 250
-  device: "cpu"
-  hidden_dim: 64
-  num_layers: 3
-  dropout: 0.2
-  model: "default"
-  hard_eval_every: 50
-  fast_mode: true

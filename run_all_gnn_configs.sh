@@ -16,6 +16,8 @@ RESULT_PREFIX_ENV="${HWSW_RESULT_PREFIX:-${RESULT_PREFIX:-}}"
 CSV_DIR_ENV="${HWSW_CSV_DIR:-${CSV_DIR:-}}"
 RUN_TAG_ENV="${HWSW_RUN_TAG:-${RUN_TAG:-}}"
 INPROC_RUNNER="$ROOT/tools/run_gnn_configs_inproc.py"
+PARALLEL_RUNNER="$ROOT/tools/run_gnn_configs_parallel.py"
+PARALLEL_CONFIG_JOBS="${HWSW_MAX_PARALLEL_CONFIGS:-${MAX_PARALLEL_CONFIGS:-1}}"
 
 cd "$ROOT"
 
@@ -42,6 +44,9 @@ fi
 if [[ -n "$RUN_TAG_ENV" ]]; then
   echo "Run tag: $RUN_TAG_ENV"
 fi
+if [[ "${PARALLEL_CONFIG_JOBS}" =~ ^[0-9]+$ ]] && (( PARALLEL_CONFIG_JOBS > 1 )); then
+  echo "Parallel config jobs: $PARALLEL_CONFIG_JOBS"
+fi
 
 run_env=( )
 if [[ -n "$METHODS_ENV" ]]; then
@@ -60,10 +65,18 @@ if [[ -n "$RUN_TAG_ENV" ]]; then
   run_env+=(HWSW_RUN_TAG="$RUN_TAG_ENV")
 fi
 
-if [[ ${#run_env[@]} -gt 0 ]]; then
-  env "${run_env[@]}" "$PYTHON" "$INPROC_RUNNER" --root "$ROOT" --outdir "$OUTDIR" "${CONFIGS[@]}"
+if [[ "${PARALLEL_CONFIG_JOBS}" =~ ^[0-9]+$ ]] && (( PARALLEL_CONFIG_JOBS > 1 )); then
+  if [[ ${#run_env[@]} -gt 0 ]]; then
+    env "${run_env[@]}" "$PYTHON" "$PARALLEL_RUNNER" --root "$ROOT" --outdir "$OUTDIR" --python "$PYTHON" --jobs "$PARALLEL_CONFIG_JOBS" "${CONFIGS[@]}"
+  else
+    "$PYTHON" "$PARALLEL_RUNNER" --root "$ROOT" --outdir "$OUTDIR" --python "$PYTHON" --jobs "$PARALLEL_CONFIG_JOBS" "${CONFIGS[@]}"
+  fi
 else
-  "$PYTHON" "$INPROC_RUNNER" --root "$ROOT" --outdir "$OUTDIR" "${CONFIGS[@]}"
+  if [[ ${#run_env[@]} -gt 0 ]]; then
+    env "${run_env[@]}" "$PYTHON" "$INPROC_RUNNER" --root "$ROOT" --outdir "$OUTDIR" "${CONFIGS[@]}"
+  else
+    "$PYTHON" "$INPROC_RUNNER" --root "$ROOT" --outdir "$OUTDIR" "${CONFIGS[@]}"
+  fi
 fi
 
 

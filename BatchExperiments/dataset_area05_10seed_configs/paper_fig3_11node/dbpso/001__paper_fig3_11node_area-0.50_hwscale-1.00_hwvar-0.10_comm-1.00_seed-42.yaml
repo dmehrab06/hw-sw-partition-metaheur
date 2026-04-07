@@ -5,9 +5,9 @@ hw-scale-variance: 0.1
 comm-scale-factor: 1.0
 seed: 42
 solver-tool: cvxpy
-solution-dir: /qfs/people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/paper_fig3_11node/dbpso/partitions
+solution-dir: /people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/paper_fig3_11node/dbpso/partitions
 result-file-prefix: dataset_area05_10seed_paper_fig3_11node_dbpso
-output-dir: /qfs/people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/paper_fig3_11node/dbpso
+output-dir: /people/dass304/dass304/HWSWpartition/hw-sw-partition-metaheur/BatchExperiments/dataset_area05/paper_fig3_11node/dbpso
 taskgraph-dir: inputs/task_graph_complete
 taskgraph-pickle: inputs/task_graph_complete/taskgraph-paper_fig3_11node-instance-config-config_fig3_taskgraph_gnn.pkl
 opt-cost-type: makespan
@@ -130,62 +130,6 @@ diffgnn:
   edge_weight_learner: mlp
   sinkhorn_iters: 12
   pairwise_temp: 0.35
-diffgnn_order:
-  iter: 1000
-  early_stop_enabled: true
-  early_stop_min_epochs: 250
-  early_stop_patience: 5
-  early_stop_min_delta: 0.0001
-  verbose: 1000
-  device: gpu
-  hidden_dim: 256
-  num_layers: 3
-  dropout: 0.5
-  model: default
-  speed_patch: true
-  hard_eval_every: 100
-  hard_eval_only_final: true
-  checkpoint_eval_when_final_only: false
-  fast_mode: true
-  use_hw_ordering: false
-  selection_metric: queue
-  selection_metric_train: queue
-  selection_metric_final: queue
-  final_legacy_lp_if_mip: true
-  feature_profile: default_plus_paper
-  edge_weight_mode: paper2_cosine
-  edge_weight_learner: mlp
-  sinkhorn_iters: 8
-  order_refine_steps: 2
-  gumbel_noise: false
-  gumbel_scale: 0.0
-  pairwise_mode: rank_sigmoid
-  pairwise_temp: 0.35
-  order_decode_weight: 0.0
-  entropy_coeff: 0.0
-  usage_balance_coeff: 0.0
-  partition_cost_coeff: 0.0833333333
-  perm_reg_coeff: 0.0
-  perm_entropy_coeff: 0.0
-  postprocess:
-    mode: hybrid
-    during_train: false
-    eval_mode: lssp
-    max_iters: 24
-    adaptive_max_iters: false
-    adaptive_large_n: 128
-    adaptive_large_cap: 10
-    enable_area_fill: true
-    fill_allow_worsen: 0.0
-    enable_swap: true
-    dls_steps: 2
-    dls_flip_eta: 0.35
-    dls_swap_eta: 0.18
-    dls_score_temp: 0.7
-    dls_comm_coeff: 0.02
-    dls_area_proj_iters: 4
-    dls_area_proj_strength: 6.0
-    dls_fill_decode: true
 gcon:
   iter: 500
   verbose: 500

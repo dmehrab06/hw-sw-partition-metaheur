@@ -37,21 +37,3 @@ diffgnn:
     fill_allow_worsen: 0.0
     enable_swap: true
 
-diffgnn_order:
-  iter: 250
-  verbose: 250
-  device: "cpu"
-  hidden_dim: 64
-  num_layers: 3
-  dropout: 0.2
-  model: "default"
-  hard_eval_every: 50
-  fast_mode: true
-  postprocess:
-    enabled: true
-    during_eval: false
-    eval_mode: "taskgraph"
-    max_iters: 120
-    enable_area_fill: true
-    fill_allow_worsen: 0.0
-    enable_swap: true

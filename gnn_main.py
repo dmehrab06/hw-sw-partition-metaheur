@@ -11,11 +11,8 @@ from pprint import pprint
 from collections.abc import Mapping
 
 from utils.logging_utils import LogManager
-print(f"After LogManager - report.log exists: {os.path.exists('report.log')}")
 warnings.filterwarnings('ignore')
 
-LogManager.initialize("logs/run_meta_heuristic.log")
-print(f"After LogManager.initialize - report.log exists: {os.path.exists('report.log')}")
 logger = LogManager.get_logger(__name__)
 
 from meta_heuristic import ( 
@@ -249,10 +246,21 @@ def load_taskgraph_if_available(config):
     tg_pickle = os.getenv("HWSW_TASKGRAPH_PICKLE") or config.get('taskgraph-pickle')
     force_regen = os.getenv("HWSW_FORCE_TG_REGEN", "0").lower() in ("1", "true", "yes")
 
+    def _ensure_taskgraph_runtime_fields(task_graph):
+        if not hasattr(task_graph, "violation_cost"):
+            task_graph.violation_cost = 1e9
+        if not hasattr(task_graph, "node_to_num") or not getattr(task_graph, "node_to_num", None):
+            task_graph.node_to_num = {node: i for i, node in enumerate(task_graph.graph.nodes())}
+        if not hasattr(task_graph, "num_to_node") or not getattr(task_graph, "num_to_node", None):
+            task_graph.num_to_node = {idx: node for node, idx in task_graph.node_to_num.items()}
+        if not hasattr(task_graph, "total_area") or getattr(task_graph, "total_area", 0.0) == 0.0:
+            task_graph.total_area = float(sum(getattr(task_graph, "hardware_area", {}).values()))
+
     if tg_pickle and os.path.exists(tg_pickle) and not force_regen:
         try:
             with open(tg_pickle, "rb") as f:
                 TG = pickle.load(f)
+            _ensure_taskgraph_runtime_fields(TG)
             loaded_area = getattr(TG, "area_constraint", None)
             synchronize_problem_with_config(TG, config)
             logger.info(f"Loaded TaskGraph instance from: {tg_pickle}")
@@ -394,9 +402,10 @@ def save_results_to_csv(config, results_dict, N, very_naive_lower_bound):
     logger.info(f"Results saved to {file_path}")
 
 def main():
+    LogManager.initialize("logs/run_meta_heuristic.log")
+
     # Parse arguments and load config
     config = parse_arguments()
-    print(config)
     
     # Set random seeds for reproducibility
     random.seed(config['seed'])

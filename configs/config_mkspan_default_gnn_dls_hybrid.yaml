@@ -121,38 +121,6 @@ diffgnn:
       dls_area_proj_strength: 6.0
       dls_fill_decode: true
 
-diffgnn_order:
-    iter: 1000
-    verbose: 1000
-    device: "gpu"
-    hidden_dim: 256
-    num_layers: 3
-    dropout: 0.5
-    model: "default"
-    speed_patch: true
-    hard_eval_every: 200
-    fast_mode: true
-    sinkhorn_iters: 8
-    order_refine_steps: 1
-    gumbel_noise: false
-    gumbel_scale: 0.0
-    postprocess:
-      mode: "hybrid"
-      during_train: true
-      eval_mode: "taskgraph"
-      max_iters: 12
-      enable_area_fill: true
-      fill_allow_worsen: 0.0
-      enable_swap: false
-      dls_steps: 2
-      dls_flip_eta: 0.35
-      dls_swap_eta: 0.18
-      dls_score_temp: 0.70
-      dls_comm_coeff: 0.02
-      dls_area_proj_iters: 4
-      dls_area_proj_strength: 6.0
-      dls_fill_decode: true
-
 gcon:
     iter: 500
     verbose: 500

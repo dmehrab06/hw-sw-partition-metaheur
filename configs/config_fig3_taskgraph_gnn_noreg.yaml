@@ -38,23 +38,3 @@ diffgnn:
   usage_balance_coeff: 0.0
   partition_cost_coeff: 0.0833333333
 
-diffgnn_order:
-  iter: 250
-  verbose: 250
-  device: "cpu"
-  hidden_dim: 64
-  num_layers: 3
-  dropout: 0.2
-  model: "default"
-  hard_eval_every: 50
-  fast_mode: true
-  speed_patch: true
-  sinkhorn_iters: 8
-  order_refine_steps: 1
-  gumbel_noise: false
-  gumbel_scale: 0.0
-  entropy_coeff: 0.0
-  usage_balance_coeff: 0.0
-  perm_reg_coeff: 0.0
-  perm_entropy_coeff: 0.0
-  partition_cost_coeff: 0.01

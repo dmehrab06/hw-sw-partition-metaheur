@@ -78,20 +78,27 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "feature_profile": "default_plus_paper",
     "edge_weight_mode": "paper2_cosine",
     "edge_weight_learner": "mlp",
-    "edge_mlp_hidden_dim": 16,
+    "edge_mlp_hidden_dim": 32,
     "edge_weight_min_scale": 0.5,
     "edge_weight_max_scale": 1.5,
-    "sinkhorn_iters": 8,
-    "order_refine_steps": 2,
+    "sinkhorn_iters": 5,
+    "order_refine_steps": 5,
     "use_hw_ordering": False,
     "gumbel_noise": False,
     "gumbel_scale": 0.0,
     "pairwise_mode": "rank_sigmoid",
-    "pairwise_temp": 0.35,
-    "order_decode_weight": 0.45,
+    "pairwise_temp": 0.30,
+    "soft_makespan_mode": "jacobi",
+    "jacobi_iters": 10,
+    "soft_makespan_exact_mode": "sequential",
+    "soft_makespan_exact_every": 10,
+    "soft_makespan_exact_first_epoch": False,
+    "resource_candidate_topk": 128,
+    "resource_candidate_min_prob": 1e-5,
+    "order_decode_weight": 0.55,
     "entropy_coeff": 0.0,
     "usage_balance_coeff": 0.0,
-    "partition_cost_coeff": 0.01,
+    "partition_cost_coeff": 0.0833333333,
     "perm_reg_coeff": 0.0,
     "perm_entropy_coeff": 0.0,
     "selection_metric": "queue",
@@ -99,16 +106,17 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "selection_metric_final": "queue",
     "final_legacy_lp_if_mip": True,
     "early_stop_enabled": True,
-    "early_stop_min_epochs": 250,
-    "early_stop_patience": 5,
+    "early_stop_min_epochs": 500,
+    "early_stop_patience": 10,
     "early_stop_min_delta": 1e-4,
+    "progress_log_every": 50,
 }
 
 _MKSPAN_POSTPROCESS_DEFAULTS = {
     "mode": "hybrid",
     "during_train": False,
     "eval_mode": "lssp",
-    "max_iters": 24,
+    "max_iters": 200,
     "adaptive_max_iters": False,
     "adaptive_large_n": 128,
     "adaptive_large_cap": 10,
@@ -116,11 +124,12 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     "fill_allow_worsen": 0.0,
     "enable_swap": True,
     "search_strategy": "critical",
-    "candidate_top_k": 16,
-    "critical_slack_frac": 0.05,
+    "candidate_top_k": 256,
+    "critical_slack_frac": 0.10,
     "candidate_include_neighbors": True,
     "candidate_include_cut_endpoints": True,
-    "dls_steps": 2,
+    "final_all_decode_candidates": True,
+    "dls_steps": 20,
     "dls_flip_eta": 0.35,
     "dls_swap_eta": 0.18,
     "dls_score_temp": 0.70,
@@ -133,29 +142,37 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
 _FAST_MODE_DEFAULTS = {
     "iter": 500,
     "verbose": 500,
-    "hidden_dim": 256,
+    "hidden_dim": 128,
     "num_layers": 3,
     "dropout": 0.5,
     "feature_profile": "default_plus_paper",
     "edge_weight_mode": "paper2_cosine",
     "edge_weight_learner": "mlp",
-    "edge_mlp_hidden_dim": 16,
+    "edge_mlp_hidden_dim": 32,
     "edge_weight_min_scale": 0.5,
     "edge_weight_max_scale": 1.5,
-    "sinkhorn_iters": 8,
-    "order_refine_steps": 2,
+    "sinkhorn_iters": 10,
+    "order_refine_steps": 4,
     "use_hw_ordering": False,
-    "hard_eval_only_final": True,
+    "hard_eval_only_final": False,
     "checkpoint_eval_when_final_only": False,
     "gumbel_noise": False,
     "gumbel_scale": 0.0,
     "pairwise_mode": "rank_sigmoid",
-    "pairwise_temp": 0.35,
-    "order_decode_weight": 0.45,
+    "pairwise_temp": 0.30,
+    "soft_makespan_mode": "jacobi",
+    "jacobi_iters": 4,
+    "soft_makespan_exact_mode": "sequential",
+    "soft_makespan_exact_every": 10,
+    "soft_makespan_exact_first_epoch": True,
+    "resource_candidate_topk": 128,
+    "resource_candidate_min_prob": 1e-5,
+    "order_decode_weight": 0.55,
     "early_stop_enabled": True,
     "early_stop_min_epochs": 250,
-    "early_stop_patience": 5,
-    "early_stop_min_delta": 1e-4,
+    "early_stop_patience": 8,
+    "early_stop_min_delta": 5e-4,
+    "progress_log_every": 50,
 }
 
 
@@ -231,9 +248,50 @@ def _pairwise_before_from_expected_rank(P: torch.Tensor, temperature: float = 0.
     return (before * (1.0 - eye)).clamp(0.0, 1.0)
 
 
-def _softmax_beta(vals: torch.Tensor, beta: float) -> torch.Tensor:
+def _softmax_beta(vals: torch.Tensor, beta: float, dim: int = 0) -> torch.Tensor:
     b = max(float(beta), 1e-6)
-    return (1.0 / b) * torch.logsumexp(b * vals, dim=0)
+    return (1.0 / b) * torch.logsumexp(b * vals, dim=dim)
+
+
+def _scatter_softmax_beta(
+    messages: torch.Tensor,
+    index: torch.Tensor,
+    size: int,
+    beta: float,
+    base: torch.Tensor | float | None = None,
+) -> torch.Tensor:
+    """
+    Grouped log-sum-exp reduction over segments identified by `index`.
+    This is used by the Jacobi soft-makespan path to parallelize the DAG pass.
+    """
+    if size <= 0:
+        return messages.new_zeros((0,))
+
+    b = max(float(beta), 1e-6)
+    device = messages.device
+    dtype = messages.dtype
+
+    if base is None:
+        base_tensor = torch.full((size,), -1e9, dtype=dtype, device=device)
+    elif torch.is_tensor(base):
+        base_tensor = base.to(device=device, dtype=dtype)
+    else:
+        base_tensor = torch.full((size,), float(base), dtype=dtype, device=device)
+
+    max_per = base_tensor.clone()
+    if messages.numel() > 0:
+        max_per.scatter_reduce_(0, index, messages, reduce="amax", include_self=True)
+
+    base_exp = torch.exp(b * (base_tensor - max_per))
+    if messages.numel() > 0:
+        msg_scaled = torch.exp(b * (messages - max_per.index_select(0, index)))
+        msg_exp = torch.zeros((size,), dtype=dtype, device=device)
+        msg_exp.index_add_(0, index, msg_scaled)
+        sumexp = base_exp + msg_exp
+    else:
+        sumexp = base_exp
+
+    return max_per + torch.log(sumexp.clamp_min(1e-30)) / b
 
 
 def _doubly_stochastic_penalty(P: torch.Tensor) -> torch.Tensor:
@@ -250,6 +308,91 @@ def _entropy_rows_cols(P: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     row_h = -(P * torch.log(P + eps)).sum(dim=1).mean()
     col_h = -(P * torch.log(P + eps)).sum(dim=0).mean()
     return row_h + col_h
+
+
+def _build_order_loss_cache(TG, node_list, device, dtype):
+    n = len(node_list)
+    node_to_idx = {node: i for i, node in enumerate(node_list)}
+    topo_nodes = list(nx.topological_sort(TG.graph))
+    topo_idx = [node_to_idx[node] for node in topo_nodes]
+    topo_depths = {}
+    topo_level_groups = {}
+    max_topo_depth = 0
+    for node in topo_nodes:
+        pred_nodes = list(TG.graph.predecessors(node))
+        depth = 0 if not pred_nodes else 1 + max(topo_depths[p] for p in pred_nodes)
+        topo_depths[node] = depth
+        max_topo_depth = max(max_topo_depth, depth)
+        topo_level_groups.setdefault(depth, []).append(node_to_idx[node])
+
+    hw_times = torch.tensor([TG.hardware_costs[node] for node in node_list], dtype=dtype, device=device)
+    sw_times = torch.tensor([TG.software_costs[node] for node in node_list], dtype=dtype, device=device)
+    areas = torch.tensor([TG.hardware_area.get(node, 0.0) for node in node_list], dtype=dtype, device=device)
+
+    pred_idx_tensors = []
+    pred_comm_tensors = []
+    other_idx_tensors = []
+    arange_n = torch.arange(n, device=device)
+    for idx, node in enumerate(node_list):
+        pred_nodes = list(TG.graph.predecessors(node))
+        if pred_nodes:
+            pred_idx = torch.tensor([node_to_idx[p] for p in pred_nodes], dtype=torch.long, device=device)
+            pred_comm = torch.tensor(
+                [float(TG.communication_costs.get((p, node), 0.0)) for p in pred_nodes],
+                dtype=dtype,
+                device=device,
+            )
+        else:
+            pred_idx = torch.empty((0,), dtype=torch.long, device=device)
+            pred_comm = torch.empty((0,), dtype=dtype, device=device)
+        pred_idx_tensors.append(pred_idx)
+        pred_comm_tensors.append(pred_comm)
+        other_idx_tensors.append(arange_n[arange_n != idx])
+
+    comm_src = []
+    comm_dst = []
+    comm_cost = []
+    for (u, v), c in TG.communication_costs.items():
+        if u in node_to_idx and v in node_to_idx:
+            comm_src.append(node_to_idx[u])
+            comm_dst.append(node_to_idx[v])
+            comm_cost.append(float(c))
+
+    if comm_src:
+        comm_src_idx = torch.tensor(comm_src, dtype=torch.long, device=device)
+        comm_dst_idx = torch.tensor(comm_dst, dtype=torch.long, device=device)
+        comm_costs = torch.tensor(comm_cost, dtype=dtype, device=device)
+    else:
+        comm_src_idx = torch.empty((0,), dtype=torch.long, device=device)
+        comm_dst_idx = torch.empty((0,), dtype=torch.long, device=device)
+        comm_costs = torch.empty((0,), dtype=dtype, device=device)
+
+    total_area = float(getattr(TG, "total_area", 0.0))
+    if total_area == 0.0:
+        total_area = float(areas.sum().item())
+    if total_area <= 0.0:
+        total_area = 1.0
+
+    return {
+        "hw_times": hw_times,
+        "sw_times": sw_times,
+        "areas": areas,
+        "total_area": total_area,
+        "topo_idx": topo_idx,
+        "topo_depth": max_topo_depth + 1 if n > 0 else 0,
+        "topo_level_tensors": [
+            torch.tensor(level_nodes, dtype=torch.long, device=device)
+            for _, level_nodes in sorted(topo_level_groups.items())
+        ],
+        "pred_idx_tensors": pred_idx_tensors,
+        "pred_comm_tensors": pred_comm_tensors,
+        "other_idx_tensors": other_idx_tensors,
+        "comm_src_idx": comm_src_idx,
+        "comm_dst_idx": comm_dst_idx,
+        "comm_costs": comm_costs,
+        "eye": torch.eye(n, dtype=dtype, device=device),
+        "zero": torch.zeros((), dtype=dtype, device=device),
+    }
 
 
 def _order_aware_repair_scores(hard_probs: np.ndarray, prio_hw: np.ndarray, prio_sw: np.ndarray, weight: float) -> np.ndarray:
@@ -430,7 +573,12 @@ def _differentiable_makespan_loss_with_order(
     perm_entropy_coeff=0.0,
     pairwise_mode="rank_sigmoid",
     pairwise_temp=0.5,
+    soft_makespan_mode="jacobi",
+    jacobi_iters=1,
     use_hw_ordering=False,
+    resource_candidate_topk=0,
+    resource_candidate_min_prob=0.0,
+    loss_cache=None,
 ):
     """
     Differentiable loss with soft placement + soft ordering:
@@ -443,13 +591,13 @@ def _differentiable_makespan_loss_with_order(
     dtype = probs_tensor.dtype
     N = probs_tensor.shape[0]
 
-    hw_times = torch.tensor([TG.hardware_costs[n] for n in node_list], dtype=dtype, device=device)
-    sw_times = torch.tensor([TG.software_costs[n] for n in node_list], dtype=dtype, device=device)
-    areas = torch.tensor([TG.hardware_area.get(n, 0.0) for n in node_list], dtype=dtype, device=device)
+    if loss_cache is None:
+        loss_cache = _build_order_loss_cache(TG, node_list, device=device, dtype=dtype)
 
-    total_area = float(TG.total_area) if getattr(TG, "total_area", 0.0) != 0 else float(areas.sum().item())
-    if total_area <= 0:
-        total_area = 1.0
+    hw_times = loss_cache["hw_times"]
+    sw_times = loss_cache["sw_times"]
+    areas = loss_cache["areas"]
+    total_area = float(loss_cache["total_area"])
 
     exec_time = probs_tensor * hw_times + (1.0 - probs_tensor) * sw_times
 
@@ -494,49 +642,87 @@ def _differentiable_makespan_loss_with_order(
     if bool(use_hw_ordering):
         before_resource = before_resource + (before_hw * gate_hw)
     if N > 0:
-        eye = torch.eye(N, dtype=dtype, device=device)
-        before_resource = before_resource * (1.0 - eye)
+        before_resource = before_resource * (1.0 - loss_cache["eye"])
 
-    G = TG.graph
-    topo_nodes = list(nx.topological_sort(G))
-    node_to_idx = {n: i for i, n in enumerate(node_list)}
-    topo_idx = [node_to_idx[n] for n in topo_nodes]
-
-    preds = [[] for _ in range(N)]
-    for node in topo_nodes:
-        i = node_to_idx[node]
-        for p in G.predecessors(node):
-            pidx = node_to_idx[p]
-            c = float(TG.communication_costs.get((p, node), 0.0))
-            preds[i].append((pidx, c))
-
-    all_idx = torch.arange(N, device=device)
-    zero = exec_time.new_tensor(0.0)
+    topo_idx = loss_cache["topo_idx"]
+    topo_depth = int(loss_cache.get("topo_depth", max(1, len(topo_idx))))
+    pred_idx_tensors = loss_cache["pred_idx_tensors"]
+    pred_comm_tensors = loss_cache["pred_comm_tensors"]
+    comm_src_idx = loss_cache["comm_src_idx"]
+    comm_dst_idx = loss_cache["comm_dst_idx"]
+    comm_costs = loss_cache["comm_costs"]
+    zero = loss_cache["zero"]
 
     # Iterative refinement: DAG DP pass + resource-precedence pass.
     F_prev = exec_time.clone()
     refine_steps = max(0, int(order_refine_steps))
+    soft_mode = str(soft_makespan_mode).lower()
+    jacobi_steps = max(1, int(jacobi_iters))
+
+    def _resource_start_times(F_source: torch.Tensor) -> torch.Tensor:
+        if N <= 1:
+            return exec_time.new_zeros((N,))
+
+        resource_prob = before_resource
+        resource_logits = F_source.unsqueeze(1) + float(resource_logit_alpha) * torch.log(
+            resource_prob + float(order_eps)
+        )
+        min_prob = float(resource_candidate_min_prob)
+        if min_prob > 0.0:
+            neg_inf = torch.full_like(resource_logits, -1e9)
+            resource_logits = torch.where(resource_prob >= min_prob, resource_logits, neg_inf)
+        topk = int(resource_candidate_topk)
+        if topk > 0 and resource_logits.shape[0] > topk:
+            resource_logits, _ = torch.topk(resource_logits, k=topk, dim=0, sorted=False)
+        return _softmax_beta(resource_logits, beta_softmax, dim=0)
+
     for _ in range(refine_steps):
-        F_new = torch.zeros_like(exec_time)
-        for i in topo_idx:
-            if preds[i]:
-                dag_terms = [zero]
-                for pidx, comm_cost in preds[i]:
-                    comm = torch.abs(probs_tensor[pidx] - probs_tensor[i]) * comm_cost
-                    dag_terms.append(F_new[pidx] + comm)
-                t_dag = _softmax_beta(torch.stack(dag_terms), beta_softmax)
-            else:
-                t_dag = zero
+        t_res_all = _resource_start_times(F_prev)
 
-            if N <= 1:
-                t_res = zero
-            else:
-                mask = all_idx != i
-                res_terms = F_prev[mask] + float(resource_logit_alpha) * torch.log(before_resource[mask, i] + float(order_eps))
-                t_res = _softmax_beta(res_terms, beta_softmax)
+        if soft_mode == "jacobi" and N > 1:
+            F_new = F_prev
+            n_jacobi = min(jacobi_steps, max(1, topo_depth))
+            zero_baseline = exec_time.new_zeros((N,))
+            for _ in range(n_jacobi):
+                t_res_all = _resource_start_times(F_new)
+                if comm_src_idx.numel() > 0:
+                    comm = torch.abs(probs_tensor[comm_src_idx] - probs_tensor[comm_dst_idx]) * comm_costs
+                    dag_msgs = F_new[comm_src_idx] + comm
+                    t_dag_all = _scatter_softmax_beta(
+                        dag_msgs,
+                        comm_dst_idx,
+                        N,
+                        beta_softmax,
+                        base=zero_baseline,
+                    )
+                else:
+                    t_dag_all = zero_baseline
 
-            start_i = _softmax_beta(torch.stack([t_dag, t_res]), beta_softmax)
-            F_new[i] = start_i + exec_time[i]
+                start_all = _softmax_beta(
+                    torch.stack([t_dag_all, t_res_all], dim=0),
+                    beta_softmax,
+                    dim=0,
+                )
+                F_new = start_all + exec_time
+        else:
+            F_new = torch.zeros_like(exec_time)
+            for i in topo_idx:
+                pred_idx = pred_idx_tensors[i]
+                if pred_idx.numel() > 0:
+                    pred_comm = pred_comm_tensors[i]
+                    comm = torch.abs(probs_tensor[pred_idx] - probs_tensor[i]) * pred_comm
+                    dag_terms = torch.cat((zero.reshape(1), F_new[pred_idx] + comm))
+                    t_dag = _softmax_beta(dag_terms, beta_softmax)
+                else:
+                    t_dag = zero
+
+                if N <= 1:
+                    t_res = zero
+                else:
+                    t_res = t_res_all[i]
+
+                start_i = _softmax_beta(torch.stack([t_dag, t_res]), beta_softmax)
+                F_new[i] = start_i + exec_time[i]
 
         F_prev = F_new
 
@@ -554,12 +740,13 @@ def _differentiable_makespan_loss_with_order(
     entropy_like = torch.mean(probs_tensor * (1.0 - probs_tensor))
 
     exec_cost = torch.sum(exec_time)
-    comm_cost = torch.tensor(0.0, dtype=dtype, device=device)
-    for (u, v), c in TG.communication_costs.items():
-        if u in node_to_idx and v in node_to_idx:
-            pu = probs_tensor[node_to_idx[u]]
-            pv = probs_tensor[node_to_idx[v]]
-            comm_cost = comm_cost + torch.abs(pu - pv) * float(c)
+    comm_src_idx = loss_cache["comm_src_idx"]
+    comm_dst_idx = loss_cache["comm_dst_idx"]
+    comm_costs = loss_cache["comm_costs"]
+    if comm_src_idx.numel() > 0:
+        comm_cost = torch.sum(torch.abs(probs_tensor[comm_src_idx] - probs_tensor[comm_dst_idx]) * comm_costs)
+    else:
+        comm_cost = torch.tensor(0.0, dtype=dtype, device=device)
     expected_partition_cost = exec_cost + comm_cost
 
     if P_hw is None:
@@ -622,6 +809,13 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     perm_entropy_coeff = float(config.get("perm_entropy_coeff", 0.0))
     pairwise_mode = str(config.get("pairwise_mode", "rank_sigmoid")).lower()
     pairwise_temp = float(config.get("pairwise_temp", 0.5))
+    soft_makespan_mode = str(config.get("soft_makespan_mode", "jacobi")).lower()
+    jacobi_iters = max(1, int(config.get("jacobi_iters", 10)))
+    soft_makespan_exact_mode = str(config.get("soft_makespan_exact_mode", "sequential")).lower()
+    soft_makespan_exact_every = max(0, int(config.get("soft_makespan_exact_every", 10)))
+    soft_makespan_exact_first_epoch = bool(config.get("soft_makespan_exact_first_epoch", False))
+    resource_candidate_topk = max(0, int(config.get("resource_candidate_topk", 0)))
+    resource_candidate_min_prob = max(0.0, float(config.get("resource_candidate_min_prob", 0.0)))
     # Paper-prior blending is opt-in. Keep disabled by default unless explicitly enabled.
     paper_sigma_enabled = bool(config.get("paper_sigma_enabled", config.get("paper_blend_enabled", False)))
     paper_sigma = float(config.get("paper_sigma", 0.0)) if paper_sigma_enabled else 0.0
@@ -630,11 +824,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     seed = int(config.get("seed", 42))
     hard_eval_every = int(config.get("hard_eval_every", max(1, epochs // 5)))
     hard_eval_only_final = bool(config.get("hard_eval_only_final", True))
-    checkpoint_eval_when_final_only = bool(config.get("checkpoint_eval_when_final_only", True))
+    checkpoint_eval_when_final_only = bool(config.get("checkpoint_eval_when_final_only", False))
     early_stop_enabled = bool(config.get("early_stop_enabled", True))
     early_stop_min_epochs = max(1, min(int(config.get("early_stop_min_epochs", 250)), epochs))
     early_stop_patience = max(0, int(config.get("early_stop_patience", 5)))
     early_stop_min_delta = max(0.0, float(config.get("early_stop_min_delta", 1e-4)))
+    progress_log_every = max(1, int(config.get("progress_log_every", 50)))
     selection_metric_train = str(config.get("selection_metric_train", config.get("selection_metric", "queue"))).lower()
     selection_metric_final = str(config.get("selection_metric_final", selection_metric_train)).lower()
     sampler = (config.get("sampling") or config.get("sampler") or "soft").lower()
@@ -671,6 +866,9 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     post_candidate_top_k = int(post_cfg.get("candidate_top_k", config.get("lssp_postprocess_candidate_top_k", 16)))
     post_use_sw_priority = bool(post_cfg.get("use_sw_priority", config.get("lssp_use_sw_priority", False)))
     post_critical_slack_frac = float(post_cfg.get("critical_slack_frac", config.get("lssp_postprocess_critical_slack_frac", 0.05)))
+    post_final_all_decode_candidates = bool(
+        post_cfg.get("final_all_decode_candidates", config.get("lssp_postprocess_final_all_decode_candidates", True))
+    )
     post_candidate_include_neighbors = bool(
         post_cfg.get("candidate_include_neighbors", config.get("lssp_postprocess_candidate_include_neighbors", True))
     )
@@ -706,7 +904,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     logger.info(
-        "DiffGNNOrder training: sampler=%s epochs=%d lr=%.2e tau=%.2f->%.2f order_tau=%.2f->%.2f sinkhorn=%d gumbel=%s alpha=%.2f use_hw_ordering=%s pairwise_mode=%s pairwise_temp=%.2f post_mode=%s post_during_train=%s feature_profile=%s edge_weight_mode=%s paper_sigma_enabled=%s paper_sigma=%.2f",
+        "DiffGNNOrder training: sampler=%s epochs=%d lr=%.2e tau=%.2f->%.2f order_tau=%.2f->%.2f sinkhorn=%d gumbel=%s alpha=%.2f use_hw_ordering=%s pairwise_mode=%s pairwise_temp=%.2f soft_mode=%s jacobi_iters=%d exact_mode=%s exact_every=%d exact_first=%s resource_topk=%d resource_min_prob=%.2e post_mode=%s post_during_train=%s feature_profile=%s edge_weight_mode=%s paper_sigma_enabled=%s paper_sigma=%.2f",
         sampler,
         epochs,
         lr,
@@ -720,6 +918,13 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         str(use_hw_ordering),
         pairwise_mode,
         pairwise_temp,
+        soft_makespan_mode,
+        jacobi_iters,
+        soft_makespan_exact_mode,
+        soft_makespan_exact_every,
+        str(soft_makespan_exact_first_epoch),
+        resource_candidate_topk,
+        resource_candidate_min_prob,
         post_mode,
         str(post_during_train),
         str(config.get("feature_profile", "default")),
@@ -777,7 +982,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         )
     if use_lssp_final:
         logger.info(
-            "DiffGNNOrder final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s search=%s top_k=%d slack_frac=%.3f dual_lssp_compare=%s (legacy use_sw_priority=%s)",
+            "DiffGNNOrder final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s search=%s top_k=%d slack_frac=%.3f all_decode_candidates=%s dual_lssp_compare=%s (legacy use_sw_priority=%s)",
             post_eval_mode,
             str(post_during_train),
             str(post_during_eval),
@@ -788,6 +993,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             post_search_strategy,
             post_candidate_top_k,
             post_critical_slack_frac,
+            str(post_final_all_decode_candidates),
             str(True),
             str(post_use_sw_priority),
         )
@@ -806,11 +1012,26 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     edge_weight = getattr(data, "edge_weight", None)
     edge_attr = getattr(data, "edge_attr", None)
     paper_hgp = getattr(data, "paper_hgp", None)
+    loss_cache = _build_order_loss_cache(TG, node_list, device=device, dtype=data.x.dtype)
+    train_t0 = time.perf_counter()
 
     for ep in range(1, epochs + 1):
         completed_epochs = ep
         model.train()
         optimizer.zero_grad()
+
+        is_progress_epoch = (ep == 1 or ep % progress_log_every == 0 or ep == epochs)
+        run_exact_soft_makespan = (
+            (soft_makespan_exact_first_epoch and ep == 1)
+            or (soft_makespan_exact_every > 0 and ep % soft_makespan_exact_every == 0)
+        )
+        epoch_soft_makespan_mode = (
+            soft_makespan_exact_mode if run_exact_soft_makespan else soft_makespan_mode
+        )
+        epoch_jacobi_iters = jacobi_iters if epoch_soft_makespan_mode == "jacobi" else 1
+        should_print_epoch = is_progress_epoch or run_exact_soft_makespan or (
+            epoch_soft_makespan_mode == soft_makespan_mode
+        )
 
         logits2, prio_hw, prio_sw = model(
             data.x,
@@ -870,7 +1091,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             perm_entropy_coeff=perm_entropy_coeff,
             pairwise_mode=pairwise_mode,
             pairwise_temp=pairwise_temp,
+            soft_makespan_mode=epoch_soft_makespan_mode,
+            jacobi_iters=epoch_jacobi_iters,
             use_hw_ordering=use_hw_ordering,
+            resource_candidate_topk=resource_candidate_topk,
+            resource_candidate_min_prob=resource_candidate_min_prob,
+            loss_cache=loss_cache,
         )
 
         loss.backward()
@@ -988,11 +1214,15 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     best_probs = np.asarray(decoded_probs, dtype=float).copy()
                     best_sw_priority_scores = sw_priority_scores_eval
 
-        if ep % max(1, epochs // 10) == 0 or ep <= 5:
+        if should_print_epoch:
+            elapsed_sec = time.perf_counter() - train_t0
+            avg_epoch_sec = elapsed_sec / max(1, ep)
+            eta_sec = avg_epoch_sec * max(0, epochs - ep)
             logger.info(
-                "Epoch %d/%d loss=%.6f surrogate=%.6f area_frac=%.4f area_pen=%.3f perm_reg=%.4f perm_H=%.4f sched_best=%.6f",
+                "Epoch %d/%d mode=%s loss=%.6f soft_makespan=%.6f area_frac=%.4f area_pen=%.3f perm_reg=%.4f perm_H=%.4f sched_best=%.6f elapsed=%.2fs avg_epoch=%.3fs eta=%.2fs",
                 ep,
                 epochs,
+                epoch_soft_makespan_mode,
                 info["loss"],
                 info["makespan_surrogate"],
                 info["area_frac"],
@@ -1000,6 +1230,21 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 info["perm_reg"],
                 info["perm_entropy"],
                 best_sched_cost,
+                elapsed_sec,
+                avg_epoch_sec,
+                eta_sec,
+            )
+            print(
+                "[diff_gnn_order] "
+                f"epoch={ep}/{epochs} "
+                f"mode={epoch_soft_makespan_mode} "
+                f"loss={info['loss']:.6f} "
+                f"soft_makespan={info['makespan_surrogate']:.6f} "
+                f"best_sched={best_sched_cost:.6f} "
+                f"elapsed={elapsed_sec:.2f}s "
+                f"avg_epoch={avg_epoch_sec:.3f}s "
+                f"eta={eta_sec:.2f}s",
+                flush=True,
             )
 
         if early_stop_enabled and ep >= early_stop_min_epochs and stagnant_epochs >= early_stop_patience:
@@ -1087,63 +1332,100 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         if use_lssp_final:
             post_t0 = time.perf_counter()
             logger.info(
-                "DiffGNNOrder final postprocess started: mode=%s eval_mode=%s max_iters=%d swap=%s",
+                "DiffGNNOrder final postprocess started: mode=%s eval_mode=%s max_iters=%d swap=%s all_candidates=%s",
                 post_mode,
                 post_eval_mode,
                 post_max_iters,
                 str(post_enable_swap),
+                str(post_final_all_decode_candidates),
             )
-            post_choice_mode, final_solution, post_info, post_candidates = _dual_lssp_postprocess(
-                TG,
-                final_solution,
-                max_iters=post_max_iters,
-                eval_mode=post_eval_mode,
-                enable_area_fill=post_enable_area_fill,
-                fill_allow_worsen=post_fill_allow_worsen,
-                enable_swap=post_enable_swap,
-                search_strategy=post_search_strategy,
-                candidate_top_k=post_candidate_top_k,
-                critical_slack_frac=post_critical_slack_frac,
-                candidate_include_neighbors=post_candidate_include_neighbors,
-                candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
-                sw_priority_scores=final_sw_priority_scores,
-            )
-            static_cost = float("nan")
-            swprio_cost = float("nan")
-            for mode_name, _, info in post_candidates:
-                if mode_name == "static":
-                    static_cost = float(info.get("cost", float("nan")))
-                elif mode_name == "sw_priority":
-                    swprio_cost = float(info.get("cost", float("nan")))
-            logger.info(
-                "DiffGNNOrder final postprocess: mode=%s static_cost=%.3f swprio_cost=%.3f improved=%s cost=%.3f hw_area=%.3f/%.3f (%s) elapsed=%.3fs eval_calls=%d stage1_iters=%d stage2_iters=%d avg_eval=%.3fms avg_iter=%.3fms search=%s avg_pool=%.1f avg_selected=%.1f",
-                post_choice_mode,
-                static_cost,
-                swprio_cost,
-                str(post_info["improved"]),
-                post_info["cost"],
-                post_info["hw_area"],
-                post_info["budget"],
-                post_info["eval_mode"],
-                float(post_info.get("elapsed_sec", 0.0)),
-                int(post_info.get("eval_calls", 0)),
-                int(post_info.get("stage1_iters", 0)),
-                int(post_info.get("stage2_iters", 0)),
-                float(post_info.get("avg_eval_ms", 0.0)),
-                float(post_info.get("avg_iter_ms", 0.0)),
-                str(post_info.get("search_strategy", post_search_strategy)),
-                float(post_info.get("avg_candidate_pool", 0.0)),
-                float(post_info.get("avg_selected_candidates", 0.0)),
-            )
+            post_seed_candidates = final_decode_candidates
+            if not post_final_all_decode_candidates:
+                post_seed_candidates = [
+                    (
+                        final_choice_label,
+                        final_solution,
+                        np.asarray(final_probs_repaired, dtype=float).copy(),
+                    )
+                ]
+
+            selected_post_label = final_choice_label
+            selected_post_mode = "decode"
+            selected_post_info = None
+            selected_post_static_cost = float("nan")
+            selected_post_swprio_cost = float("nan")
+
+            for cand_label, cand_solution, _ in post_seed_candidates:
+                post_choice_mode, candidate_solution, post_info, post_candidates = _dual_lssp_postprocess(
+                    TG,
+                    cand_solution,
+                    max_iters=post_max_iters,
+                    eval_mode=post_eval_mode,
+                    enable_area_fill=post_enable_area_fill,
+                    fill_allow_worsen=post_fill_allow_worsen,
+                    enable_swap=post_enable_swap,
+                    search_strategy=post_search_strategy,
+                    candidate_top_k=post_candidate_top_k,
+                    critical_slack_frac=post_critical_slack_frac,
+                    candidate_include_neighbors=post_candidate_include_neighbors,
+                    candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
+                    sw_priority_scores=final_sw_priority_scores,
+                )
+                static_cost = float("nan")
+                swprio_cost = float("nan")
+                for mode_name, _, info in post_candidates:
+                    if mode_name == "static":
+                        static_cost = float(info.get("cost", float("nan")))
+                    elif mode_name == "sw_priority":
+                        swprio_cost = float(info.get("cost", float("nan")))
+                post_cost = _evaluate_discrete_solution(
+                    TG,
+                    candidate_solution,
+                    metric=selection_metric_train,
+                )
+                if post_cost <= final_sched_cost_train:
+                    final_choice_label = cand_label
+                    final_solution = candidate_solution
+                    final_sched_cost_train = post_cost
+                    final_probs_repaired = _solution_to_array(candidate_solution, node_list)
+                    selected_post_label = cand_label
+                    selected_post_mode = post_choice_mode
+                    selected_post_info = post_info
+                    selected_post_static_cost = static_cost
+                    selected_post_swprio_cost = swprio_cost
+
+            if selected_post_info is not None:
+                logger.info(
+                    "DiffGNNOrder final postprocess: decode_candidate=%s mode=%s tried=%d static_cost=%.3f swprio_cost=%.3f improved=%s cost=%.3f hw_area=%.3f/%.3f (%s) elapsed=%.3fs eval_calls=%d stage1_iters=%d stage2_iters=%d avg_eval=%.3fms avg_iter=%.3fms search=%s avg_pool=%.1f avg_selected=%.1f",
+                    selected_post_label,
+                    selected_post_mode,
+                    len(post_seed_candidates),
+                    selected_post_static_cost,
+                    selected_post_swprio_cost,
+                    str(selected_post_info["improved"]),
+                    selected_post_info["cost"],
+                    selected_post_info["hw_area"],
+                    selected_post_info["budget"],
+                    selected_post_info["eval_mode"],
+                    float(selected_post_info.get("elapsed_sec", 0.0)),
+                    int(selected_post_info.get("eval_calls", 0)),
+                    int(selected_post_info.get("stage1_iters", 0)),
+                    int(selected_post_info.get("stage2_iters", 0)),
+                    float(selected_post_info.get("avg_eval_ms", 0.0)),
+                    float(selected_post_info.get("avg_iter_ms", 0.0)),
+                    str(selected_post_info.get("search_strategy", post_search_strategy)),
+                    float(selected_post_info.get("avg_candidate_pool", 0.0)),
+                    float(selected_post_info.get("avg_selected_candidates", 0.0)),
+                )
+            else:
+                logger.info(
+                    "DiffGNNOrder final postprocess: no candidate improved over decode baseline (candidate=%s tried=%d metric=%s cost=%.6f)",
+                    final_choice_label,
+                    len(post_seed_candidates),
+                    selection_metric_train,
+                    final_sched_cost_train,
+                )
             logger.info("DiffGNNOrder final postprocess elapsed: %.3fs", time.perf_counter() - post_t0)
-            post_cost = _evaluate_discrete_solution(
-                TG,
-                final_solution,
-                metric=selection_metric_train,
-            )
-            if post_cost <= final_sched_cost_train:
-                final_sched_cost_train = post_cost
-                final_probs_repaired = _solution_to_array(final_solution, node_list)
 
     if best_assign is None or final_sched_cost_train < best_sched_cost:
         best_assign = final_solution
@@ -1175,6 +1457,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         best_sched_cost,
         selection_metric_final,
         best_final_cost,
+    )
+    print(
+        "[diff_gnn_order] "
+        f"final_train_metric={selection_metric_train} "
+        f"best_train_makespan={best_sched_cost:.6f} "
+        f"final_metric={selection_metric_final} "
+        f"final_makespan={best_final_cost:.6f}",
+        flush=True,
     )
     return {
         "best_assign": best_assign,
@@ -1261,10 +1551,9 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
         logger.error(msg)
         raise ValueError(msg)
 
+    # diff_gnn_order should use its own explicit YAML block when present;
+    # otherwise it falls back to the runtime Python defaults below.
     diff_cfg = dict(config.get("diffgnn_order", {}))
-    if not diff_cfg:
-        # Fallback to diffgnn block for convenience.
-        diff_cfg = dict(config.get("diffgnn", {}))
 
     for key, value in _MKSPAN_DIFFGNN_ORDER_DEFAULTS.items():
         diff_cfg.setdefault(key, value)
@@ -1299,8 +1588,8 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
     # Speed patch defaults for ordering path (applies even when fast_mode is
     # explicitly disabled, unless the user already overrides each knob).
     if bool(diff_cfg.get("speed_patch", True)):
-        diff_cfg.setdefault("sinkhorn_iters", 12)
-        diff_cfg.setdefault("order_refine_steps", 2)
+        diff_cfg.setdefault("sinkhorn_iters", 4)
+        diff_cfg.setdefault("order_refine_steps", 4)
         diff_cfg.setdefault("gumbel_noise", False)
         diff_cfg.setdefault("gumbel_scale", 0.0)
 
@@ -1334,15 +1623,46 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
     # Ordering defaults
     diff_cfg.setdefault("order_tau_start", 1.0)
     diff_cfg.setdefault("order_tau_final", 0.2)
-    diff_cfg.setdefault("sinkhorn_iters", 12)
+    diff_cfg["sinkhorn_iters"] = int(
+        os.getenv("HWSW_DIFFGNN_ORDER_SINKHORN_ITERS", str(diff_cfg.get("sinkhorn_iters", 4)))
+    )
     diff_cfg.setdefault("gumbel_noise", False)
     diff_cfg.setdefault("gumbel_scale", 0.0)
     diff_cfg.setdefault("resource_logit_alpha", 2.0)
-    diff_cfg.setdefault("order_refine_steps", 2)
+    diff_cfg.setdefault("order_refine_steps", 4)
     diff_cfg.setdefault("perm_reg_coeff", 0.0)
     diff_cfg.setdefault("perm_entropy_coeff", 0.0)
     diff_cfg.setdefault("pairwise_mode", "rank_sigmoid")
-    diff_cfg.setdefault("pairwise_temp", 0.35)
+    diff_cfg.setdefault("pairwise_temp", 0.30)
+    diff_cfg.setdefault("soft_makespan_mode", "jacobi")
+    diff_cfg.setdefault("jacobi_iters", 10)
+    diff_cfg.setdefault("soft_makespan_exact_mode", "sequential")
+    diff_cfg.setdefault("soft_makespan_exact_every", 10)
+    diff_cfg.setdefault("soft_makespan_exact_first_epoch", False)
+    diff_cfg["soft_makespan_mode"] = str(
+        os.getenv("HWSW_DIFFGNN_ORDER_SOFT_MAKESPAN_MODE", diff_cfg.get("soft_makespan_mode", "jacobi"))
+    ).lower()
+    diff_cfg["jacobi_iters"] = int(
+        os.getenv("HWSW_DIFFGNN_ORDER_JACOBI_ITERS", str(diff_cfg.get("jacobi_iters", 10)))
+    )
+    diff_cfg["soft_makespan_exact_mode"] = str(
+        os.getenv(
+            "HWSW_DIFFGNN_ORDER_SOFT_MAKESPAN_EXACT_MODE",
+            diff_cfg.get("soft_makespan_exact_mode", "sequential"),
+        )
+    ).lower()
+    diff_cfg["soft_makespan_exact_every"] = int(
+        os.getenv(
+            "HWSW_DIFFGNN_ORDER_SOFT_MAKESPAN_EXACT_EVERY",
+            str(diff_cfg.get("soft_makespan_exact_every", 10)),
+        )
+    )
+    diff_cfg["soft_makespan_exact_first_epoch"] = str(
+        os.getenv(
+            "HWSW_DIFFGNN_ORDER_SOFT_MAKESPAN_EXACT_FIRST_EPOCH",
+            str(diff_cfg.get("soft_makespan_exact_first_epoch", False)),
+        )
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
     if "seed" not in diff_cfg and "seed" in config:
         diff_cfg["seed"] = config.get("seed")
@@ -1354,7 +1674,7 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
 
     device = get_device(config)
     logger.info("Using device: %s", device)
-    print(f"[diff_gnn_order] device={device}")
+    print(f"[diff_gnn_order] device={device}", flush=True)
 
     result = optimize_diff_gnn_order(TG, config=diff_cfg, device=device)
     best_assign = result.get("best_assign", {})
@@ -1409,6 +1729,14 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
         result.get("best_train_cost", float("nan")),
         selection_metric,
         result.get("selection_metric_train", "unknown"),
+    )
+    print(
+        "[diff_gnn_order] "
+        f"eval_cost={eval_cost:.6f} "
+        f"lssp_cost={lssp_cost:.6f} "
+        f"lssp_swprio_cost={lssp_swprio_cost:.6f} "
+        f"best_cost={best_cost:.6f}",
+        flush=True,
     )
     simulate_diff_GNN_order.last_run_meta = {
         "eval_cost": float(eval_cost),

@@ -135,62 +135,6 @@ diffgnn:
   edge_weight_min_scale: 0.5
   edge_weight_max_scale: 1.5
   decode_speedup_weight: 0.45
-diffgnn_order:
-  iter: 3
-  verbose: 1000
-  device: cpu
-  hidden_dim: 32
-  num_layers: 3
-  dropout: 0.2
-  model: default
-  speed_patch: true
-  hard_eval_every: 3
-  hard_eval_only_final: true
-  checkpoint_eval_when_final_only: true
-  fast_mode: true
-  use_hw_ordering: false
-  selection_metric: queue
-  selection_metric_train: queue
-  selection_metric_final: queue
-  final_legacy_lp_if_mip: true
-  feature_profile: default_plus_paper
-  edge_weight_mode: paper2_cosine
-  edge_weight_learner: mlp
-  sinkhorn_iters: 8
-  order_refine_steps: 2
-  gumbel_noise: false
-  gumbel_scale: 0.0
-  pairwise_mode: rank_sigmoid
-  pairwise_temp: 0.35
-  order_decode_weight: 0.45
-  entropy_coeff: 0.0
-  usage_balance_coeff: 0.0
-  partition_cost_coeff: 0.0833333333
-  perm_reg_coeff: 0.0
-  perm_entropy_coeff: 0.0
-  postprocess:
-    mode: hybrid
-    during_train: false
-    eval_mode: lssp
-    max_iters: 8
-    adaptive_max_iters: false
-    adaptive_large_n: 128
-    adaptive_large_cap: 10
-    enable_area_fill: true
-    fill_allow_worsen: 0.0
-    enable_swap: true
-    dls_steps: 2
-    dls_flip_eta: 0.35
-    dls_swap_eta: 0.18
-    dls_score_temp: 0.7
-    dls_comm_coeff: 0.02
-    dls_area_proj_iters: 4
-    dls_area_proj_strength: 6.0
-    dls_fill_decode: true
-  reuse_trained_final_cost: true
-  edge_mlp_hidden_dim: 16
-  edge_weight_min_scale: 0.5
-  edge_weight_max_scale: 1.5
 gcon:
   iter: 500
   verbose: 500

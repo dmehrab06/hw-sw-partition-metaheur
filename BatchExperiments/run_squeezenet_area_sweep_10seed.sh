@@ -124,14 +124,6 @@ if [[ "$RUN_MIP" == "1" ]]; then
   "$ROOT/run_all_mip_configs.sh"
 fi
 
-"$PYTHON" "$ROOT/tools/plot_batch_method_bars.py" \
-  --manifest "$OUTDIR/${RESULT_TAG}_selected_manifest.csv" \
-  --gnn-csv "$GNN_CSV" \
-  --mip-csv "$MIP_CSV" \
-  --output-dir "$OUTDIR" \
-  --mode area_sweep \
-  --methods "${METHODS[@]}" \
-  --areas "${AREAS[@]}" \
-  --tag "$RESULT_TAG"
-
 echo "Finished SqueezeNet area sweep batch. Outputs are in $OUTDIR"
+echo "Run plotting separately with:"
+echo "  $ROOT/BatchExperiments/plot_squeezenet_area_sweep_10seed.sh"

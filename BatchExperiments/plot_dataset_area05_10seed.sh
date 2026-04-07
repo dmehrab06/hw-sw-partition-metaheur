@@ -47,11 +47,17 @@ DATASETS=(
   "visual_wake_words_tosa"
 )
 
+# Keep plotting aligned with run_dataset_area05_10seed.sh's canonical 10-seed batch.
+SEEDS=(42 43 44 45 46 47 48 49 50 51)
+
 if [[ -n "${METHODS_OVERRIDE:-}" ]]; then
   read -r -a METHODS <<<"$METHODS_OVERRIDE"
 fi
 if [[ -n "${DATASETS_OVERRIDE:-}" ]]; then
   read -r -a DATASETS <<<"$DATASETS_OVERRIDE"
+fi
+if [[ -n "${SEEDS_OVERRIDE:-}" ]]; then
+  read -r -a SEEDS <<<"$SEEDS_OVERRIDE"
 fi
 
 RESULT_TAG="dataset_area05_10seed"
@@ -76,18 +82,26 @@ if [[ ${#DATASET_MANIFESTS[@]} -eq 0 ]]; then
   exit 1
 fi
 
-"$PYTHON" - <<'PY' "$AGGREGATE_MANIFEST" "${DATASET_MANIFESTS[@]}"
+"$PYTHON" - <<'PY' "$AGGREGATE_MANIFEST" "${#SEEDS[@]}" "${SEEDS[@]}" "${DATASET_MANIFESTS[@]}"
 from pathlib import Path
 import sys
 import pandas as pd
 
 out_path = Path(sys.argv[1])
+num_seeds = int(sys.argv[2])
+seed_values = {int(value) for value in sys.argv[3:3 + num_seeds]}
+manifest_args = sys.argv[3 + num_seeds:]
 parts = []
-for manifest_path in sys.argv[2:]:
+for manifest_path in manifest_args:
     path = Path(manifest_path)
     if not path.exists():
         continue
     frame = pd.read_csv(path)
+    if frame.empty:
+        continue
+    if "seed" in frame:
+        frame["seed"] = frame["seed"].astype(int)
+        frame = frame[frame["seed"].isin(seed_values)]
     if frame.empty:
         continue
     parts.append(frame)
@@ -109,18 +123,26 @@ for dataset in "${DATASETS[@]}"; do
     continue
   fi
 
-  "$PYTHON" - <<'PY' "$DATASET_MANIFEST" "${DATASET_MANIFEST_CANDIDATES[@]}"
+  "$PYTHON" - <<'PY' "$DATASET_MANIFEST" "${#SEEDS[@]}" "${SEEDS[@]}" "${DATASET_MANIFEST_CANDIDATES[@]}"
 from pathlib import Path
 import sys
 import pandas as pd
 
 out_path = Path(sys.argv[1])
+num_seeds = int(sys.argv[2])
+seed_values = {int(value) for value in sys.argv[3:3 + num_seeds]}
+manifest_args = sys.argv[3 + num_seeds:]
 frames = []
-for manifest_path in sys.argv[2:]:
+for manifest_path in manifest_args:
     path = Path(manifest_path)
     if not path.exists():
         continue
     frame = pd.read_csv(path)
+    if frame.empty:
+        continue
+    if "seed" in frame:
+        frame["seed"] = frame["seed"].astype(int)
+        frame = frame[frame["seed"].isin(seed_values)]
     if frame.empty:
         continue
     frames.append(frame)

@@ -44,7 +44,7 @@ DATASETS=(
   "paper_fig3_11node"
   # "mobile_net_tosa"
   # "rez_net_tosa"
-  # "squeeze_net_tosa"
+  "squeeze_net_tosa"
   # "anomaly_detection_tosa"
   # "image_classification_tosa"
   # "keyword_spotting_tosa"

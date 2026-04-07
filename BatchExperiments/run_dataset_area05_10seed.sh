@@ -23,37 +23,37 @@ ALL_METHODS_ORDER=(
 
 # Comment out any method you do not want to run.
 METHODS=(
-  # "mip"
+  "mip"
   # "diff_gnn_order"
-  "gl25"
+  # "gl25"
   # "gcps"
-  "esa"
-  "pso"
-  "dbpso"
-  "clpso"
-  "ccpso"
-  "shade"
-  "jade"
-  "random"
-  "greedy"
+  # "esa"
+  # "pso"
+  # "dbpso"
+  # "clpso"
+  # "ccpso"
+  # "shade"
+  # "jade"
+  # "random"
+  # "greedy"
 )
 
 # Default 8-dataset batch: 7 real SODA graphs + 1 paper sanity-check graph.
 # Comment out any dataset you do not want to include.
 DATASETS=(
-  "paper_fig3_11node"
-  # "mobile_net_tosa"
-  # "rez_net_tosa"
-  # "squeeze_net_tosa"
-  # "anomaly_detection_tosa"
-  # "image_classification_tosa"
-  # "keyword_spotting_tosa"
-  # "visual_wake_words_tosa"
+  # "paper_fig3_11node"
+  "mobile_net_tosa"
+  "rez_net_tosa"
+  "squeeze_net_tosa"
+  "anomaly_detection_tosa"
+  "image_classification_tosa"
+  "keyword_spotting_tosa"
+  "visual_wake_words_tosa"
 )
 
 # Edit this array to control the number of seeds.
-SEEDS=(42 43 44 45 46 47 48 49 50 51)
-# SEEDS=(42)
+# SEEDS=(42 43 44 45 46 47 48 49 50 51)
+SEEDS=(47 48 49 50 51)
 
 if [[ -n "${METHODS_OVERRIDE:-}" ]]; then
   read -r -a METHODS <<<"$METHODS_OVERRIDE"

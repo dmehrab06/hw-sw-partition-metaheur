@@ -57,40 +57,6 @@ diffgnn:
     dls_area_proj_iters: 4
     dls_area_proj_strength: 6.0
     dls_fill_decode: true
-diffgnn_order:
-  iter: 400
-  verbose: 400
-  device: cpu
-  hidden_dim: 64
-  num_layers: 3
-  dropout: 0.2
-  model: default
-  speed_patch: true
-  hard_eval_every: 80
-  fast_mode: true
-  sinkhorn_iters: 8
-  order_refine_steps: 1
-  gumbel_noise: false
-  gumbel_scale: 0.0
-  feature_profile: paper
-  edge_weight_mode: paper_cosine
-  paper_sigma: 0.2
-  postprocess:
-    mode: hybrid
-    during_train: true
-    eval_mode: taskgraph
-    max_iters: 16
-    enable_area_fill: true
-    fill_allow_worsen: 0.0
-    enable_swap: false
-    dls_steps: 2
-    dls_flip_eta: 0.35
-    dls_swap_eta: 0.18
-    dls_score_temp: 0.7
-    dls_comm_coeff: 0.02
-    dls_area_proj_iters: 4
-    dls_area_proj_strength: 6.0
-    dls_fill_decode: true
 gl25:
   iter: 2000
   n_pop: 500

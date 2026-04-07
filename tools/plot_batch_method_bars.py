@@ -159,6 +159,18 @@ def _safe_bool(value, default: bool) -> bool:
     return bool(value)
 
 
+def _attach_result_metadata(frame: pd.DataFrame, source_path: Path, source_index: int) -> pd.DataFrame:
+    out = frame.copy()
+    if "SimTime" in out:
+        out["_result_timestamp"] = pd.to_datetime(out["SimTime"], errors="coerce")
+    else:
+        out["_result_timestamp"] = pd.NaT
+    out["_source_mtime_ns"] = source_path.stat().st_mtime_ns if source_path.exists() else -1
+    out["_source_index"] = source_index
+    out["_row_index"] = np.arange(len(out), dtype=int)
+    return out
+
+
 def _key_tuple(frame: pd.DataFrame) -> list[tuple]:
     return list(
         zip(
@@ -243,16 +255,30 @@ def _extract_validity_metadata(row: pd.Series, method: str) -> dict[str, object]
     }
 
 
+def _keep_latest_per_config(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+
+    sort_cols = ["_result_timestamp", "_source_mtime_ns", "_source_index", "_row_index"]
+    deduped = (
+        frame.sort_values(sort_cols, kind="mergesort", na_position="first")
+        .drop_duplicates(subset=["key", "method"], keep="last")
+        .copy()
+    )
+    return deduped.drop(columns=sort_cols, errors="ignore")
+
+
 def _load_gnn_results(paths: Path | list[Path] | None, methods: list[str]) -> pd.DataFrame:
     rows: list[dict] = []
     dag_candidates = [f"{method}_dag_makespan" for method in methods if method != "mip"]
 
-    for path in _as_path_list(paths):
+    for source_index, path in enumerate(_as_path_list(paths)):
         if not path.exists():
             continue
         frame = pd.read_csv(path)
         if frame.empty:
             continue
+        frame = _attach_result_metadata(frame, path, source_index)
 
         frame["graph_name"] = frame["GraphName"].map(lambda value: Path(str(value)).stem)
         frame["seed"] = frame["Seed"].astype(int)
@@ -280,6 +306,10 @@ def _load_gnn_results(paths: Path | list[Path] | None, methods: list[str]) -> pd
                         "method": method,
                         "reported_makespan": float(report),
                         "dag_makespan": dag,
+                        "_result_timestamp": row["_result_timestamp"],
+                        "_source_mtime_ns": row["_source_mtime_ns"],
+                        "_source_index": row["_source_index"],
+                        "_row_index": row["_row_index"],
                         **_extract_validity_metadata(row, method),
                     }
                 )
@@ -288,17 +318,18 @@ def _load_gnn_results(paths: Path | list[Path] | None, methods: list[str]) -> pd
     if out.empty:
         return out
     out["key"] = _key_tuple(out)
-    return out.drop_duplicates(subset=["key", "method"], keep="last")
+    return _keep_latest_per_config(out)
 
 
 def _load_mip_results(paths: Path | list[Path] | None, dag_lookup: dict[tuple, float | None]) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
-    for path in _as_path_list(paths):
+    for source_index, path in enumerate(_as_path_list(paths)):
         if not path.exists():
             continue
         frame = pd.read_csv(path)
         if frame.empty:
             continue
+        frame = _attach_result_metadata(frame, path, source_index)
         frame["graph_name"] = frame["GraphName"].map(lambda value: Path(str(value)).stem)
         frame["seed"] = frame["Seed"].astype(int)
         frame["area_constraint"] = frame["Area_Percentage"].astype(float)
@@ -317,6 +348,10 @@ def _load_mip_results(paths: Path | list[Path] | None, dag_lookup: dict[tuple, f
                 "comm_scale_factor",
                 "key",
                 "dag_makespan",
+                "_result_timestamp",
+                "_source_mtime_ns",
+                "_source_index",
+                "_row_index",
             ]
         ].copy()
         out["method"] = "mip"
@@ -333,7 +368,7 @@ def _load_mip_results(paths: Path | list[Path] | None, dag_lookup: dict[tuple, f
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)
-    return out.drop_duplicates(subset=["key", "method"], keep="last")
+    return _keep_latest_per_config(out)
 
 
 def _compute_summary(frame: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
@@ -431,10 +466,8 @@ def _draw_method_boxplots(ax, frame: pd.DataFrame, methods: list[str], title: st
             marker="o",
             linewidth=1.4,
             markersize=6,
-            label="Mean",
             zorder=3,
         )
-        ax.legend(loc="upper right", fontsize=GLOBAL_FONT_SIZE)
 
     ax.set_title(title, fontsize=GLOBAL_FONT_SIZE)
     ax.set_xlabel("")
@@ -444,6 +477,16 @@ def _draw_method_boxplots(ax, frame: pd.DataFrame, methods: list[str], title: st
     ax.tick_params(axis="both", labelsize=GLOBAL_FONT_SIZE)
     ax.grid(axis="y", linestyle="--", alpha=0.3)
     ax.set_axisbelow(True)
+    ax.text(
+        0.98,
+        0.02,
+        "Mean = ●",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=GLOBAL_FONT_SIZE,
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 0.2},
+    )
 
 
 def _plot_dataset_grid(frame: pd.DataFrame, methods: list[str], datasets: list[str], output_path: Path) -> None:

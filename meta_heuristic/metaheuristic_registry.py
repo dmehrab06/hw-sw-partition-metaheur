@@ -119,7 +119,13 @@ def _compute_schedule_metrics(
             )["makespan"]
         )
 
-    if lssp_swprio_makespan is None:
+    method_key = str(method_name).lower()
+    if method_key == "diff_gnn_order":
+        if lssp_swprio_makespan is None:
+            best_makespan = float(lssp_makespan)
+        else:
+            best_makespan = float(min(lssp_makespan, lssp_swprio_makespan))
+    elif lssp_swprio_makespan is None:
         best_makespan = float(min(dag_makespan, lssp_makespan))
     else:
         best_makespan = float(min(dag_makespan, lssp_makespan, lssp_swprio_makespan))
@@ -232,11 +238,11 @@ class MethodRegistry:
         partition_cost = task_graph.evaluate_partition_cost(partition)
         reported_opt_cost = float(best_cost)
         if str(name).lower() == "diff_gnn_order":
-            # diff_gnn_order is trained/evaluated with queue-style objective in-model,
-            # but final reporting for this project is LSSP-based. Keep the better of both.
-            reported_opt_cost = float(min(reported_opt_cost, best_makespan))
+            # diff_gnn_order is trained with a surrogate objective, but final reporting
+            # for this project is based only on executable LSSP schedules.
+            reported_opt_cost = float(best_makespan)
             logger.info(
-                "DIFF_GNN_ORDER combined objective: raw_opt_cost=%.6f dag=%.6f lssp=%.6f lssp_swprio=%s best_makespan=%.6f -> reported_opt_cost=%.6f",
+                "DIFF_GNN_ORDER final reporting: raw_opt_cost=%.6f dag=%.6f lssp=%.6f lssp_swprio=%s best_makespan=%.6f -> reported_opt_cost=%.6f",
                 float(best_cost),
                 dag_makespan,
                 makespan,

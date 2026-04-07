@@ -10,8 +10,18 @@ conda activate combopt
 export PYTHONNOUSERSITE=1
 ```
 
-```
-nohup ./BatchExperiments/run_dataset_area05_10seed.sh > ./BatchExperiments/otherss_area05_6_43.log 2>&1 &
+```bash
+nohup ./BatchExperiments/run_dataset_area05_10seed.sh > ./BatchExperiments/mip_area05_11_30.log 2>&1 &
+
+
+METHODS_OVERRIDE='diff_gnn_order' \
+SEEDS_OVERRIDE='42 43 44 45 46 47 48 49 50 51' \
+HWSW_MAX_PARALLEL_CONFIGS=10 \
+nohup ./BatchExperiments/run_dataset_area05_10seed_test.sh \
+> ./BatchExperiments/diff_gnn_parallel__area05_11_15.log 2>&1 &
+
+tail -f ./BatchExperiments/diff_gnn_parallel__area05_11_15.log
+
 ```
 
 

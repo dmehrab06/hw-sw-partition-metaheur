@@ -1,5 +1,5 @@
-graph_name,seed,area_constraint,hw_scale_factor,hw_scale_variance,comm_scale_factor,method,reported_makespan,dag_makespan,key,family,nodes,edges
-squeeze_net_tosa,42,0.1,0.1,0.5,1.0,random,8671.958553309743,8671.958553309743,"('squeeze_net_tosa', 42, 0.1, 0.1, 0.5, 1.0)",pytorch-graphs,179,234
-squeeze_net_tosa,42,0.1,0.1,0.5,1.0,greedy,8671.958553309743,8671.958553309743,"('squeeze_net_tosa', 42, 0.1, 0.1, 0.5, 1.0)",pytorch-graphs,179,234
-squeeze_net_tosa,42,0.5,0.1,0.5,1.0,random,11311.377761304926,7567.509860840453,"('squeeze_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,179,234
-squeeze_net_tosa,42,0.5,0.1,0.5,1.0,greedy,8671.958553309743,7567.509860840453,"('squeeze_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,179,234
+graph_name,seed,area_constraint,hw_scale_factor,hw_scale_variance,comm_scale_factor,method,reported_makespan,dag_makespan,solution_valid,initial_solution_valid,was_repaired,num_repaired_nodes,repair_strategy,area_used,area_budget,validity_note,key,family,nodes,edges
+squeeze_net_tosa,42,0.1,0.1,0.5,1.0,random,8671.958553309743,8671.958553309743,True,True,False,0,,,,Valid solution; no area repair needed.,"('squeeze_net_tosa', 42, 0.1, 0.1, 0.5, 1.0)",pytorch-graphs,179,234
+squeeze_net_tosa,42,0.1,0.1,0.5,1.0,greedy,8671.958553309743,8671.958553309743,True,True,False,0,,,,Valid solution; no area repair needed.,"('squeeze_net_tosa', 42, 0.1, 0.1, 0.5, 1.0)",pytorch-graphs,179,234
+squeeze_net_tosa,42,0.5,0.1,0.5,1.0,random,11311.377761304926,7567.509860840453,True,True,False,0,,,,Valid solution; no area repair needed.,"('squeeze_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,179,234
+squeeze_net_tosa,42,0.5,0.1,0.5,1.0,greedy,8671.958553309743,7567.509860840453,True,True,False,0,,,,Valid solution; no area repair needed.,"('squeeze_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,179,234

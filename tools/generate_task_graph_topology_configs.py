@@ -320,12 +320,13 @@ def _apply_common_overrides(
     order_cfg["gumbel_noise"] = False
     order_cfg["use_hw_ordering"] = False
     order_cfg["dropout"] = 0.5
-    order_cfg.setdefault("num_layers", 3)
+    order_cfg.setdefault("hidden_dim", 64)
+    order_cfg.setdefault("num_layers", 2)
     order_cfg["checkpoint_eval_when_final_only"] = False
     order_cfg["early_stop_enabled"] = True
-    order_cfg["early_stop_min_epochs"] = 250
-    order_cfg["early_stop_patience"] = 5
-    order_cfg["early_stop_min_delta"] = 1.0e-4
+    order_cfg["early_stop_min_epochs"] = 80
+    order_cfg["early_stop_patience"] = 3
+    order_cfg["early_stop_min_delta"] = 1.0e-3
     order_post_cfg = dict(order_cfg.get("postprocess", {}))
     order_post_cfg["max_iters"] = 24
     order_cfg["postprocess"] = order_post_cfg
@@ -491,6 +492,9 @@ def _prepare_config(
         valid_group_sizes = [max(1, min(int(topo_row["nodes"]), 5))]
     ccpso_cfg["group_sizes"] = valid_group_sizes
     cfg["ccpso"] = ccpso_cfg
+    # diff_gnn_order now relies on runtime Python defaults unless a user adds
+    # an explicit block manually to a specific YAML afterwards.
+    cfg.pop("diffgnn_order", None)
     return cfg
 
 

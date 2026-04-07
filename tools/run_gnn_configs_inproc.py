@@ -10,6 +10,30 @@ from pathlib import Path
 from omegaconf import OmegaConf
 
 
+class _Tee:
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for stream in self._streams:
+            try:
+                if getattr(stream, "closed", False):
+                    continue
+                stream.write(data)
+            except Exception:
+                continue
+        return len(data)
+
+    def flush(self):
+        for stream in self._streams:
+            try:
+                if getattr(stream, "closed", False):
+                    continue
+                stream.flush()
+            except Exception:
+                continue
+
+
 def _resolve_output_csv(config_path: str, root: Path) -> Path:
     cfg = OmegaConf.load(config_path)
     out_dir = os.getenv("HWSW_CSV_DIR") or cfg.get("output-dir", "outputs")
@@ -65,6 +89,7 @@ def main() -> int:
     result_prefix_env = os.getenv("HWSW_RESULT_PREFIX") or os.getenv("RESULT_PREFIX") or ""
     csv_dir_env = os.getenv("HWSW_CSV_DIR") or os.getenv("CSV_DIR") or ""
     run_tag_env = os.getenv("HWSW_RUN_TAG") or os.getenv("RUN_TAG") or ""
+    live_log = str(os.getenv("HWSW_LIVE_LOG", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
     if methods_env:
         print(f"Running gnn_main.py on {len(args.configs)} configs (selected methods={methods_env})")
@@ -98,7 +123,9 @@ def main() -> int:
         with open(log_file, "w", encoding="utf-8") as handle:
             try:
                 sys.argv = ["gnn_main.py", "-c", str(config_path)]
-                with redirect_stdout(handle), redirect_stderr(handle):
+                out_stream = _Tee(handle, sys.__stdout__) if live_log else handle
+                err_stream = _Tee(handle, sys.__stderr__) if live_log else handle
+                with redirect_stdout(out_stream), redirect_stderr(err_stream):
                     gnn_main.main()
             except SystemExit as exc:
                 code = exc.code if isinstance(exc.code, int) else 1
