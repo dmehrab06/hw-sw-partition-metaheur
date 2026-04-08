@@ -6,6 +6,7 @@ import random
 import sys
 import time
 from collections.abc import Mapping
+from pathlib import Path
 
 import networkx as nx
 import numpy as np
@@ -63,8 +64,8 @@ if __name__ == "__main__":
 logger = LogManager.get_logger(__name__)
 
 _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
-    "iter": 500,
-    "verbose": 500,
+    "iter": 1000,
+    "verbose": 1000,
     "device": "gpu",
     "hidden_dim": 256, #256,
     "num_layers": 3, #3,
@@ -91,7 +92,7 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "soft_makespan_mode": "jacobi",
     "jacobi_iters": 10,
     "soft_makespan_exact_mode": "sequential",
-    "soft_makespan_exact_every": 5,
+    "soft_makespan_exact_every": 2, #5 okay for mobile
     "soft_makespan_exact_first_epoch": False,
     "resource_candidate_topk": 128,
     "resource_candidate_min_prob": 1e-5,
@@ -106,7 +107,7 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "selection_metric_final": "queue",
     "final_legacy_lp_if_mip": True,
     "early_stop_enabled": True,
-    "early_stop_min_epochs": 500,
+    "early_stop_min_epochs": 750,
     "early_stop_patience": 10,
     "early_stop_min_delta": 1e-4,
     "progress_log_every": 50,
@@ -125,7 +126,7 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     "fill_allow_worsen": 0.0,
     "enable_swap": True,
     "search_strategy": "critical",
-    "candidate_top_k": 64, #256,
+    "candidate_top_k": 128, #256,
     "critical_slack_frac": 0.10,
     "candidate_include_neighbors": True,
     "candidate_include_cut_endpoints": True,
@@ -177,6 +178,85 @@ _FAST_MODE_DEFAULTS = {
     "early_stop_min_delta": 5e-4,
     "progress_log_every": 50,
 }
+
+# Dataset-specific DiffGNN ordering defaults. These only fill in keys that are
+# still unset after reading YAML, so per-config values can override them.
+_DIFFGNN_ORDER_DATASET_OVERRIDES = {
+    "paper_fig3_11node": {},
+    "mobile_net_tosa": {
+        "iter": 500,
+        "candidate_top_k": 64,
+    },
+        
+    "rez_net_tosa": {
+        "iter": 500,
+        "candidate_top_k": 64,
+    },
+    "squeeze_net_tosa": {
+
+    },
+    "anomaly_detection_tosa": {},
+    "image_classification_tosa": {},
+    "keyword_spotting_tosa": {},
+    "visual_wake_words_tosa": {},
+    "paper_fig3_11node": {
+        "iter": 100
+    },
+}
+
+
+def _resolve_diffgnn_order_dataset_name(config):
+    if not isinstance(config, Mapping):
+        return None
+
+    graph_file = str(config.get("graph-file", "") or "").strip()
+    if graph_file:
+        return Path(graph_file).stem or None
+
+    taskgraph_pickle = str(config.get("taskgraph-pickle", "") or "").strip()
+    if not taskgraph_pickle:
+        return None
+
+    stem = Path(taskgraph_pickle).stem
+    if stem.startswith("taskgraph-"):
+        stem = stem[len("taskgraph-"):]
+    if "_area-" in stem:
+        stem = stem.split("_area-", 1)[0]
+    return stem or None
+
+
+def _apply_recursive_defaults(target: dict, defaults: Mapping) -> None:
+    for key, value in defaults.items():
+        if isinstance(value, Mapping):
+            current = target.get(key, None)
+            if isinstance(current, Mapping):
+                merged = dict(current)
+                _apply_recursive_defaults(merged, value)
+                target[key] = merged
+            elif key not in target:
+                nested = {}
+                _apply_recursive_defaults(nested, value)
+                target[key] = nested
+            continue
+        target.setdefault(key, value)
+
+
+def _apply_dataset_specific_diffgnn_defaults(diff_cfg: dict, config):
+    dataset_name = _resolve_diffgnn_order_dataset_name(config)
+    if not dataset_name:
+        return None
+
+    overrides = _DIFFGNN_ORDER_DATASET_OVERRIDES.get(dataset_name, None)
+    if not isinstance(overrides, Mapping) or not overrides:
+        return dataset_name
+
+    _apply_recursive_defaults(diff_cfg, overrides)
+    logger.info(
+        "Applied dataset-specific diff_gnn_order defaults for %s: %s",
+        dataset_name,
+        overrides,
+    )
+    return dataset_name
 
 
 def _sample_gumbel_like(x: torch.Tensor) -> torch.Tensor:
@@ -1615,6 +1695,9 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
     # diff_gnn_order should use its own explicit YAML block when present;
     # otherwise it falls back to the runtime Python defaults below.
     diff_cfg = dict(config.get("diffgnn_order", {}))
+    dataset_name = _apply_dataset_specific_diffgnn_defaults(diff_cfg, config)
+    if dataset_name:
+        logger.info("diff_gnn_order dataset context resolved as: %s", dataset_name)
 
     for key, value in _MKSPAN_DIFFGNN_ORDER_DEFAULTS.items():
         diff_cfg.setdefault(key, value)

@@ -42,9 +42,9 @@ METHODS=(
 # Comment out any dataset you do not want to include.
 DATASETS=(
   # "paper_fig3_11node"
-  "mobile_net_tosa"
+  # "mobile_net_tosa"
   # "rez_net_tosa"
-  # "squeeze_net_tosa"
+  "squeeze_net_tosa"
   # "anomaly_detection_tosa"
   # "image_classification_tosa"
   # "keyword_spotting_tosa"
@@ -53,7 +53,7 @@ DATASETS=(
 
 # Edit this array to control the number of seeds.
 # SEEDS=(42 43 44 45 46 47 48 49 50 51)
-SEEDS=(43)
+SEEDS=(42)
 
 if [[ -n "${METHODS_OVERRIDE:-}" ]]; then
   read -r -a METHODS <<<"$METHODS_OVERRIDE"
