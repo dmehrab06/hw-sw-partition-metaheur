@@ -63,6 +63,7 @@ fi
 RESULT_TAG="dataset_area05_10seed"
 OUTDIR="$ROOT/BatchExperiments/dataset_area05"
 AGGREGATE_MANIFEST="$OUTDIR/${RESULT_TAG}_plot_manifest.csv"
+MIP_PLOT_METRIC="${MIP_PLOT_METRIC:-lssp}"
 
 mkdir -p "$OUTDIR"
 rm -f "$AGGREGATE_MANIFEST"
@@ -186,6 +187,7 @@ PY
     --mode datasets \
     --methods "${PLOT_METHODS[@]}" \
     --datasets "$dataset" \
+    --mip-metric "$MIP_PLOT_METRIC" \
     --tag "${RESULT_TAG}_${dataset}"
 done
 
@@ -210,6 +212,7 @@ if [[ ${#ROOT_PLOT_METHODS[@]} -gt 0 ]]; then
     --mode datasets \
     --methods "${ROOT_PLOT_METHODS[@]}" \
     --datasets "${DATASETS[@]}" \
+    --mip-metric "$MIP_PLOT_METRIC" \
     --tag "$RESULT_TAG"
 fi
 

@@ -88,6 +88,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--methods", nargs="+", default=list(DEFAULT_METHOD_ORDER))
     parser.add_argument("--datasets", nargs="*", default=None)
     parser.add_argument("--areas", nargs="*", type=float, default=None)
+    parser.add_argument(
+        "--mip-metric",
+        choices=["lssp", "lp", "model"],
+        default="lssp",
+        help="Which MILP makespan field to plot for method 'mip'.",
+    )
     parser.add_argument("--tag", default="batch")
     return parser.parse_args()
 
@@ -116,6 +122,11 @@ def _discover_result_csvs(search_root: Path | None, methods: list[str]) -> tuple
     mip_paths: list[Path] = []
 
     for csv_path in sorted(search_root.rglob("*result-summary-soda-graphs-config.csv")):
+        lower_name = csv_path.name.lower()
+        # Ignore obvious backup/manual copies that would otherwise pollute plots
+        # with stale rows, e.g. "olddataset_..." or "... copy.csv".
+        if lower_name.startswith("old") or " copy" in lower_name:
+            continue
         matched_method = None
         for parent in csv_path.parents:
             if parent == search_root.parent:
@@ -324,8 +335,17 @@ def _load_gnn_results(paths: Path | list[Path] | None, methods: list[str]) -> pd
     return _keep_latest_per_config(out)
 
 
-def _load_mip_results(paths: Path | list[Path] | None, dag_lookup: dict[tuple, float | None]) -> pd.DataFrame:
+def _load_mip_results(
+    paths: Path | list[Path] | None,
+    dag_lookup: dict[tuple, float | None],
+    mip_metric: str = "lssp",
+) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
+    metric_col = {
+        "lssp": "mip_makespan",
+        "lp": "mip_lp_makespan",
+        "model": "mip_model_makespan",
+    }.get(str(mip_metric).strip().lower(), "mip_makespan")
     for source_index, path in enumerate(_as_path_list(paths)):
         if not path.exists():
             continue
@@ -358,7 +378,7 @@ def _load_mip_results(paths: Path | list[Path] | None, dag_lookup: dict[tuple, f
             ]
         ].copy()
         out["method"] = "mip"
-        out["reported_makespan"] = frame["mip_makespan"].astype(float)
+        out["reported_makespan"] = pd.to_numeric(frame.get(metric_col, np.nan), errors="coerce")
         out["solution_valid"] = frame.get("mip_solution_valid", True).map(lambda value: _safe_bool(value, True)) if "mip_solution_valid" in frame else True
         out["initial_solution_valid"] = frame.get("mip_initial_solution_valid", True).map(lambda value: _safe_bool(value, True)) if "mip_initial_solution_valid" in frame else True
         out["was_repaired"] = frame.get("mip_was_repaired", False).map(lambda value: _safe_bool(value, False)) if "mip_was_repaired" in frame else False
@@ -602,7 +622,7 @@ def main() -> int:
 
     gnn_results = _load_gnn_results(gnn_sources, methods)
     dag_lookup = dict(zip(gnn_results["key"], gnn_results["dag_makespan"])) if not gnn_results.empty else {}
-    mip_results = _load_mip_results(mip_sources, dag_lookup) if "mip" in methods else pd.DataFrame()
+    mip_results = _load_mip_results(mip_sources, dag_lookup, mip_metric=args.mip_metric) if "mip" in methods else pd.DataFrame()
 
     frames = [frame for frame in (gnn_results, mip_results) if not frame.empty]
     if not frames:

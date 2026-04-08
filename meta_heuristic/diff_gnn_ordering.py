@@ -102,10 +102,16 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "partition_cost_coeff": 0.0833333333,
     "perm_reg_coeff": 0.0,
     "perm_entropy_coeff": 0.0,
-    "selection_metric": "queue",
-    "selection_metric_train": "queue",
-    "selection_metric_final": "queue",
-    "final_legacy_lp_if_mip": True,
+    # Candidate-selection metric used by diff_gnn decode / train-time hard eval.
+    # Options:
+    #   "queue"     : fastest; TaskGraph FIFO/event-queue simulator.
+    #   "legacy_lp" : DAG/LP-style evaluator (also accepts "legacy", "lp", "dag_lp", "cvxpy").
+    # Note:
+    #   "lssp" is NOT selected here. Full LSSP is controlled by postprocess["eval_mode"] below.
+    "selection_metric": "queue",        # fallback metric if train/final keys are not set.
+    "selection_metric_train": "queue",  # metric used while training / ranking decode candidates.
+    "selection_metric_final": "queue",  # metric used for final reported selection.
+    "final_legacy_lp_if_mip": True,     # when optimizing against a MIP blackbox, final metric can auto-switch to legacy_lp.
     "early_stop_enabled": True,
     "early_stop_min_epochs": 750,
     "early_stop_patience": 10,
@@ -114,33 +120,47 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
 }
 
 _MKSPAN_POSTPROCESS_DEFAULTS = {
+    # Postprocess mode after decode.
+    # Options:
+    #   "none"   : disable all postprocess.
+    #   "dls"    : differentiable local search only.
+    #   "lssp"   : discrete local search only.
+    #   "hybrid" : run DLS refinement and then LSSP local search.
     "mode": "hybrid",
-    "during_train": False,
+    "during_train": False,  # if True, also run postprocess during train-time hard-eval/checkpoints.
+    # Cost model used inside the discrete LSSP local-search accept/reject loop.
+    # Options:
+    #   "lssp"     : slower, more faithful final scheduler with serialized bus + priorities.
+    #   "taskgraph": faster, older queue-style TaskGraph evaluator.
     "eval_mode": "lssp",
-    "use_dual_lssp_postprocess": False,
-    "max_iters": 120,
-    "adaptive_max_iters": False,
-    "adaptive_large_n": 128,
-    "adaptive_large_cap": 10,
-    "enable_area_fill": True,
-    "fill_allow_worsen": 0.0,
-    "enable_swap": True,
+    "use_dual_lssp_postprocess": False,  # if True, compare static and learned SW-priority LSSP costs and keep the better one.
+    "max_iters": 120,                    # max local-search iterations in the LSSP stage.
+    "adaptive_max_iters": False,         # if True, cap iterations on large graphs.
+    "adaptive_large_n": 128,             # graph-size threshold for adaptive cap.
+    "adaptive_large_cap": 10,            # max_iters cap applied once graph is large.
+    "enable_area_fill": True,            # greedy SW->HW fill step before local search.
+    "fill_allow_worsen": 0.0,            # allow small temporary cost increase during area fill.
+    "enable_swap": True,                 # allow HW<->SW pair swaps in stage 2.
+    # Neighborhood selection:
+    #   "critical" : search near critical/cut nodes only (faster).
+    #   "all"      : scan all nodes (slower, broader).
     "search_strategy": "critical",
-    "candidate_top_k": 128, #256,
-    "critical_slack_frac": 0.10,
-    "candidate_include_neighbors": True,
-    "candidate_include_cut_endpoints": True,
-    "final_all_decode_candidates": True,
-    "print_progress": True,
-    "print_every": 10,
-    "dls_steps": 2, #2,
-    "dls_flip_eta": 0.35,
-    "dls_swap_eta": 0.18,
-    "dls_score_temp": 0.70,
-    "dls_comm_coeff": 0.02,
-    "dls_area_proj_iters": 4,
-    "dls_area_proj_strength": 6.0,
-    "dls_fill_decode": True,
+    "candidate_top_k": 128,              # how many ranked nodes to keep for local-search candidates.
+    "critical_slack_frac": 0.10,         # larger keeps more near-critical nodes.
+    "candidate_include_neighbors": True, # also include graph neighbors of critical nodes.
+    "candidate_include_cut_endpoints": True,  # also include endpoints of active cut/comm edges.
+    "final_all_decode_candidates": True, # if True, postprocess every decode candidate, not just the current best one.
+    "print_progress": True,              # print stage1/stage2 progress logs.
+    "print_every": 10,                   # progress log interval.
+    # DLS-only knobs used when mode is "dls" or "hybrid".
+    "dls_steps": 2,
+    "dls_flip_eta": 0.35,                # soft flip step size.
+    "dls_swap_eta": 0.18,                # soft swap step size.
+    "dls_score_temp": 0.70,              # softmax/sharpen temperature for DLS scoring.
+    "dls_comm_coeff": 0.02,              # communication penalty weight in DLS score.
+    "dls_area_proj_iters": 4,            # soft area projection refinement steps.
+    "dls_area_proj_strength": 6.0,       # strength of the area projection.
+    "dls_fill_decode": True,             # greedily fill unused HW area before postprocess candidate evaluation.
 }
 
 _FAST_MODE_DEFAULTS = {
@@ -185,12 +205,17 @@ _DIFFGNN_ORDER_DATASET_OVERRIDES = {
     "paper_fig3_11node": {},
     "mobile_net_tosa": {
         "iter": 500,
-        "candidate_top_k": 64,
+        "verbose": 500,
+        "early_stop_min_epochs": 500,
+        "soft_makespan_exact_every": 5,
+        "postprocess": {
+            "candidate_top_k": 64,
+        },
     },
         
     "rez_net_tosa": {
-        "iter": 500,
-        "candidate_top_k": 64,
+        # "iter": 750,
+        # "candidate_top_k": 12,
     },
     "squeeze_net_tosa": {
 
