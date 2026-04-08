@@ -176,6 +176,7 @@ def improve_with_lssp_local_search(
     candidate_include_neighbors: bool = True,
     candidate_include_cut_endpoints: bool = True,
     software_priority_scores: Mapping[str, Any] | Sequence[Any] | None = None,
+    eval_both_modes: bool = False,
     progress: bool = False,
     progress_every: int = 10,
     progress_prefix: str = "[lssp_postprocess]",
@@ -213,12 +214,19 @@ def improve_with_lssp_local_search(
     def _cost_count(p: Dict[str, int]) -> float:
         nonlocal eval_calls
         eval_calls += 1
-        return _cost(
-            TG,
-            p,
-            eval_mode,
-            software_priority_scores=software_priority_scores,
-        )
+        if eval_both_modes and isinstance(software_priority_scores, Mapping) and len(software_priority_scores) > 0:
+            # NEW: Evaluate with both static and software priority, return minimum
+            cost_static = _cost(TG, p, eval_mode, software_priority_scores=None)
+            cost_sw = _cost(TG, p, eval_mode, software_priority_scores=software_priority_scores)
+            return min(cost_static, cost_sw)
+        else:
+            # Standard single mode evaluation
+            return _cost(
+                TG,
+                p,
+                eval_mode,
+                software_priority_scores=software_priority_scores,
+            )
 
     cur_cost = _cost_count(part)
     improved = False
@@ -380,6 +388,7 @@ def improve_with_lssp_local_search(
         "critical_slack_frac": float(critical_slack_frac),
         "candidate_builds": int(candidate_builds),
         "software_priority_used": bool(software_priority_scores is not None),
+        "eval_both_modes": bool(eval_both_modes),
         "avg_candidate_pool": float(candidate_pool_total / candidate_builds) if candidate_builds > 0 else 0.0,
         "avg_selected_candidates": float(selected_candidate_total / candidate_builds) if candidate_builds > 0 else 0.0,
         "avg_eval_ms": float((elapsed / eval_calls) * 1000.0) if eval_calls > 0 else 0.0,

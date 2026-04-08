@@ -63,11 +63,11 @@ if __name__ == "__main__":
 logger = LogManager.get_logger(__name__)
 
 _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
-    "iter": 1000,
-    "verbose": 1000,
+    "iter": 500,
+    "verbose": 500,
     "device": "gpu",
-    "hidden_dim": 32, #256,
-    "num_layers": 2, #3,
+    "hidden_dim": 256, #256,
+    "num_layers": 3, #3,
     "dropout": 0.5,
     "model": "default",
     "speed_patch": True,
@@ -81,8 +81,8 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "edge_mlp_hidden_dim": 32,
     "edge_weight_min_scale": 0.5,
     "edge_weight_max_scale": 1.5,
-    "sinkhorn_iters": 5,
-    "order_refine_steps": 5,
+    "sinkhorn_iters": 2,
+    "order_refine_steps": 2,
     "use_hw_ordering": False,
     "gumbel_noise": False,
     "gumbel_scale": 0.0,
@@ -91,7 +91,7 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "soft_makespan_mode": "jacobi",
     "jacobi_iters": 10,
     "soft_makespan_exact_mode": "sequential",
-    "soft_makespan_exact_every": 20,
+    "soft_makespan_exact_every": 5,
     "soft_makespan_exact_first_epoch": False,
     "resource_candidate_topk": 128,
     "resource_candidate_min_prob": 1e-5,
@@ -116,6 +116,7 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     "mode": "hybrid",
     "during_train": False,
     "eval_mode": "lssp",
+    "use_dual_lssp_postprocess": False,
     "max_iters": 120,
     "adaptive_max_iters": False,
     "adaptive_large_n": 128,
@@ -124,14 +125,14 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     "fill_allow_worsen": 0.0,
     "enable_swap": True,
     "search_strategy": "critical",
-    "candidate_top_k": 128, #256,
+    "candidate_top_k": 64, #256,
     "critical_slack_frac": 0.10,
     "candidate_include_neighbors": True,
     "candidate_include_cut_endpoints": True,
     "final_all_decode_candidates": True,
     "print_progress": True,
     "print_every": 10,
-    "dls_steps": 1, #2,
+    "dls_steps": 2, #2,
     "dls_flip_eta": 0.35,
     "dls_swap_eta": 0.18,
     "dls_score_temp": 0.70,
@@ -509,14 +510,17 @@ def _dual_lssp_postprocess(
     candidate_include_neighbors: bool,
     candidate_include_cut_endpoints: bool,
     sw_priority_scores: Mapping | None,
+    use_dual_mode: bool = False,
     print_progress: bool = False,
     print_every: int = 10,
     print_prefix: str = "[diff_gnn_order][postprocess]",
 ):
     """
-    Run LSSP local search in both modes and pick the lower LSSP cost:
-      1) static-priority LSSP
-      2) learned SW-priority LSSP (when scores are available)
+    Run LSSP local search on candidate partition.
+    
+    If use_dual_mode=True and SW scores available, evaluate each move with BOTH modes
+    (static-priority and learned SW-priority) and select based on minimum cost.
+    Otherwise, use only the specified (or static) priority mode.
     """
     common_kwargs = dict(
         max_iters=max_iters,
@@ -531,34 +535,22 @@ def _dual_lssp_postprocess(
         candidate_include_cut_endpoints=candidate_include_cut_endpoints,
     )
 
-    sol_static, info_static = improve_with_lssp_local_search(
+    # Evaluate with dual mode if explicitly enabled AND SW scores available
+    enable_dual_eval = use_dual_mode and isinstance(sw_priority_scores, Mapping) and len(sw_priority_scores) > 0
+    
+    sol_best, info_best = improve_with_lssp_local_search(
         TG,
         solution,
-        software_priority_scores=None,
+        software_priority_scores=sw_priority_scores if enable_dual_eval else None,
+        eval_both_modes=enable_dual_eval,
         progress=print_progress,
         progress_every=print_every,
-        progress_prefix=f"{print_prefix}[static]",
+        progress_prefix=f"{print_prefix}[mode={'dual' if enable_dual_eval else 'static'}]",
         **common_kwargs,
     )
-    candidates = [("static", sol_static, info_static)]
-
-    if isinstance(sw_priority_scores, Mapping) and len(sw_priority_scores) > 0:
-        sol_sw, info_sw = improve_with_lssp_local_search(
-            TG,
-            solution,
-            software_priority_scores=sw_priority_scores,
-            progress=print_progress,
-            progress_every=print_every,
-            progress_prefix=f"{print_prefix}[sw_priority]",
-            **common_kwargs,
-        )
-        candidates.append(("sw_priority", sol_sw, info_sw))
-
-    best_mode, best_sol, best_info = min(
-        candidates,
-        key=lambda item: float(item[2].get("cost", float("inf"))),
-    )
-    return best_mode, best_sol, best_info, candidates
+    
+    mode = "dual" if enable_dual_eval else "static"
+    return mode, sol_best, info_best, [(mode, sol_best, info_best)]
 
 
 def _differentiable_makespan_loss_with_order(
@@ -876,6 +868,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     post_search_strategy = str(post_cfg.get("search_strategy", config.get("lssp_postprocess_search_strategy", "critical"))).lower()
     post_candidate_top_k = int(post_cfg.get("candidate_top_k", config.get("lssp_postprocess_candidate_top_k", 16)))
     post_use_sw_priority = bool(post_cfg.get("use_sw_priority", config.get("lssp_use_sw_priority", False)))
+    post_use_dual_lssp = bool(post_cfg.get("use_dual_lssp_postprocess", config.get("lssp_use_dual_postprocess", False)))
     post_critical_slack_frac = float(post_cfg.get("critical_slack_frac", config.get("lssp_postprocess_critical_slack_frac", 0.05)))
     post_final_all_decode_candidates = bool(
         post_cfg.get("final_all_decode_candidates", config.get("lssp_postprocess_final_all_decode_candidates", True))
@@ -1225,6 +1218,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                         candidate_include_neighbors=post_candidate_include_neighbors,
                         candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
                         sw_priority_scores=sw_priority_scores_eval,
+                        use_dual_mode=post_use_dual_lssp,
                     )
                     post_cost = _evaluate_discrete_solution(
                         TG,
@@ -1418,6 +1412,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     print_progress=post_print_progress,
                     print_every=post_print_every,
                     print_prefix=f"[diff_gnn_order][postprocess][{cand_idx}/{len(post_seed_candidates)}:{cand_label}]",
+                    use_dual_mode=post_use_dual_lssp,
                 )
                 static_cost = float("nan")
                 swprio_cost = float("nan")
