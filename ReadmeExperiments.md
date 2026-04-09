@@ -22,7 +22,17 @@ nohup ./BatchExperiments/run_dataset_area05_10seed_test.sh \
 
 tail -f ./BatchExperiments/diff_gnn_parallel__area05_09_00.log
 
+
+nohup ./BatchExperiments/run_squeezenet_area_sweep_10seed.sh > ./BatchExperiments/sweep_others_5_50.log 2>&1 &
+
+nohup ./BatchExperiments/run_squeezenet_area_sweep_10seed_test.sh > ./BatchExperiments/sweep_diff_gnn_5_50.log 2>&1 &
+
 ```
+
+MIP_PLOT_METRIC=lp ./BatchExperiments/plot_squeezenet_area_sweep_10seed.sh
+
+MIP_PLOT_METRIC=lp ./BatchExperiments/plot_dataset_area05_10seed.sh
+
 
 
 METHODS_OVERRIDE='gl25 esa pso dbpso clpso ccpso shade jade' \

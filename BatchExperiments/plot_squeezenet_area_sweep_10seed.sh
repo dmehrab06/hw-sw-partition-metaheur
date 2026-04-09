@@ -36,7 +36,7 @@ METHODS=(
   "greedy"
 )
 
-AREAS=(0.1 0.3 0.5 0.7)
+AREAS=(0.1 0.3 0.7 0.9)
 
 if [[ -n "${METHODS_OVERRIDE:-}" ]]; then
   read -r -a METHODS <<<"$METHODS_OVERRIDE"
@@ -50,6 +50,7 @@ OUTDIR="$ROOT/BatchExperiments/squeezenet_area_sweep"
 MANIFEST="$OUTDIR/${RESULT_TAG}_selected_manifest.csv"
 GNN_CSV="$OUTDIR/${RESULT_TAG}-result-summary-soda-graphs-config.csv"
 MIP_CSV="$OUTDIR/mip_${RESULT_TAG}-result-summary-soda-graphs-config.csv"
+MIP_PLOT_METRIC="${MIP_PLOT_METRIC:-lp}"
 
 if [[ ! -f "$MANIFEST" ]]; then
   echo "Missing manifest: $MANIFEST"
@@ -76,6 +77,7 @@ for area in "${AREAS[@]}"; do
 done
 
 PLOT_ARGS+=(--tag "$RESULT_TAG")
+PLOT_ARGS+=(--mip-metric "$MIP_PLOT_METRIC")
 
 if [[ -f "$GNN_CSV" ]]; then
   PLOT_ARGS+=(--gnn-csv "$GNN_CSV")

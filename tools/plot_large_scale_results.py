@@ -83,6 +83,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--methods", nargs="+", required=True)
     parser.add_argument("--datasets", nargs="+", required=True)
+    parser.add_argument(
+        "--mip-metric",
+        choices=["lssp", "lp", "model"],
+        default="lssp",
+        help="Metric to use for the MIP bars while leaving other methods unchanged.",
+    )
     parser.add_argument("--tag", required=True)
     return parser.parse_args()
 
@@ -140,6 +146,14 @@ def _reported_makespan(row: pd.Series, method: str) -> float | None:
     return static
 
 
+def _reported_mip_makespan(row: pd.Series, mip_metric: str) -> float | None:
+    col = {
+        "lp": "mip_lp_makespan",
+        "model": "mip_model_makespan",
+    }.get(str(mip_metric).strip().lower(), "mip_makespan")
+    return _safe_float(row.get(col))
+
+
 def _discover_result_csvs(search_root: Path, methods: list[str]) -> list[tuple[str, Path]]:
     pairs: list[tuple[str, Path]] = []
     method_set = set(methods)
@@ -157,7 +171,7 @@ def _discover_result_csvs(search_root: Path, methods: list[str]) -> list[tuple[s
     return pairs
 
 
-def _load_results(search_root: Path, methods: list[str]) -> pd.DataFrame:
+def _load_results(search_root: Path, methods: list[str], mip_metric: str = "lssp") -> pd.DataFrame:
     rows: list[dict] = []
     for method, path in _discover_result_csvs(search_root, methods):
         frame = pd.read_csv(path)
@@ -172,7 +186,7 @@ def _load_results(search_root: Path, methods: list[str]) -> pd.DataFrame:
 
         for _, row in frame.iterrows():
             if method == "mip":
-                reported = _safe_float(row.get("mip_makespan"))
+                reported = _reported_mip_makespan(row, mip_metric)
                 runtime = _safe_float(row.get("mip_time"))
             else:
                 reported = _reported_makespan(row, method)
@@ -328,7 +342,7 @@ def main() -> int:
     if manifest.empty:
         raise SystemExit("Manifest is empty.")
 
-    results = _load_results(args.search_root, methods)
+    results = _load_results(args.search_root, methods, mip_metric=args.mip_metric)
     if results.empty:
         raise SystemExit("No result rows found for plotting.")
 

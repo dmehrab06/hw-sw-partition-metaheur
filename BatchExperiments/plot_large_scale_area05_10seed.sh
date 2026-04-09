@@ -57,49 +57,14 @@ done
 
 RESULT_TAG="large_scale_area05_10seed"
 OUTDIR="$ROOT/BatchExperiments/large_scale_area05"
-AGGREGATE_MANIFEST="$OUTDIR/${RESULT_TAG}_plot_manifest.csv"
+MANIFEST="$OUTDIR/${RESULT_TAG}_selected_manifest.csv"
+MIP_PLOT_METRIC="${MIP_PLOT_METRIC:-lp}"
 
 mkdir -p "$OUTDIR"
-rm -f "$AGGREGATE_MANIFEST"
-
-DATASET_MANIFESTS=()
-for dataset in "${DATASETS[@]}"; do
-  dataset_manifest="$OUTDIR/$dataset/${RESULT_TAG}_${dataset}_selected_manifest.csv"
-  if [[ -f "$dataset_manifest" ]]; then
-    DATASET_MANIFESTS+=("$dataset_manifest")
-  else
-    echo "Skipping $dataset: missing manifest $dataset_manifest"
-  fi
-done
-
-if [[ ${#DATASET_MANIFESTS[@]} -eq 0 ]]; then
-  echo "No dataset manifests found under $OUTDIR"
+if [[ ! -f "$MANIFEST" ]]; then
+  echo "Missing manifest: $MANIFEST"
   exit 1
 fi
-
-"$PYTHON" - <<'PY' "$AGGREGATE_MANIFEST" "${DATASET_MANIFESTS[@]}"
-from pathlib import Path
-import sys
-import pandas as pd
-
-out_path = Path(sys.argv[1])
-parts = []
-for manifest_path in sys.argv[2:]:
-    path = Path(manifest_path)
-    if not path.exists():
-        continue
-    frame = pd.read_csv(path)
-    if frame.empty:
-        continue
-    parts.append(frame)
-
-if not parts:
-    raise SystemExit("No non-empty dataset manifests found.")
-
-merged = pd.concat(parts, ignore_index=True).drop_duplicates()
-merged.to_csv(out_path, index=False)
-print(f"Wrote aggregate manifest to {out_path}")
-PY
 
 PLOT_METHODS=()
 for method in "${ALL_METHODS_ORDER[@]}"; do
@@ -121,10 +86,11 @@ fi
 
 "$PYTHON" "$ROOT/tools/plot_large_scale_results.py" \
   --search-root "$OUTDIR" \
-  --manifest "$AGGREGATE_MANIFEST" \
+  --manifest "$MANIFEST" \
   --output-dir "$OUTDIR" \
   --methods "${PLOT_METHODS[@]}" \
   --datasets "${DATASETS[@]}" \
+  --mip-metric "$MIP_PLOT_METRIC" \
   --tag "$RESULT_TAG"
 
 echo "Finished plotting large-scale synthetic results from $OUTDIR"
