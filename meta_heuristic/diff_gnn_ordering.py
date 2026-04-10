@@ -212,6 +212,24 @@ _DIFFGNN_ORDER_DATASET_OVERRIDES = {
             "candidate_top_k": 64,
         },
     },
+    "squeezenet_like_1000": {
+        "iter": 200,
+        "verbose": 200,
+        "early_stop_min_epochs": 100,
+        "soft_makespan_exact_every": 1,
+        "postprocess": {
+            "candidate_top_k": 32,
+        },
+    },
+    "squeezenet_like_10000": {
+        "iter": 500,
+        "verbose": 500,
+        "early_stop_min_epochs": 500,
+        "soft_makespan_exact_every": 5,
+        "postprocess": {
+            "candidate_top_k": 64,
+        },
+    },
         
     "rez_net_tosa": {
         # "iter": 750,
