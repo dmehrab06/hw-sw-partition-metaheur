@@ -21,7 +21,7 @@ def load_taskgraph(filepath):
     try:
         with open(filepath, 'rb') as file:
             task_graph = pickle.load(file)
-        logger.info(f"TaskGraph instance loaded from: {filepath}")
+        #logger.info(f"TaskGraph instance loaded from: {filepath}")
         return task_graph
     except Exception as e:
         logger.error(f"Failed to load TaskGraph instance from {filepath}: {e}")

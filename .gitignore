@@ -37,6 +37,11 @@ report.log*
 #!*partitions/*.pkl
 !inputs/task_graph_complete/*.pkl
 !arato-opt-partitions/*.pkl
+!comm-opt-partitions/*.pkl
+!cpl-opt-partitions/*.pkl
+!ed-opt-partitions/*.pkl
+!spt-opt-partitions/*.pkl
+!mip-opt-partitions/*.pkl
 
 # DS_Store
 *.DS_Store

@@ -213,7 +213,7 @@ class ScheduleConstPartitionSolver:
         
         logger.info("Problem matrices and vectors created successfully")
     
-    def solve_optimization(self, A_max: float, partition_assignment:dict=None, time_limit_sec=7.5*3600) -> Dict:
+    def solve_optimization(self, A_max: float, partition_assignment:dict=None, time_limit_sec=7.5*3600, verbose=True) -> Dict:
         """
         Solve the hardware-software partitioning optimization problem
         
@@ -324,9 +324,9 @@ class ScheduleConstPartitionSolver:
         # Solve the problem
         problem = cp.Problem(objective, constraints)
         if self.solver == "xpress":
-            problem.solve(solver=cp.XPRESS, verbose=True, solver_opts={"SOLTIMELIMIT": time_limit_sec})
+            problem.solve(solver=cp.XPRESS, verbose=verbose, solver_opts={"SOLTIMELIMIT": time_limit_sec})
         elif self.solver == "scip":
-            problem.solve(solver=cp.SCIP, verbose=True, scip_params={"limits/time": time_limit_sec})
+            problem.solve(solver=cp.SCIP, verbose=verbose, scip_params={"limits/time": time_limit_sec})
         else:
             logger.error(f"Unknown solver error: {self.solver}")
             raise NotImplementedError(f"Unknown solver: {self.solver}")
@@ -367,11 +367,12 @@ class ScheduleConstPartitionSolver:
             'total_hardware_area': np.sum(self.a * (1 - self.x_sol)),
             'area_constraint': A_max
         }
-        
-        logger.info(f"Optimization successful! Makespan = {self.T_sol:.2f}")
-        logger.info(f"Hardware nodes: {hw_nodes}")
-        logger.info(f"Software nodes: {sw_nodes}")
-        logger.info(f"Total hardware area used: {solution['total_hardware_area']:.2f} / {A_max}")
+
+        if verbose:
+            logger.info(f"Optimization successful! Makespan = {self.T_sol:.2f}")
+            logger.info(f"Hardware nodes: {hw_nodes}")
+            logger.info(f"Software nodes: {sw_nodes}")
+            logger.info(f"Total hardware area used: {solution['total_hardware_area']:.2f} / {A_max}")
         
         return solution
     
