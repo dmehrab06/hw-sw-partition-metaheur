@@ -60,6 +60,8 @@ def save_partition(args, solution, method='random'):
                f"seed-{args['seed']}_"
                f"assignment-{method}.pkl")
 
+    logger.info(f"Partition saved to: {filename}")
+    
     os.makedirs(args['solution-dir'], exist_ok=True)
     with open(f"{args['solution-dir']}/{filename}", "wb") as file:
         pickle.dump(solution, file)
@@ -103,6 +105,7 @@ def main():
     # Parse arguments and load config
     config = parse_arguments()
     print(config)
+    print(config['seed'])
     
     # Set random seeds for reproducibility
     random.seed(config['seed'])
@@ -133,8 +136,8 @@ def main():
         # Register optimization methods
         registry.register_method('random', random_assignment)
         
-        registry.register_method('pso', simulate_PSO)
-        registry.register_method('dbpso',simulate_DBPSO)
+        # registry.register_method('pso', simulate_PSO)
+        # registry.register_method('dbpso',simulate_DBPSO)
         registry.register_method('clpso',simulate_CLPSO)
         registry.register_method('ccpso',simulate_CCPSO)
         

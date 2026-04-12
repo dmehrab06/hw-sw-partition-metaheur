@@ -42,7 +42,7 @@ def parse_arguments() -> DictConfig:
                        help='Hardware scale variance (should be positive)')
     parser.add_argument('--comm-scale-factor', type=float,
                        help='Communication scale factor (should be positive)')
-    parser.add_argument('--seed', type=int, default=42,
+    parser.add_argument('--seed', type=int,
                        help='Random seed for reproducibility')
     
     args = parser.parse_args()
@@ -108,7 +108,7 @@ def validate_config(config):
             raise FileNotFoundError(f"Graph file not found: {graph_file}")
         
         # Validate seed is non-negative
-        if config.get('seed', 42) < 0:
+        if config.get('seed', -1) < 0:
             logger.error(f"Seed must be non-negative, got: {config['seed']}")
             raise ValueError(f"Seed must be non-negative, got: {config['seed']}")
             
