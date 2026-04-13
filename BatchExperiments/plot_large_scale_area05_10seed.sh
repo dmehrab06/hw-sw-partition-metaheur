@@ -1,11 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+export HWSW_METHOD_RUNTIME_PROFILE="${HWSW_METHOD_RUNTIME_PROFILE:-arato}"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-/people/dass304/.conda/envs/combopt/bin/python}"
 
 ALL_METHODS_ORDER=(
   "mip"
+  "diff_gnn"
   "diff_gnn_order"
   "gl25"
   "gcps"
@@ -22,6 +25,7 @@ ALL_METHODS_ORDER=(
 
 METHODS=(
   # "mip"
+  "diff_gnn"
   "diff_gnn_order"
   "gl25"
   "gcps"

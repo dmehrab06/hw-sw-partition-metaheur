@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+export HWSW_METHOD_RUNTIME_PROFILE="${HWSW_METHOD_RUNTIME_PROFILE:-arato}"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-/people/dass304/.conda/envs/combopt/bin/python}"
 
@@ -38,22 +40,23 @@ METHODS=(
   # "greedy"
 )
 
-# Default 8-dataset batch: 7 real SODA graphs + 1 paper sanity-check graph.
+# Default dataset batch: 7 real SODA graphs + optional sanity/synthetic graphs.
 # Comment out any dataset you do not want to include.
 DATASETS=(
   # "paper_fig3_11node"
-  "mobile_net_tosa"
+  # "mobile_net_tosa"
   # "rez_net_tosa"
   # "squeeze_net_tosa"
   # "anomaly_detection_tosa"
   # "image_classification_tosa"
   # "keyword_spotting_tosa"
   # "visual_wake_words_tosa"
+  "squeezenet_like_1000"
 )
 
 # Edit this array to control the number of seeds.
 # SEEDS=(42 43 44 45 46 47 48 49 50 51)
-SEEDS=(43)
+SEEDS=(42 43)
 
 if [[ -n "${METHODS_OVERRIDE:-}" ]]; then
   read -r -a METHODS <<<"$METHODS_OVERRIDE"
@@ -110,6 +113,7 @@ MANIFEST="$CONFIG_PROFILE_ROOT/graph_suite_area05/manifest.csv"
 ROOT_MANIFEST="$OUTDIR/${RESULT_TAG}_selected_manifest.csv"
 ROOT_GNN_CSV="$OUTDIR/${RESULT_TAG}-result-summary-soda-graphs-config.csv"
 ROOT_MIP_CSV="$OUTDIR/mip_${RESULT_TAG}-result-summary-soda-graphs-config.csv"
+LARGE_SCALE_OUTDIR="${LARGE_SCALE_OUTDIR:-$ROOT/BatchExperiments/large_scale_area05}"
 CPU_COUNT_OVERRIDE="${HWSW_CPU_COUNT_OVERRIDE:-${CPU_COUNT_OVERRIDE:-}}"
 CPU_COUNT_SOURCE="auto"
 if [[ -n "$CPU_COUNT_OVERRIDE" ]]; then
@@ -150,6 +154,34 @@ print_banner() {
 join_by_comma() {
   local IFS=', '
   echo "$*"
+}
+
+uses_large_scale_borrowed_results() {
+  local dataset="$1"
+  [[ "$dataset" == "squeezenet_like_1000" ]]
+}
+
+sync_large_scale_method_results() {
+  local dataset="$1"
+  local method="$2"
+  local method_dir="$3"
+  local source_dir="$LARGE_SCALE_OUTDIR/$dataset/$method"
+  local result_csv
+
+  if ! uses_large_scale_borrowed_results "$dataset"; then
+    return 1
+  fi
+  if [[ ! -d "$source_dir" ]]; then
+    return 1
+  fi
+  result_csv="$(find "$source_dir" -maxdepth 1 -type f -name '*result-summary-soda-graphs-config.csv' | head -n 1 || true)"
+  if [[ -z "$result_csv" ]]; then
+    return 1
+  fi
+
+  mkdir -p "$method_dir"
+  cp -a "$source_dir/." "$method_dir/"
+  return 0
 }
 
 cleanup() {
@@ -517,6 +549,13 @@ merged = merged.drop_duplicates(subset=subset, keep="last")
 merged.to_csv(out_path, index=False)
 print(f"Wrote cumulative method manifest to {out_path}")
 PY
+
+    if sync_large_scale_method_results "$dataset" "$method" "$METHOD_DIR"; then
+      echo "  Reused existing large-scale results from $LARGE_SCALE_OUTDIR/$dataset/$method"
+      method_elapsed_sec=$((SECONDS - method_start_sec))
+      print_banner "Completed method: $dataset / $method (${method_elapsed_sec}s, reused)"
+      continue
+    fi
 
     if [[ "$PARALLEL_DATASET_METHODS" =~ ^(1|true|yes|on)$ ]]; then
       launch_dataset_method_group "$dataset" "$method" "$DATASET_CFG_DIR" "$METHOD_DIR" "$METHOD_PREFIX"

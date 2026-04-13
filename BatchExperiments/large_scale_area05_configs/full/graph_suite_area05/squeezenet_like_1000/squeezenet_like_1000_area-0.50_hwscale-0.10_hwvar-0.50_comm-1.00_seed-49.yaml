@@ -70,7 +70,7 @@ ccpso:
   - 10
   - 20
 gl25:
-  iter: 2000
+  iter: 10000
   n_pop: 500
   verbose: 500
 shade:

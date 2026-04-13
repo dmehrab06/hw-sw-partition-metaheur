@@ -1,11 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+export HWSW_METHOD_RUNTIME_PROFILE="${HWSW_METHOD_RUNTIME_PROFILE:-arato}"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-/people/dass304/.conda/envs/combopt/bin/python}"
 
 ALL_METHODS_ORDER=(
   # "mip"
+  "diff_gnn"
   "diff_gnn_order"
   "gl25"
   "gcps"
@@ -22,7 +25,8 @@ ALL_METHODS_ORDER=(
 
 METHODS=(
   # "mip"
-  "diff_gnn_order"
+  "diff_gnn"
+  # "diff_gnn_order"
   # "gl25"
   # "gcps"
   # "esa"
@@ -39,8 +43,14 @@ METHODS=(
 GRAPH_SIZES=(
   # "10"
   # "15"
-  "1000"
-  # "10000"
+  # "1000"
+  "10000"
+)
+
+# Extra non-synthetic datasets that can be run through the same batch path.
+# Comment out entries here if you want a synthetic-only large-scale sweep.
+EXTRA_DATASETS=(
+  # "paper_fig3_11node"
 )
 
 # SEEDS=(42 43 44 45 46 47 48 49 50 51)
@@ -60,6 +70,14 @@ DATASETS=()
 for size in "${GRAPH_SIZES[@]}"; do
   DATASETS+=("squeezenet_like_${size}")
 done
+DATASETS+=("${EXTRA_DATASETS[@]}")
+if [[ -n "${DATASETS_OVERRIDE:-}" ]]; then
+  read -r -a DATASETS <<<"$DATASETS_OVERRIDE"
+fi
+if [[ ${#DATASETS[@]} -eq 0 ]]; then
+  echo "No datasets selected. Enable at least one GRAPH_SIZES entry, set an EXTRA_DATASETS entry, or pass DATASETS_OVERRIDE."
+  exit 1
+fi
 
 PROFILE="full"
 AREA="0.5"
@@ -196,10 +214,16 @@ for dataset in datasets:
         with path.open() as handle:
             cfg = yaml.safe_load(handle) or {}
 
-        if "diffgnn_order" not in cfg:
+        changed = False
+        if "diffgnn" in cfg:
+            cfg.pop("diffgnn", None)
+            changed = True
+        if "diffgnn_order" in cfg:
+            cfg.pop("diffgnn_order", None)
+            changed = True
+        if not changed:
             continue
 
-        cfg.pop("diffgnn_order", None)
         with path.open("w") as handle:
             yaml.safe_dump(cfg, handle, sort_keys=False)
         updated += 1

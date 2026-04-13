@@ -146,6 +146,10 @@ def simulate_CCPSO(dim, func_to_optimize, config):
     """
     logger = logging.getLogger('__main__')
     ccpso_cfg = resolve_classical_method_config(config, "ccpso")
+    raw_group_sizes = list(ccpso_cfg.get("group_sizes", [5, 10, 20]))
+    valid_group_sizes = [int(size) for size in raw_group_sizes if int(size) <= int(dim)]
+    if not valid_group_sizes:
+        valid_group_sizes = [max(1, min(int(dim), 5))]
     
     problem = {
         'fitness_function': func_to_optimize, 
@@ -159,7 +163,7 @@ def simulate_CCPSO(dim, func_to_optimize, config):
         'seed_rng': (config.get('seed', 2022) if ccpso_cfg.get('seed_rng') is None else ccpso_cfg.get('seed_rng')),
         'n_individuals': max(500, int(ccpso_cfg['n_individuals'])),
         'c': ccpso_cfg['c'],
-        'group_sizes': ccpso_cfg['group_sizes']
+        'group_sizes': valid_group_sizes,
     }
     
     model = CCPSO2(problem, options)

@@ -10,8 +10,60 @@ conda activate combopt
 export PYTHONNOUSERSITE=1
 ```
 
+## Runtime Profiles
+The experiment shell scripts now set the classical-method runtime profile by default:
+
+- `BatchExperiments/*`: `HWSW_METHOD_RUNTIME_PROFILE=arato`
+- `BatchExperiments2/*`: `HWSW_METHOD_RUNTIME_PROFILE=balanced`
+
+You can still override this per command if needed:
+
+```bash
+HWSW_METHOD_RUNTIME_PROFILE=arato ./BatchExperiments2/run_dataset_area05_10seed.sh
+HWSW_METHOD_RUNTIME_PROFILE=balanced ./BatchExperiments/run_dataset_area05_10seed.sh
+HWSW_METHOD_RUNTIME_PROFILE=makespan ./BatchExperiments2/run_squeezenet_area_sweep_10seed.sh
+```
+
+## Paper Table Snippet
+Updated LaTeX for the `BatchExperiments2` baseline settings:
+
+```latex
+\begin{table}[!t]
+\centering
+\caption{Baseline and proposed-method settings used in the experiments.}
+\label{tab:baseline_parameters}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{p{0.18\columnwidth} p{0.75\columnwidth}}
+\toprule
+Method & Default settings \\
+\midrule
+Random & 500 samples; Bernoulli assignment probability $p=0.5$ \\
+Greedy & Sort by $(t_i^{sw}-t_i^{hw})/A_i$ and greedily fill hardware under the area budget \\
+MILP & CVXPY-backed mixed-integer formulation; 1-hour time limit \\
+PSO & $c_1=0.575$, $c_2=0.1$, $w=1.05$, 500 particles, 1,000 iterations \\
+DBPSO & $c_1=0.575$, $c_2=0.1$, $w=1.05$, neighborhood $k=4$, Minkowski $p=2$, 500 particles, 1,000 iterations \\
+CLPSO & $c=1$, 500 individuals, 1,000 function evaluations \\
+CCPSO & $c=1$, 500 individuals, 1,000 function evaluations, group sizes $\{5,10,20\}$ \\
+ESA & 10,000 function evaluations \\
+SHADE & 10,000 function evaluations, 500 individuals \\
+JADE & 10,000 function evaluations, 500 individuals \\
+GL25 & 10,000 function evaluations, population size 500 \\
+GCPS & Learning rate $10^{-3}$, dropout 0.2, hidden dimensions 10/5, pretrain 100 epochs, inference 800 epochs, schedule skip 5, $\sigma=0.3$, LSSP evaluation \\
+\diffgnn & 3-layer GCN encoder, hidden dimension 256, dropout 0.2, 12 Sinkhorn iterations, train 500--1000 epochs \\
+\bottomrule
+\end{tabular}
+\end{table}
+```
+
 ```bash
 nohup ./BatchExperiments/run_dataset_area05_10seed.sh > ./BatchExperiments/mip_area05_11_30.log 2>&1 &
+
+
+nohup ./BatchExperiments2/run_dataset_area05_10seed.sh > ./BatchExperiments2/others_area_apr_10_seed0-5.log 2>&1 &
+
+nohup ./BatchExperiments2/run_dataset_area05_10seed_test.sh > ./BatchExperiments2/others_area_apr_10_seed6-10.log 2>&1 &
 
 
 METHODS_OVERRIDE='diff_gnn_order' \

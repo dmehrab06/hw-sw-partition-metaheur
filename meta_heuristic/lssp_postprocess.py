@@ -5,7 +5,11 @@ import time
 from typing import Any, Dict, Mapping, Sequence, Tuple
 
 import networkx as nx
-from meta_heuristic.partition_schedule_evaluator import compute_static_priorities, evaluate_partition_lssp
+from meta_heuristic.partition_schedule_evaluator import (
+    compute_static_priorities,
+    evaluate_partition_dag,
+    evaluate_partition_lssp,
+)
 
 
 def _node_exec_time(TG, node: str, partition: Dict[str, int]) -> float:
@@ -28,6 +32,12 @@ def _schedule_detail(
             TG,
             partition,
             software_priority_scores=software_priority_scores,
+        )
+    if mode in {"dag", "legacy_lp", "legacy", "lp", "dag_lp", "cvxpy"}:
+        return evaluate_partition_dag(
+            TG,
+            partition,
+            auto_repair=False,
         )
     return TG.evaluate_makespan(partition)
 
@@ -180,6 +190,7 @@ def improve_with_lssp_local_search(
     progress: bool = False,
     progress_every: int = 10,
     progress_prefix: str = "[lssp_postprocess]",
+    trace_rows: list[dict] | None = None,
 ) -> Tuple[Dict[str, int], Dict]:
     """
     Optional post-process:
@@ -206,6 +217,40 @@ def improve_with_lssp_local_search(
         if progress:
             print(f"{progress_prefix} {message}", flush=True)
 
+    def _append_trace(
+        *,
+        event: str,
+        stage: str,
+        iteration: int,
+        cost: float,
+        delta_from_prev: float | None = None,
+        accepted: bool = False,
+        candidate_pool_size: float | None = None,
+        selected_candidates: float | None = None,
+    ) -> None:
+        if trace_rows is None:
+            return
+        row = {
+            "event": str(event),
+            "stage": str(stage),
+            "iteration": int(iteration),
+            "postprocess_lssp_cost": float(cost),
+            "accepted": bool(accepted),
+            "delta_from_prev": (
+                float(delta_from_prev) if delta_from_prev is not None else math.nan
+            ),
+            "threshold_hw_nodes": int(sum(int(v) for v in part.values())),
+            "threshold_hw_area": float(_hardware_area(TG, part)),
+            "threshold_budget": float(budget),
+            "selection_metric_train": str(eval_mode),
+            "selection_metric_final": str(eval_mode),
+        }
+        if candidate_pool_size is not None:
+            row["candidate_pool_size"] = float(candidate_pool_size)
+        if selected_candidates is not None:
+            row["selected_candidates"] = float(selected_candidates)
+        trace_rows.append(row)
+
     def _flip(base: Dict[str, int], node: str, value: int) -> Dict[str, int]:
         out = dict(base)
         out[node] = int(value)
@@ -230,6 +275,13 @@ def improve_with_lssp_local_search(
 
     cur_cost = _cost_count(part)
     improved = False
+    _append_trace(
+        event="start",
+        stage="decode",
+        iteration=0,
+        cost=cur_cost,
+        accepted=False,
+    )
     _emit_progress(
         f"start eval_mode={eval_mode} max_iters={max_iters} "
         f"area_fill={enable_area_fill} swap={enable_swap} "
@@ -285,6 +337,14 @@ def improve_with_lssp_local_search(
             cur_cost = _cost_count(part)
             improved = True
             cur_area = _hardware_area(TG, part)
+            _append_trace(
+                event="accepted",
+                stage="stage1",
+                iteration=stage1_iter,
+                cost=cur_cost,
+                delta_from_prev=float(best_key[0]),
+                accepted=True,
+            )
             if progress and (
                 stage1_iter == 1
                 or stage1_iter % progress_every == 0
@@ -355,6 +415,16 @@ def improve_with_lssp_local_search(
         part = best_part
         cur_cost = best_cost
         improved = True
+        _append_trace(
+            event="accepted",
+            stage="stage2",
+            iteration=stage2_iter,
+            cost=cur_cost,
+            delta_from_prev=float(move_delta),
+            accepted=True,
+            candidate_pool_size=float(candidate_info.get("candidate_pool_size", 0.0)),
+            selected_candidates=float(candidate_info.get("selected_candidates", 0.0)),
+        )
         if progress and (
             stage2_iter == 1
             or stage2_iter % progress_every == 0
@@ -372,6 +442,13 @@ def improve_with_lssp_local_search(
         f"done improved={improved} cost={cur_cost:.6f} "
         f"area={_hardware_area(TG, part):.3f}/{budget:.3f} "
         f"eval_calls={eval_calls} elapsed={elapsed:.3f}s"
+    )
+    _append_trace(
+        event="done",
+        stage="done",
+        iteration=total_iters,
+        cost=cur_cost,
+        accepted=False,
     )
     return part, {
         "cost": float(cur_cost),

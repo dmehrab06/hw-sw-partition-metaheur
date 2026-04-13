@@ -1,0 +1,52 @@
+graph-file: inputs/task_graph_topology/synthetic/squeezenet_like_11.dot
+area-constraint: 0.5
+hw-scale-factor: 0.1
+hw-scale-variance: 0.5
+comm-scale-factor: 1.0
+seed: 47
+solver-tool: cvxpy
+solution-dir: outputs/task_graph_topology_suite_area05/full/partitions
+result-file-prefix: task_graph_topology_suite_area05_full
+output-dir: outputs/task_graph_topology_suite_area05/full
+taskgraph-dir: inputs/task_graph_complete
+taskgraph-pickle: inputs/task_graph_complete/taskgraph-squeezenet_like_11_area-0.50_hwscale-0.10_hwvar-0.50_comm-1.00_seed-47.pkl
+opt-cost-type: makespan
+mip:
+  solve-mode: hybrid
+  sw-constraint-mode: adjacent
+  use-reduced-sw-constraints: true
+  round-threshold: 0.5
+  verbose: false
+  preferred-solvers:
+  - HIGHS
+  - GUROBI
+  - SCIP
+  - GLPK_MI
+  - CBC
+  - ECOS_BB
+  time-limit-sec: 30
+  mip-gap: 0.15
+  node-limit: 20000
+  accept-nonoptimal: true
+visualization:
+  enabled: false
+  include_input_graph: false
+  include_output_schedule: false
+  out_dir: outputs/task_graph_topology_suite_area05/full/visualizations
+  input_dir: outputs/task_graph_topology_suite_area05/full/visualizations/input
+  schedule_dir: outputs/task_graph_topology_suite_area05/full/visualizations/schedule
+  strict_partitions: false
+methods:
+- random
+- greedy
+- diff_gnn
+- diff_gnn_order
+- gcps
+- pso
+- dbpso
+- clpso
+- ccpso
+- esa
+- shade
+- jade
+- gl25

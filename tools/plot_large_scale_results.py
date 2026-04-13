@@ -29,6 +29,7 @@ plt.rcParams["legend.fontsize"] = GLOBAL_FONT_SIZE
 
 DEFAULT_METHOD_ORDER = [
     "mip",
+    "diff_gnn",
     "diff_gnn_order",
     "gl25",
     "gcps",
@@ -45,6 +46,7 @@ DEFAULT_METHOD_ORDER = [
 
 METHOD_LABELS = {
     "mip": "MILP",
+    "diff_gnn": "DIFF-GNN-P",
     "random": "RANDOM",
     "greedy": "GREEDY",
     "gcps": "GCPS",
@@ -61,6 +63,7 @@ METHOD_LABELS = {
 
 METHOD_COLORS = {
     "mip": "#e15759",
+    "diff_gnn": "#4c78a8",
     "random": "#76b7b2",
     "greedy": "#59a14f",
     "gcps": "#edc948",

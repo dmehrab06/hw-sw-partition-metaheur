@@ -50,6 +50,22 @@ ALL_GNN_METHODS = [
     "jade",
     "gl25",
 ]
+RUNTIME_METHOD_BLOCK_KEYS = [
+    "random",
+    "pso",
+    "dbpso",
+    "clpso",
+    "ccpso",
+    "gl25",
+    "shade",
+    "jade",
+    "esa",
+    "gcps",
+    "non_diffgnn",
+    "diffgnn",
+    "diffgnn_order",
+    "gcon",
+]
 
 
 def _repo_rel(path: Path) -> str:
@@ -335,6 +351,12 @@ def _apply_common_overrides(
     return cfg
 
 
+def _strip_runtime_method_configs(cfg: dict) -> dict:
+    for key in RUNTIME_METHOD_BLOCK_KEYS:
+        cfg.pop(key, None)
+    return cfg
+
+
 def _apply_pilot_profile(cfg: dict, nodes: int) -> dict:
     random_samples = 50
     pso_particles = 10
@@ -470,6 +492,7 @@ def _prepare_config(
     seed: int,
     suite_name: str,
     profile: str,
+    strip_method_configs: bool = False,
 ) -> dict:
     cfg = copy.deepcopy(base_cfg)
     cfg = _apply_common_overrides(
@@ -492,9 +515,13 @@ def _prepare_config(
         valid_group_sizes = [max(1, min(int(topo_row["nodes"]), 5))]
     ccpso_cfg["group_sizes"] = valid_group_sizes
     cfg["ccpso"] = ccpso_cfg
-    # diff_gnn_order now relies on runtime Python defaults unless a user adds
-    # an explicit block manually to a specific YAML afterwards.
-    cfg.pop("diffgnn_order", None)
+    if strip_method_configs:
+        cfg = _strip_runtime_method_configs(cfg)
+    else:
+        # diff_gnn and diff_gnn_order now rely on runtime Python defaults unless
+        # a user adds an explicit block manually to a specific YAML afterwards.
+        cfg.pop("diffgnn", None)
+        cfg.pop("diffgnn_order", None)
     return cfg
 
 
@@ -555,6 +582,7 @@ def generate_configs(
     area_value: float,
     squeeze_areas: list[float],
     clean: bool,
+    strip_method_configs: bool,
 ) -> None:
     with base_config_path.open() as handle:
         base_cfg = yaml.safe_load(handle)
@@ -601,6 +629,7 @@ def generate_configs(
                 seed=seed,
                 suite_name=suite_name,
                 profile=profile,
+                strip_method_configs=strip_method_configs,
             )
             config_name = (
                 f"{topo_row['graph_name']}_"
@@ -643,6 +672,7 @@ def generate_configs(
                 seed=seed,
                 suite_name=sweep_name,
                 profile=profile,
+                strip_method_configs=strip_method_configs,
             )
             config_name = (
                 f"squeeze_net_tosa_"
@@ -716,6 +746,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not delete the target profile directory before regenerating configs.",
     )
+    parser.add_argument(
+        "--strip-method-configs",
+        action="store_true",
+        help="Remove runtime method blocks from generated YAMLs so methods resolve settings from Python defaults.",
+    )
     return parser.parse_args()
 
 
@@ -733,6 +768,7 @@ def main() -> int:
         area_value=float(args.area),
         squeeze_areas=[float(v) for v in args.squeeze_areas],
         clean=not args.no_clean,
+        strip_method_configs=bool(args.strip_method_configs),
     )
     print(f"Generated configs under {args.config_root / args.profile}")
     return 0

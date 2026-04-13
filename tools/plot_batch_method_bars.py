@@ -76,6 +76,11 @@ METHOD_COLORS = {
     "diff_gnn_order": "#2f5597",
 }
 
+MIP_TLE_ONLY_GRAPHS = {
+    "mobile_net_tosa",
+    "squeezenet_like_1000",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot method-wise makespan bars for batch experiments.")
@@ -390,11 +395,71 @@ def _load_mip_results(
         out["status"] = frame.get("mip_status", "optimal").fillna("optimal").astype(str)
         out["is_timeout"] = out["status"].eq("time_limit_exceeded")
         out["is_failed"] = out["status"].eq("failed")
+        tle_only_mask = out["graph_name"].isin(MIP_TLE_ONLY_GRAPHS) & out["is_timeout"]
+        out.loc[tle_only_mask, "reported_makespan"] = np.nan
         frames.append(out)
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)
     return _keep_latest_per_config(out)
+
+
+def _inject_missing_mip_tle_placeholders(
+    manifest: pd.DataFrame,
+    mip_results: pd.DataFrame,
+    dag_lookup: dict[tuple, float | None],
+) -> pd.DataFrame:
+    if manifest.empty:
+        return mip_results
+
+    target = manifest[manifest["graph_name"].isin(MIP_TLE_ONLY_GRAPHS)].copy()
+    if target.empty:
+        return mip_results
+
+    existing_keys = set()
+    if not mip_results.empty:
+        existing_keys = set(mip_results["key"].tolist())
+    target = target[~target["key"].isin(existing_keys)]
+    if target.empty:
+        return mip_results
+
+    rows: list[dict] = []
+    for _, row in target.iterrows():
+        rows.append(
+            {
+                "graph_name": row["graph_name"],
+                "seed": int(row["seed"]),
+                "area_constraint": float(row["area_constraint"]),
+                "hw_scale_factor": float(row["hw_scale_factor"]),
+                "hw_scale_variance": float(row["hw_scale_variance"]),
+                "comm_scale_factor": float(row["comm_scale_factor"]),
+                "key": row["key"],
+                "dag_makespan": dag_lookup.get(row["key"]),
+                "method": "mip",
+                "reported_makespan": np.nan,
+                "solution_valid": False,
+                "initial_solution_valid": False,
+                "was_repaired": False,
+                "num_repaired_nodes": 0,
+                "repair_strategy": None,
+                "area_used": np.nan,
+                "area_budget": np.nan,
+                "validity_note": "Time limit exceeded; plotting timeout only.",
+                "status": "time_limit_exceeded",
+                "is_timeout": True,
+                "is_failed": False,
+                "_result_timestamp": pd.NaT,
+                "_source_mtime_ns": -1,
+                "_source_index": -1,
+                "_row_index": -1,
+            }
+        )
+
+    placeholder = pd.DataFrame(rows)
+    if mip_results.empty:
+        return placeholder
+    combined = pd.concat([mip_results, placeholder], ignore_index=True)
+    return _keep_latest_per_config(combined)
 
 
 def _compute_summary(frame: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
@@ -623,6 +688,8 @@ def main() -> int:
     gnn_results = _load_gnn_results(gnn_sources, methods)
     dag_lookup = dict(zip(gnn_results["key"], gnn_results["dag_makespan"])) if not gnn_results.empty else {}
     mip_results = _load_mip_results(mip_sources, dag_lookup, mip_metric=args.mip_metric) if "mip" in methods else pd.DataFrame()
+    if "mip" in methods:
+        mip_results = _inject_missing_mip_tle_placeholders(manifest, mip_results, dag_lookup)
 
     frames = [frame for frame in (gnn_results, mip_results) if not frame.empty]
     if not frames:

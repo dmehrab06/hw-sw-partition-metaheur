@@ -6,6 +6,7 @@ import networkx as nx
 import numpy as np
 
 from utils.logging_utils import LogManager
+from ..Configuration import resolve_classical_method_config
 
 try:
     import torch
@@ -235,7 +236,7 @@ def simulate_gcps(dim, func_to_optimize, config):
     if len(node_list) != int(dim):
         raise ValueError(f"dim ({dim}) does not match node count ({len(node_list)}).")
 
-    gcps_cfg = dict(config.get("gcps", {}))
+    gcps_cfg = resolve_classical_method_config(config, "gcps")
     seed = int(gcps_cfg.get("seed", config.get("seed", 42)))
     random.seed(seed)
     np.random.seed(seed)

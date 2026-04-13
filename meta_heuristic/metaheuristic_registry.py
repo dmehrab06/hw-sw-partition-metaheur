@@ -13,6 +13,9 @@ if __name__ == "__main__":
 
 logger = LogManager.get_logger(__name__)
 
+_LARGE_GRAPH_DIFF_METHODS = {"diff_gnn", "diff_gnn_order"}
+_LARGE_GRAPH_DIFF_THRESHOLD = 1000
+
 def _normalize_partition(partition: dict):
     """
     Accepts:
@@ -98,11 +101,35 @@ def _extract_diff_gnn_order_meta(func: Callable) -> dict:
     return {}
 
 
+def _use_large_graph_diff_lssp_only_final(
+    method_name: str,
+    task_graph,
+    config: Mapping[str, Any] | None = None,
+) -> bool:
+    method_key = str(method_name).lower()
+    if method_key not in _LARGE_GRAPH_DIFF_METHODS:
+        return False
+    if task_graph is None or not hasattr(task_graph, "graph") or getattr(task_graph, "graph", None) is None:
+        return False
+
+    method_cfg = {}
+    if isinstance(config, Mapping):
+        cfg_key = "diffgnn_order" if method_key == "diff_gnn_order" else "diffgnn"
+        method_cfg_raw = config.get(cfg_key, {})
+        if isinstance(method_cfg_raw, Mapping):
+            method_cfg = dict(method_cfg_raw)
+
+    enabled = bool(method_cfg.get("large_graph_fast_policy", True))
+    threshold = int(method_cfg.get("large_graph_fast_threshold", _LARGE_GRAPH_DIFF_THRESHOLD))
+    return enabled and int(len(task_graph.graph.nodes())) > threshold
+
+
 def _compute_schedule_metrics(
     task_graph,
     partition: dict,
     method_name: str,
     learned_sw_scores: Mapping | None = None,
+    final_lssp_only: bool = False,
 ) -> dict:
     """
     Compute schedule metrics on a single (possibly repaired) partition.
@@ -114,13 +141,16 @@ def _compute_schedule_metrics(
     repaired_partition = dict(lssp_result["partition"])
     lssp_makespan = float(lssp_result["makespan"])
 
-    dag_makespan = float(
-        evaluate_partition_dag(
-            task_graph,
-            repaired_partition,
-            auto_repair=False,
-        )["makespan"]
-    )
+    if final_lssp_only:
+        dag_makespan = float("nan")
+    else:
+        dag_makespan = float(
+            evaluate_partition_dag(
+                task_graph,
+                repaired_partition,
+                auto_repair=False,
+            )["makespan"]
+        )
 
     lssp_swprio_makespan = None
     if str(method_name).lower() == "diff_gnn_order" and isinstance(learned_sw_scores, Mapping):
@@ -134,7 +164,14 @@ def _compute_schedule_metrics(
         )
 
     method_key = str(method_name).lower()
-    if method_key == "diff_gnn_order":
+    if final_lssp_only and method_key == "diff_gnn_order":
+        if lssp_swprio_makespan is None:
+            best_makespan = float(lssp_makespan)
+        else:
+            best_makespan = float(min(lssp_makespan, lssp_swprio_makespan))
+    elif final_lssp_only:
+        best_makespan = float(lssp_makespan)
+    elif method_key == "diff_gnn_order":
         if lssp_swprio_makespan is None:
             best_makespan = float(lssp_makespan)
         else:
@@ -172,9 +209,14 @@ def _build_validity_note(schedule_result: Mapping[str, Any]) -> str:
     )
 
 
-def _get_naive_baseline(task_graph, opt_cost_type: str, config: dict | None) -> tuple[float, dict]:
+def _get_naive_baseline(
+    task_graph,
+    opt_cost_type: str,
+    config: dict | None,
+    objective_mode_override: str | None = None,
+) -> tuple[float, dict]:
     partition = {node: 0 for node in task_graph.graph.nodes()}
-    mode = _resolve_objective_mode(opt_cost_type)
+    mode = str(objective_mode_override or _resolve_objective_mode(opt_cost_type)).strip().lower()
 
     if mode == "partition":
         return task_graph.evaluate_partition_cost(partition), partition
@@ -217,8 +259,22 @@ class MethodRegistry:
         func = method_info['func']
         kwargs = method_info['kwargs']
 
+        large_graph_lssp_only = _use_large_graph_diff_lssp_only_final(name, task_graph, config)
+        naive_mode_override = "lp" if large_graph_lssp_only else None
+        if large_graph_lssp_only:
+            logger.info(
+                "%s large-graph policy enabled: using cheap DAG baseline/selection during optimization; "
+                "final reporting will evaluate only the selected partition with LSSP.",
+                str(name).upper(),
+            )
+
         # get a naive solution first
-        best_cost, partition = _get_naive_baseline(task_graph, naive_opt_func_name, config)
+        best_cost, partition = _get_naive_baseline(
+            task_graph,
+            naive_opt_func_name,
+            config,
+            objective_mode_override=naive_mode_override,
+        )
             
         logger.info(f"naive assignment has a opt_cost of {best_cost}")
 
@@ -236,12 +292,14 @@ class MethodRegistry:
         print(partition)
         partition = _normalize_partition(partition)
         print(partition)
-        diff_meta = _extract_diff_gnn_order_meta(func) if str(name).lower() == "diff_gnn_order" else {}
+        method_key = str(name).lower()
+        diff_meta = _extract_diff_gnn_order_meta(func) if method_key == "diff_gnn_order" else {}
         schedule_metrics = _compute_schedule_metrics(
             task_graph,
             partition,
             method_name=name,
             learned_sw_scores=diff_meta.get("sw_priority_scores"),
+            final_lssp_only=large_graph_lssp_only,
         )
         schedule_result = schedule_metrics["lssp_result"]
         partition = dict(schedule_metrics["partition"])
@@ -251,7 +309,22 @@ class MethodRegistry:
         best_makespan = float(schedule_metrics["best_makespan"])
         partition_cost = task_graph.evaluate_partition_cost(partition)
         reported_opt_cost = float(best_cost)
-        if str(name).lower() == "diff_gnn_order":
+        if large_graph_lssp_only and method_key == "diff_gnn_order":
+            reported_opt_cost = float(best_makespan)
+            logger.info(
+                "DIFF_GNN_ORDER large-graph final reporting: lssp=%.6f lssp_swprio=%s -> reported_opt_cost=%.6f",
+                makespan,
+                f"{float(lssp_swprio_makespan):.6f}" if lssp_swprio_makespan is not None else "nan",
+                reported_opt_cost,
+            )
+        elif large_graph_lssp_only and method_key == "diff_gnn":
+            reported_opt_cost = float(makespan)
+            logger.info(
+                "DIFF_GNN large-graph final reporting: lssp=%.6f -> reported_opt_cost=%.6f",
+                makespan,
+                reported_opt_cost,
+            )
+        elif method_key == "diff_gnn_order":
             # diff_gnn_order is trained with a surrogate objective, but final reporting
             # for this project is based only on executable LSSP schedules.
             reported_opt_cost = float(best_makespan)

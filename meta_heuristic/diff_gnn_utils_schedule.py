@@ -8,6 +8,7 @@ import math
 import sys
 import time
 from collections.abc import Mapping
+from pathlib import Path
 
 # torch-geometric imports
 try:
@@ -31,11 +32,17 @@ logger = LogManager.get_logger(__name__)
 _MKSPAN_DIFFGNN_DEFAULTS = {
     "iter": 1000,
     "verbose": 1000,
+    "progress_log_every": 0,
+    "progress_to_stdout": False,
     "device": "gpu",
     "hidden_dim": 256,
     "num_layers": 3,
     "dropout": 0.2,
     "model": "default",
+    "feature_profile": "default",
+    "edge_weight_mode": "comm",
+    "edge_weight_learner": "none",
+    "surrogate_mode": "single_sw_resource",
     "selection_metric": "queue",
     "selection_metric_train": "queue",
     "selection_metric_final": "queue",
@@ -63,10 +70,13 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     "fill_allow_worsen": 0.0,
     "enable_swap": True,
     "search_strategy": "critical",
-    "candidate_top_k": 16,
+    "candidate_top_k": 64,
     "critical_slack_frac": 0.05,
     "candidate_include_neighbors": True,
     "candidate_include_cut_endpoints": True,
+    "final_all_decode_candidates": True,
+    "print_progress": False,
+    "print_every": 10,
     "dls_steps": 2,
     "dls_flip_eta": 0.35,
     "dls_swap_eta": 0.18,
@@ -77,6 +87,67 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     "dls_fill_decode": True,
 }
 
+_LARGE_GRAPH_FAST_THRESHOLD = 1000
+
+_DIFFGNN_DATASET_OVERRIDES = {
+    "paper_fig3_11node": {
+        "iter": 100,
+        "verbose": 100,
+        "hard_eval_every": 20,
+        "decode_speedup_weight": 0.25,
+        "postprocess": {
+            "candidate_top_k": 16,
+        },
+    },
+    "mobile_net_tosa": {
+        "iter": 500,
+        "verbose": 500,
+        "hard_eval_every": 50,
+        "decode_speedup_weight": 0.25,
+        "postprocess": {
+            "candidate_top_k": 64,
+        },
+    },
+    "squeezenet_like_1000": {
+        "iter": 200,
+        "verbose": 200,
+        "hard_eval_every": 20,
+        "decode_speedup_weight": 0.0,
+        "postprocess": {
+            "candidate_top_k": 32,
+            "adaptive_max_iters": True,
+            "adaptive_large_n": 128,
+            "adaptive_large_cap": 10,
+            "final_all_decode_candidates": True,
+            "print_progress": True,
+            "print_every": 10,
+        },
+    },
+    "squeezenet_like_10000": {
+        "iter": 10,
+        "verbose": 1,
+        "progress_log_every": 1,
+        "progress_to_stdout": True,
+        "hard_eval_every": 10,
+        "decode_speedup_weight": 0.0,
+        "postprocess": {
+            "candidate_top_k": 64,
+            "adaptive_max_iters": True,
+            "adaptive_large_n": 128,
+            "adaptive_large_cap": 10,
+            "final_all_decode_candidates": True,
+            "print_progress": True,
+            "print_every": 10,
+        },
+    },
+    "rez_net_tosa": {},
+    "squeeze_net_tosa": {},
+    "anomaly_detection_tosa": {},
+    "image_classification_tosa": {},
+    "keyword_spotting_tosa": {},
+    "visual_wake_words_tosa": {},
+}
+
 try:
     from .diff_gnn_models import build_placement_model
 except Exception:
@@ -85,6 +156,98 @@ try:
     from .lssp_postprocess import improve_with_lssp_local_search
 except Exception:
     from lssp_postprocess import improve_with_lssp_local_search  # type: ignore
+
+
+def _resolve_diffgnn_dataset_name(config):
+    if not isinstance(config, Mapping):
+        return None
+
+    graph_file = str(config.get("graph-file", "") or "").strip()
+    if graph_file:
+        return Path(graph_file).stem or None
+
+    taskgraph_pickle = str(config.get("taskgraph-pickle", "") or "").strip()
+    if not taskgraph_pickle:
+        return None
+
+    stem = Path(taskgraph_pickle).stem
+    if stem.startswith("taskgraph-"):
+        stem = stem[len("taskgraph-"):]
+    if "_area-" in stem:
+        stem = stem.split("_area-", 1)[0]
+    return stem or None
+
+
+def _apply_recursive_defaults(target: dict, defaults: Mapping) -> None:
+    for key, value in defaults.items():
+        if isinstance(value, Mapping):
+            current = target.get(key, None)
+            if isinstance(current, Mapping):
+                merged = dict(current)
+                _apply_recursive_defaults(merged, value)
+                target[key] = merged
+            elif key not in target:
+                nested = {}
+                _apply_recursive_defaults(nested, value)
+                target[key] = nested
+            continue
+        target.setdefault(key, value)
+
+
+def _apply_dataset_specific_diffgnn_defaults(diff_cfg: dict, config):
+    dataset_name = _resolve_diffgnn_dataset_name(config)
+    if not dataset_name:
+        return None
+
+    overrides = _DIFFGNN_DATASET_OVERRIDES.get(dataset_name, None)
+    if not isinstance(overrides, Mapping) or not overrides:
+        return dataset_name
+
+    _apply_recursive_defaults(diff_cfg, overrides)
+    logger.info(
+        "Applied dataset-specific diff_gnn defaults for %s: %s",
+        dataset_name,
+        overrides,
+    )
+    return dataset_name
+
+
+def _apply_large_graph_cheap_dag_policy(TG, diff_cfg: dict, method_label: str = "diff_gnn") -> bool:
+    """
+    For large graphs, keep all intermediate ranking/postprocess work on the
+    cheap DAG surrogate and defer full LSSP evaluation to the final reporting
+    path in MethodRegistry.
+    """
+    if TG is None or not hasattr(TG, "graph"):
+        return False
+
+    enabled = bool(diff_cfg.get("large_graph_fast_policy", True))
+    threshold = int(diff_cfg.get("large_graph_fast_threshold", _LARGE_GRAPH_FAST_THRESHOLD))
+    num_nodes = int(len(TG.graph.nodes()))
+    if not enabled or num_nodes <= threshold:
+        return False
+
+    diff_cfg["selection_metric"] = "legacy_lp"
+    diff_cfg["selection_metric_train"] = "legacy_lp"
+    diff_cfg["selection_metric_final"] = "legacy_lp"
+
+    post_cfg_raw = diff_cfg.get("postprocess", {})
+    post_cfg = dict(post_cfg_raw) if isinstance(post_cfg_raw, Mapping) else {}
+    post_cfg["eval_mode"] = "legacy_lp"
+    post_cfg["during_train"] = False
+    post_cfg["during_eval"] = False
+    post_cfg["use_dual_lssp_postprocess"] = False
+    diff_cfg["postprocess"] = post_cfg
+
+    logger.info(
+        "%s large-graph cheap DAG policy enabled for N=%d (> %d): "
+        "selection_metric(train/final)=legacy_lp, postprocess.eval_mode=legacy_lp, "
+        "full LSSP deferred to final MethodRegistry reporting.",
+        method_label,
+        num_nodes,
+        threshold,
+    )
+    return True
 
 
 def _set_global_seeds(seed: int) -> None:
@@ -105,6 +268,17 @@ def _enable_determinism(seed: int) -> None:
     # Avoid TF32 variability on Ampere/Hopper
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
+
+
+def _softmax_beta_reduce(values: torch.Tensor, beta_softmax: float) -> torch.Tensor:
+    if values.ndim == 0:
+        return values
+    beta = float(max(beta_softmax, 1e-6))
+    return (1.0 / beta) * torch.logsumexp(beta * values, dim=0)
+
+
+def _softmax_beta_pair(a: torch.Tensor, b: torch.Tensor, beta_softmax: float) -> torch.Tensor:
+    return _softmax_beta_reduce(torch.stack((a, b)), beta_softmax)
 
 
 def _relaxed_binary_assignment(logits2, temperature, hard, sampler="soft", logit_scale=1.0, center_logits=False):
@@ -772,16 +946,18 @@ def _differentiable_makespan_loss(
     usage_balance_coeff=0.0,
     target_hw_frac=None,
     partition_cost_coeff=0.0,
+    surrogate_mode="single_sw_resource",
 ):
     """
     Compute differentiable surrogate loss approximating makespan + penalties.
     - probs_tensor: (N,) values in [0,1] (probability of hardware)
     - Execution time per node = p*hw + (1-p)*sw (differentiable)
     - Comm delay between u->v approximated as |p_u - p_v| * comm_cost
-    - Longest-path computed with DP over topo order, using soft-max (logsumexp with beta) to approximate max
+    - `surrogate_mode="critical_path"` reproduces the old relaxed critical-path DP
+    - `surrogate_mode="single_sw_resource"` adds a soft software-resource timeline
+      so the surrogate better matches the discrete DAG/LSSP schedulers
     """
     device = probs_tensor.device
-    N = probs_tensor.shape[0]
     # tensors of hw/sw/area/comm
     hw_times = torch.tensor([TG.hardware_costs[n] for n in node_list], dtype=torch.float32, device=device)
     sw_times = torch.tensor([TG.software_costs[n] for n in node_list], dtype=torch.float32, device=device)
@@ -806,30 +982,62 @@ def _differentiable_makespan_loss(
         else:
             preds.append([(node_to_idx[p], float(TG.communication_costs.get((p, node), 0.0))) for p in pn])
 
-    # DP: dp[i] = exec_time[i] + softmax_beta( dp[pred] + comm_delay(pred,i) )
-    dp = torch.zeros((len(topo),), dtype=torch.float32, device=device)
-    for i, node in enumerate(topo):
-        if len(preds[i]) == 0:
-            dp[i] = exec_time[node_to_idx[node]]
-        else:
-            vals = []
-            for (pidx, comm_cost) in preds[i]:
-                # comm delay proportional to difference in prob
-                comm = torch.abs(probs_tensor[pidx] - probs_tensor[node_to_idx[node]]) * comm_cost
-                vals.append(dp[pidx] + comm)
-            vals_t = torch.stack(vals)  # (k,)
-            # soft maximum via logsumexp
-            sm = (1.0 / beta_softmax) * torch.logsumexp(beta_softmax * vals_t, dim=0)
-            dp[i] = exec_time[node_to_idx[node]] + sm
+    surrogate_key = str(surrogate_mode or "single_sw_resource").strip().lower()
+    if surrogate_key in {"single_sw_resource", "single_sw", "soft_single_sw", "sw_resource"}:
+        finish = torch.zeros((len(topo),), dtype=torch.float32, device=device)
+        sw_available = torch.tensor(0.0, dtype=torch.float32, device=device)
+        topo_pos = {node: i for i, node in enumerate(topo)}
 
-    # makespan approximate: soft-maximum across dp
-    makespan_soft = (1.0 / beta_softmax) * torch.logsumexp(beta_softmax * dp, dim=0)
+        for i, node in enumerate(topo):
+            node_idx = node_to_idx[node]
+            if len(preds[i]) == 0:
+                dep_ready = torch.tensor(0.0, dtype=torch.float32, device=device)
+            else:
+                vals = []
+                for (pidx, comm_cost) in preds[i]:
+                    pred_node = node_list[pidx]
+                    pred_finish = finish[topo_pos[pred_node]]
+                    comm = torch.abs(probs_tensor[pidx] - probs_tensor[node_idx]) * comm_cost
+                    vals.append(pred_finish + comm)
+                dep_ready = _softmax_beta_reduce(torch.stack(vals), beta_softmax)
+
+            finish_hw = dep_ready + hw_times[node_idx]
+            start_sw = _softmax_beta_pair(dep_ready, sw_available, beta_softmax)
+            finish_sw = start_sw + sw_times[node_idx]
+            prob_hw = probs_tensor[node_idx]
+            prob_sw = 1.0 - prob_hw
+
+            finish[i] = prob_hw * finish_hw + prob_sw * finish_sw
+            sw_available = prob_hw * sw_available + prob_sw * finish_sw
+
+        makespan_soft = _softmax_beta_reduce(finish, beta_softmax)
+    elif surrogate_key in {"critical_path", "legacy_critical_path", "legacy"}:
+        # DP: dp[i] = exec_time[i] + softmax_beta( dp[pred] + comm_delay(pred,i) )
+        dp = torch.zeros((len(topo),), dtype=torch.float32, device=device)
+        for i, node in enumerate(topo):
+            if len(preds[i]) == 0:
+                dp[i] = exec_time[node_to_idx[node]]
+            else:
+                vals = []
+                for (pidx, comm_cost) in preds[i]:
+                    comm = torch.abs(probs_tensor[pidx] - probs_tensor[node_to_idx[node]]) * comm_cost
+                    vals.append(dp[pidx] + comm)
+                dp[i] = exec_time[node_to_idx[node]] + _softmax_beta_reduce(torch.stack(vals), beta_softmax)
+
+        makespan_soft = _softmax_beta_reduce(dp, beta_softmax)
+    else:
+        raise ValueError(
+            f"Unsupported surrogate_mode '{surrogate_mode}'. "
+            "Use 'single_sw_resource' or 'critical_path'."
+        )
 
     # area penalty (differentiable): normalized area used
     area_used = torch.dot(probs_tensor, areas)
     area_frac = area_used / float(total_area)
     area_violation = F.relu(area_frac - float(TG.area_constraint))
     area_penalty = area_penalty_coeff * area_violation
+
+    # print(area_penalty_coeff)
 
     # optional balance penalty to push hardware usage toward a target fraction
     if target_hw_frac is None:
@@ -864,6 +1072,7 @@ def _differentiable_makespan_loss(
         "usage_balance": usage_balance.item() if isinstance(usage_balance, torch.Tensor) else usage_balance,
         "entropy_like": entropy_like.item(),
         "expected_partition_cost": expected_partition_cost.item(),
+        "surrogate_mode": surrogate_key,
         "loss": loss.item()
     }
 
@@ -882,13 +1091,17 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     tau_start = float(config.get("tau_start", 1.0))
     tau_final = float(config.get("tau_final", 0.1))
     beta_softmax = float(config.get("beta_softmax", 20.0))
+    
     area_penalty_coeff = float(config.get("area_penalty_coeff", 1e5))
+    soft_makespan_coeff = float(config.get("soft_makespan_coeff", 1.0))
+
     reg_cfg = _resolve_regularizer_config(config, TG)
     entropy_coeff = reg_cfg["entropy_coeff"]
     usage_balance_coeff = reg_cfg["usage_balance_coeff"]
     target_hw_frac = reg_cfg["target_hw_frac"]
     partition_cost_coeff = reg_cfg["partition_cost_coeff"]
     regularizer_profile = reg_cfg["profile"]
+    surrogate_mode = str(config.get("surrogate_mode", "single_sw_resource")).strip().lower()
     selection_metric_train = str(config.get("selection_metric_train", config.get("selection_metric", "queue"))).lower()
     selection_metric_final = str(config.get("selection_metric_final", selection_metric_train)).lower()
     seed = int(config.get("seed", 42))
@@ -921,12 +1134,22 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     use_lssp_final = post_mode in {"lssp", "hybrid"}
     post_eval_mode = str(post_cfg.get("eval_mode", config.get("lssp_postprocess_eval", "taskgraph"))).lower()
     post_max_iters = int(post_cfg.get("max_iters", config.get("lssp_postprocess_max_iters", 64)))
+    adaptive_post_max_iters = bool(post_cfg.get("adaptive_max_iters", config.get("adaptive_post_max_iters", False)))
+    adaptive_post_large_n = int(post_cfg.get("adaptive_large_n", config.get("adaptive_post_large_n", 128)))
+    adaptive_post_large_cap = int(post_cfg.get("adaptive_large_cap", config.get("adaptive_post_large_cap", 48)))
     post_enable_area_fill = bool(post_cfg.get("enable_area_fill", config.get("lssp_postprocess_area_fill", True)))
     post_fill_allow_worsen = float(post_cfg.get("fill_allow_worsen", config.get("lssp_postprocess_fill_allow_worsen", 0.0)))
     post_enable_swap = bool(post_cfg.get("enable_swap", config.get("lssp_postprocess_enable_swap", True)))
     post_search_strategy = str(post_cfg.get("search_strategy", config.get("lssp_postprocess_search_strategy", "critical"))).lower()
     post_candidate_top_k = int(post_cfg.get("candidate_top_k", config.get("lssp_postprocess_candidate_top_k", 16)))
     post_critical_slack_frac = float(post_cfg.get("critical_slack_frac", config.get("lssp_postprocess_critical_slack_frac", 0.05)))
+    post_final_all_decode_candidates = bool(
+        post_cfg.get("final_all_decode_candidates", config.get("lssp_postprocess_final_all_decode_candidates", True))
+    )
+    post_print_progress = bool(
+        post_cfg.get("print_progress", config.get("lssp_postprocess_print_progress", False))
+    )
+    post_print_every = max(1, int(post_cfg.get("print_every", config.get("lssp_postprocess_print_every", 10))))
     post_candidate_include_neighbors = bool(
         post_cfg.get("candidate_include_neighbors", config.get("lssp_postprocess_candidate_include_neighbors", True))
     )
@@ -945,6 +1168,14 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     dls_lssp_pri_coeff = float(post_cfg.get("dls_lssp_pri_coeff", config.get("dls_lssp_pri_coeff", 0.35)))
     dls_lssp_beta = float(post_cfg.get("dls_lssp_beta", config.get("dls_lssp_beta", 8.0)))
     dls_lssp_fill_eta = float(post_cfg.get("dls_lssp_fill_eta", config.get("dls_lssp_fill_eta", 0.20)))
+    if adaptive_post_max_iters and len(node_list) >= adaptive_post_large_n and post_max_iters > adaptive_post_large_cap:
+        logger.info(
+            "DiffGNN adaptive postprocess cap: max_iters %d -> %d for N=%d",
+            post_max_iters,
+            adaptive_post_large_cap,
+            len(node_list),
+        )
+        post_max_iters = adaptive_post_large_cap
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -954,13 +1185,14 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     print(model)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     logger.info(
-        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, reg_profile=%s, selection_metric_train=%s, selection_metric_final=%s, post_mode=%s, post_during_train=%s, feature_profile=%s, edge_weight_mode=%s, paper_sigma_enabled=%s, paper_sigma=%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s, hard_train_outputs=%s, hard_eval_every=%d, hard_eval_only_final=%s, checkpoint_eval_when_final_only=%s, decode_speedup_weight=%.2f",
+        "DiffGNN training: sampler=%s, epochs=%d, lr=%.2e, tau_start=%.2f->%.2f, reg_profile=%s, surrogate_mode=%s, selection_metric_train=%s, selection_metric_final=%s, post_mode=%s, post_during_train=%s, feature_profile=%s, edge_weight_mode=%s, paper_sigma_enabled=%s, paper_sigma=%.2f, entropy_coeff=%.2e, usage_balance_coeff=%.2e, partition_cost_coeff=%.2e, logit_scale=%.2f, center_logits=%s, hard_train_outputs=%s, hard_eval_every=%d, hard_eval_only_final=%s, checkpoint_eval_when_final_only=%s, decode_speedup_weight=%.2f",
         sampler,
         epochs,
         lr,
         tau_start,
         tau_final,
         regularizer_profile,
+        surrogate_mode,
         selection_metric_train,
         selection_metric_final,
         post_mode,
@@ -1012,7 +1244,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         )
     if use_lssp_final:
         logger.info(
-            "DiffGNN final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s search=%s top_k=%d slack_frac=%.3f",
+            "DiffGNN final postprocess enabled: eval_mode=%s during_train=%s during_eval=%s max_iters=%d area_fill=%s fill_allow_worsen=%.3f swap=%s search=%s top_k=%d slack_frac=%.3f all_decode_candidates=%s print_progress=%s print_every=%d",
             post_eval_mode,
             str(post_during_train),
             str(post_during_eval),
@@ -1023,6 +1255,9 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
             post_search_strategy,
             post_candidate_top_k,
             post_critical_slack_frac,
+            str(post_final_all_decode_candidates),
+            str(post_print_progress),
+            post_print_every,
         )
 
     best_sched_cost = float('inf')
@@ -1032,6 +1267,10 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     edge_weight = getattr(data, "edge_weight", None)
     edge_attr = getattr(data, "edge_attr", None)
     paper_hgp = getattr(data, "paper_hgp", None)
+    configured_progress_every = int(config.get("progress_log_every", 0) or 0)
+    progress_log_every = max(1, configured_progress_every) if configured_progress_every > 0 else max(1, epochs // 10)
+    progress_to_stdout = bool(config.get("progress_to_stdout", False))
+    train_t0 = time.perf_counter()
 
     tau = tau_start
     for ep in range(1, epochs + 1):
@@ -1077,7 +1316,16 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
             usage_balance_coeff=usage_balance_coeff,
             target_hw_frac=target_hw_frac,
             partition_cost_coeff=partition_cost_coeff,
+            surrogate_mode=surrogate_mode,
         )
+        # Apply additional scaling of the surrogate makespan if requested.
+        if float(soft_makespan_coeff) != 1.0:
+            makespan_val = float(info.get("makespan_surrogate", 0.0))
+            makespan_tensor = torch.tensor(makespan_val, dtype=loss.dtype, device=loss.device)
+            loss = loss + (float(soft_makespan_coeff) - 1.0) * makespan_tensor
+            info["soft_makespan_coeff"] = float(soft_makespan_coeff)
+            info["loss"] = loss.item()
+
         loss.backward()
         optimizer.step()
 
@@ -1159,9 +1407,13 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                     best_assign = solution.copy()
                     best_probs = np.asarray(decoded_probs, dtype=float).copy()
 
-        if ep % max(1, epochs // 10) == 0 or ep <= 5:
+        should_log_epoch = (ep <= min(5, epochs)) or (ep % progress_log_every == 0) or (ep == epochs)
+        if should_log_epoch:
+            elapsed_sec = time.perf_counter() - train_t0
+            avg_epoch_sec = elapsed_sec / max(1, ep)
+            eta_sec = avg_epoch_sec * max(0, epochs - ep)
             logger.info(
-                "Epoch %d/%d loss=%.6f surrogate_makespan=%.6f area_frac=%.4f area_pen=%.3f sched_best=%.6f",
+                "Epoch %d/%d loss=%.6f surrogate_makespan=%.6f area_frac=%.4f area_pen=%.3f sched_best=%.6f elapsed=%.2fs avg_epoch=%.3fs eta=%.2fs",
                 ep,
                 epochs,
                 info["loss"],
@@ -1169,7 +1421,22 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                 info["area_frac"],
                 info["area_penalty"],
                 best_sched_cost,
+                elapsed_sec,
+                avg_epoch_sec,
+                eta_sec,
             )
+            if progress_to_stdout:
+                print(
+                    "[diff_gnn] "
+                    f"epoch={ep}/{epochs} "
+                    f"loss={info['loss']:.6f} "
+                    f"soft_makespan={info['makespan_surrogate']:.6f} "
+                    f"best_sched={best_sched_cost:.6f} "
+                    f"elapsed={elapsed_sec:.2f}s "
+                    f"avg_epoch={avg_epoch_sec:.3f}s "
+                    f"eta={eta_sec:.2f}s",
+                    flush=True,
+                )
 
     # Final deterministic prediction using low-temperature hard sampling
     logger.info("DiffGNN final decode started.")
@@ -1223,42 +1490,120 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         if use_lssp_final:
             post_t0 = time.perf_counter()
             logger.info(
-                "DiffGNN final postprocess started: mode=%s eval_mode=%s max_iters=%d swap=%s",
+                "DiffGNN final postprocess started: mode=%s eval_mode=%s max_iters=%d swap=%s all_candidates=%s",
                 post_mode,
                 post_eval_mode,
                 post_max_iters,
                 str(post_enable_swap),
+                str(post_final_all_decode_candidates),
             )
-            final_solution, post_info = improve_with_lssp_local_search(
-                TG,
-                final_solution,
-                max_iters=post_max_iters,
-                eval_mode=post_eval_mode,
-                enable_area_fill=post_enable_area_fill,
-                fill_allow_worsen=post_fill_allow_worsen,
-                enable_swap=post_enable_swap,
-                search_strategy=post_search_strategy,
-                candidate_top_k=post_candidate_top_k,
-                critical_slack_frac=post_critical_slack_frac,
-                candidate_include_neighbors=post_candidate_include_neighbors,
-                candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
+            post_seed_candidates = final_decode_candidates
+            if not post_final_all_decode_candidates:
+                post_seed_candidates = [
+                    (
+                        final_choice_label,
+                        final_solution,
+                        np.asarray(final_probs_repaired, dtype=float).copy(),
+                    )
+                ]
+            print(
+                "[diff_gnn] "
+                f"postprocess_start mode={post_mode} "
+                f"eval_mode={post_eval_mode} "
+                f"max_iters={post_max_iters} "
+                f"all_candidates={str(post_final_all_decode_candidates)} "
+                f"print_every={post_print_every} "
+                f"candidates={len(post_seed_candidates)}",
+                flush=True,
             )
-            logger.info(
-                "DiffGNN final postprocess: improved=%s cost=%.3f hw_area=%.3f/%.3f (%s) search=%s avg_pool=%.1f avg_selected=%.1f",
-                str(post_info["improved"]),
-                post_info["cost"],
-                post_info["hw_area"],
-                post_info["budget"],
-                post_info["eval_mode"],
-                str(post_info.get("search_strategy", post_search_strategy)),
-                float(post_info.get("avg_candidate_pool", 0.0)),
-                float(post_info.get("avg_selected_candidates", 0.0)),
-            )
+            selected_post_label = final_choice_label
+            selected_post_info = None
+            selected_post_lssp_cost = float("nan")
+
+            for cand_idx, (cand_label, cand_solution, _) in enumerate(post_seed_candidates, start=1):
+                print(
+                    "[diff_gnn] "
+                    f"postprocess_candidate_start idx={cand_idx}/{len(post_seed_candidates)} "
+                    f"label={cand_label} "
+                    f"current_best={final_sched_cost_train:.6f}",
+                    flush=True,
+                )
+                candidate_solution, post_info = improve_with_lssp_local_search(
+                    TG,
+                    cand_solution,
+                    max_iters=post_max_iters,
+                    eval_mode=post_eval_mode,
+                    enable_area_fill=post_enable_area_fill,
+                    fill_allow_worsen=post_fill_allow_worsen,
+                    enable_swap=post_enable_swap,
+                    search_strategy=post_search_strategy,
+                    candidate_top_k=post_candidate_top_k,
+                    critical_slack_frac=post_critical_slack_frac,
+                    candidate_include_neighbors=post_candidate_include_neighbors,
+                    candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
+                    progress=post_print_progress,
+                    progress_every=post_print_every,
+                    progress_prefix=f"[diff_gnn][postprocess][{cand_idx}/{len(post_seed_candidates)}:{cand_label}]",
+                )
+                post_cost = _evaluate_discrete_solution(
+                    TG,
+                    candidate_solution,
+                    metric=selection_metric_train,
+                )
+                print(
+                    "[diff_gnn] "
+                    f"postprocess_candidate_done idx={cand_idx}/{len(post_seed_candidates)} "
+                    f"label={cand_label} "
+                    f"post_cost={post_cost:.6f} "
+                    f"lssp_cost={float(post_info.get('cost', float('nan'))):.6f}",
+                    flush=True,
+                )
+                if post_cost <= final_sched_cost_train:
+                    final_choice_label = cand_label
+                    final_solution = candidate_solution
+                    final_sched_cost_train = post_cost
+                    final_probs_repaired = _solution_to_array(candidate_solution, node_list)
+                    selected_post_label = cand_label
+                    selected_post_info = post_info
+                    selected_post_lssp_cost = float(post_info.get("cost", float("nan")))
+
+            if selected_post_info is not None:
+                logger.info(
+                    "DiffGNN final postprocess: decode_candidate=%s tried=%d lssp_cost=%.3f improved=%s cost=%.3f hw_area=%.3f/%.3f (%s) elapsed=%.3fs eval_calls=%d stage1_iters=%d stage2_iters=%d avg_eval=%.3fms avg_iter=%.3fms search=%s avg_pool=%.1f avg_selected=%.1f",
+                    selected_post_label,
+                    len(post_seed_candidates),
+                    selected_post_lssp_cost,
+                    str(selected_post_info["improved"]),
+                    selected_post_info["cost"],
+                    selected_post_info["hw_area"],
+                    selected_post_info["budget"],
+                    selected_post_info["eval_mode"],
+                    float(selected_post_info.get("elapsed_sec", 0.0)),
+                    int(selected_post_info.get("eval_calls", 0)),
+                    int(selected_post_info.get("stage1_iters", 0)),
+                    int(selected_post_info.get("stage2_iters", 0)),
+                    float(selected_post_info.get("avg_eval_ms", 0.0)),
+                    float(selected_post_info.get("avg_iter_ms", 0.0)),
+                    str(selected_post_info.get("search_strategy", post_search_strategy)),
+                    float(selected_post_info.get("avg_candidate_pool", 0.0)),
+                    float(selected_post_info.get("avg_selected_candidates", 0.0)),
+                )
+            else:
+                logger.info(
+                    "DiffGNN final postprocess: no candidate improved over decode baseline (candidate=%s tried=%d metric=%s cost=%.6f)",
+                    final_choice_label,
+                    len(post_seed_candidates),
+                    selection_metric_train,
+                    final_sched_cost_train,
+                )
             logger.info("DiffGNN final postprocess elapsed: %.3fs", time.perf_counter() - post_t0)
-            post_cost = _evaluate_discrete_solution(TG, final_solution, metric=selection_metric_train)
-            if post_cost <= final_sched_cost_train:
-                final_sched_cost_train = post_cost
-                final_probs_repaired = _solution_to_array(final_solution, node_list)
+            print(
+                "[diff_gnn] "
+                f"postprocess_done best_label={final_choice_label} "
+                f"best_cost={final_sched_cost_train:.6f} "
+                f"elapsed={time.perf_counter() - post_t0:.3f}s",
+                flush=True,
+            )
 
     # choose best between tracked best and final
     if best_assign is None or final_sched_cost_train < best_sched_cost:
@@ -1318,6 +1663,7 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
       - usage_balance_coeff: 0.0 (set >0 to push hardware usage toward target_hw_frac)
       - target_hw_frac: defaults to min(area_constraint, 0.3)
       - partition_cost_coeff: 5e-2 (scaled up automatically when area_constraint is large)
+      - surrogate_mode: single_sw_resource|critical_path (default: single_sw_resource)
       - regularizer_profile: legacy|modern|minimal (default: legacy)
       - selection_metric_train: queue|legacy_lp (default: queue)
       - selection_metric_final: legacy_lp|queue (default: selection_metric_train)
@@ -1379,7 +1725,6 @@ def optimize_diff_gnn(TG, config=None, device='cpu'):
     )
 
     logger.info("DiffGNN model selected: %s", model_name)
-    print(model)
 
     return _train_with_relaxed_binary(TG, model, data, node_list, config, device)
 
@@ -1421,16 +1766,18 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
     logger.info("Starting simulate_diff_GNN")
 
     TG = getattr(func_to_optimize, "__self__", None)
-    
-    print("Sid:::------Task graph: ", TG)
 
     if TG is None:
         msg = "func_to_optimize must be a bound TaskGraph method so the graph can be accessed."
         logger.error(msg)
         raise ValueError(msg)
 
-    # Pull method config and fill missing values from mkspan defaults.
+    # diff_gnn should use its own explicit YAML block when present; otherwise it
+    # falls back to the runtime Python defaults below.
     diff_cfg = dict(config.get("diffgnn", {}))
+    dataset_name = _apply_dataset_specific_diffgnn_defaults(diff_cfg, config)
+    if dataset_name:
+        logger.info("diff_gnn dataset context resolved as: %s", dataset_name)
     for key, value in _MKSPAN_DIFFGNN_DEFAULTS.items():
         diff_cfg.setdefault(key, value)
 
@@ -1466,6 +1813,7 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
     for key, value in _MKSPAN_POSTPROCESS_DEFAULTS.items():
         post_cfg.setdefault(key, value)
     diff_cfg["postprocess"] = post_cfg
+    large_graph_dag_policy = _apply_large_graph_cheap_dag_policy(TG, diff_cfg, method_label="diff_gnn")
 
     # Lightweight defaults for faster/more stable convergence when users keep the
     # config minimal. Any explicit regularizer key in config overrides this block.
@@ -1538,4 +1886,9 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
         selection_metric,
         result.get("selection_metric_train", "unknown"),
     )
+    if large_graph_dag_policy:
+        logger.info(
+            "simulate_diff_GNN large-graph policy active: final MethodRegistry reporting will "
+            "evaluate only the selected final partition with LSSP."
+        )
     return best_cost, sol_arr

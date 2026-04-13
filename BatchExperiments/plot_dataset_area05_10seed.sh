@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+export HWSW_METHOD_RUNTIME_PROFILE="${HWSW_METHOD_RUNTIME_PROFILE:-arato}"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-/people/dass304/.conda/envs/combopt/bin/python}"
 
@@ -37,14 +39,15 @@ METHODS=(
 )
 
 DATASETS=(
-  "paper_fig3_11node"
-  "mobile_net_tosa"
-  "rez_net_tosa"
-  "squeeze_net_tosa"
   "anomaly_detection_tosa"
-  "image_classification_tosa"
   "keyword_spotting_tosa"
+  "image_classification_tosa"
   "visual_wake_words_tosa"
+  "squeeze_net_tosa"
+  "rez_net_tosa"
+  "mobile_net_tosa"
+  "squeezenet_like_1000"
+  # "paper_fig3_11node"
 )
 
 # Keep plotting aligned with run_dataset_area05_10seed.sh's canonical 10-seed batch.
@@ -63,10 +66,48 @@ fi
 RESULT_TAG="dataset_area05_10seed"
 OUTDIR="$ROOT/BatchExperiments/dataset_area05"
 AGGREGATE_MANIFEST="$OUTDIR/${RESULT_TAG}_plot_manifest.csv"
-MIP_PLOT_METRIC="${MIP_PLOT_METRIC:-lssp}"
+MIP_PLOT_METRIC="${MIP_PLOT_METRIC:-lp}"
+LARGE_SCALE_OUTDIR="${LARGE_SCALE_OUTDIR:-$ROOT/BatchExperiments/large_scale_area05}"
+
+uses_large_scale_borrowed_results() {
+  local dataset="$1"
+  [[ "$dataset" == "squeezenet_like_1000" ]]
+}
+
+sync_large_scale_plot_inputs() {
+  local dataset="$1"
+  local dataset_dir="$OUTDIR/$dataset"
+  local source_dataset_dir="$LARGE_SCALE_OUTDIR/$dataset"
+  local source_manifest="$source_dataset_dir/large_scale_area05_10seed_${dataset}_selected_manifest.csv"
+  local target_manifest="$dataset_dir/${RESULT_TAG}_${dataset}_selected_manifest.csv"
+
+  if ! uses_large_scale_borrowed_results "$dataset"; then
+    return 0
+  fi
+  if [[ ! -d "$source_dataset_dir" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$dataset_dir"
+  if [[ -f "$source_manifest" ]]; then
+    cp -a "$source_manifest" "$target_manifest"
+  fi
+  for method in "${METHODS[@]}"; do
+    local src_method_dir="$source_dataset_dir/$method"
+    local dst_method_dir="$dataset_dir/$method"
+    if [[ -d "$src_method_dir" ]]; then
+      mkdir -p "$dst_method_dir"
+      cp -a "$src_method_dir/." "$dst_method_dir/"
+    fi
+  done
+}
 
 mkdir -p "$OUTDIR"
 rm -f "$AGGREGATE_MANIFEST"
+
+for dataset in "${DATASETS[@]}"; do
+  sync_large_scale_plot_inputs "$dataset"
+done
 
 DATASET_MANIFESTS=()
 for dataset in "${DATASETS[@]}"; do

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+export HWSW_METHOD_RUNTIME_PROFILE="${HWSW_METHOD_RUNTIME_PROFILE:-arato}"
+
 USERNAME=$(whoami)
 
 for area in 0.1; do

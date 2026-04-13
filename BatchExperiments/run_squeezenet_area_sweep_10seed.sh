@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+export HWSW_METHOD_RUNTIME_PROFILE="${HWSW_METHOD_RUNTIME_PROFILE:-arato}"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-/people/dass304/.conda/envs/combopt/bin/python}"
 GRAPH_NAME="squeeze_net_tosa"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import math
 import os
 import random
@@ -20,6 +21,7 @@ if __name__ == "__main__":
 
 try:
     from .diff_gnn_utils_schedule import (
+        _apply_large_graph_cheap_dag_policy,
         _build_torchgeo_data,
         _dls_refine_probs,
         _enable_determinism,
@@ -32,6 +34,7 @@ try:
     )
 except Exception:
     from diff_gnn_utils_schedule import (  # type: ignore
+        _apply_large_graph_cheap_dag_policy,
         _build_torchgeo_data,
         _dls_refine_probs,
         _enable_determinism,
@@ -83,6 +86,9 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "edge_weight_min_scale": 0.5,
     "edge_weight_max_scale": 1.5,
     "sinkhorn_iters": 2,
+    "large_graph_order_approx_enabled": True,
+    "large_graph_order_approx_threshold": 900,
+    "large_graph_order_topk": 64,
     "order_refine_steps": 2,
     "use_hw_ordering": False,
     "gumbel_noise": False,
@@ -133,7 +139,7 @@ _MKSPAN_POSTPROCESS_DEFAULTS = {
     #   "lssp"     : slower, more faithful final scheduler with serialized bus + priorities.
     #   "taskgraph": faster, older queue-style TaskGraph evaluator.
     "eval_mode": "lssp",
-    "use_dual_lssp_postprocess": False,  # if True, compare static and learned SW-priority LSSP costs and keep the better one.
+    "use_dual_lssp_postprocess": False,  # if True, run postprocess with both static and learned SW-order LSSP and keep the better result.
     "max_iters": 120,                    # max local-search iterations in the LSSP stage.
     "adaptive_max_iters": False,         # if True, cap iterations on large graphs.
     "adaptive_large_n": 128,             # graph-size threshold for adaptive cap.
@@ -208,14 +214,17 @@ _DIFFGNN_ORDER_DATASET_OVERRIDES = {
         "verbose": 500,
         "early_stop_min_epochs": 500,
         "soft_makespan_exact_every": 5,
+        "large_graph_order_approx_enabled": True,
+        "large_graph_order_approx_threshold": 800,
+        "large_graph_order_topk": 64,
         "postprocess": {
             "candidate_top_k": 64,
         },
     },
     "squeezenet_like_1000": {
-        "iter": 200,
-        "verbose": 200,
-        "early_stop_min_epochs": 100,
+        "iter": 750,
+        "verbose": 750,
+        "early_stop_min_epochs": 500,
         "soft_makespan_exact_every": 1,
         "postprocess": {
             "candidate_top_k": 32,
@@ -236,7 +245,8 @@ _DIFFGNN_ORDER_DATASET_OVERRIDES = {
         # "candidate_top_k": 12,
     },
     "squeeze_net_tosa": {
-
+        'iter': 2500,
+        'early_stop_min_epochs': 2500,
     },
     "anomaly_detection_tosa": {},
     "image_classification_tosa": {},
@@ -372,6 +382,75 @@ def _pairwise_before_from_expected_rank(P: torch.Tensor, temperature: float = 0.
     before = torch.sigmoid((exp_rank.unsqueeze(0) - exp_rank.unsqueeze(1)) / t)
     eye = torch.eye(n, dtype=P.dtype, device=P.device)
     return (before * (1.0 - eye)).clamp(0.0, 1.0)
+
+
+def _topk_pairwise_before_from_priority_logits(
+    priorities: torch.Tensor,
+    topk: int,
+    temperature: float = 0.5,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Sparse O(NK) approximation of pairwise-before probabilities.
+
+    For each target task i, select the top-k highest-priority source tasks
+    excluding i, then compute before-probabilities directly from priority
+    differences instead of materializing a Sinkhorn permutation or dense NxN
+    pairwise matrix.
+    """
+    priorities = priorities.reshape(-1)
+    n = int(priorities.shape[0])
+    if n <= 1:
+        empty_idx = torch.empty((0, n), dtype=torch.long, device=priorities.device)
+        empty_prob = priorities.new_empty((0, n))
+        return empty_idx, empty_prob
+
+    k_eff = min(max(int(topk), 1), n - 1)
+    sorted_idx = torch.argsort(priorities.reshape(-1), descending=True)
+    inv_rank = torch.empty((n,), dtype=torch.long, device=priorities.device)
+    inv_rank.scatter_(0, sorted_idx, torch.arange(n, device=priorities.device, dtype=torch.long))
+
+    rows = torch.arange(k_eff, device=priorities.device, dtype=torch.long).unsqueeze(1)
+    candidate_pos = rows + (rows >= inv_rank.unsqueeze(0)).to(torch.long)
+    candidate_idx = sorted_idx[candidate_pos.reshape(-1)].reshape(k_eff, n)
+
+    src_prio = priorities[candidate_idx]
+    tgt_prio = priorities.unsqueeze(0)
+    tau = max(float(temperature), 1e-6)
+    before_prob = torch.sigmoid((src_prio - tgt_prio) / tau)
+    return candidate_idx, before_prob
+
+
+def _sparse_resource_logits_from_priority(
+    F_source: torch.Tensor,
+    lane_prob: torch.Tensor,
+    priorities: torch.Tensor,
+    *,
+    topk: int,
+    temperature: float,
+    resource_logit_alpha: float,
+    order_eps: float,
+    min_prob: float,
+) -> torch.Tensor:
+    """
+    Build sparse resource-precedence logits for the top-k likely predecessors of
+    each target node on a shared resource lane.
+    """
+    candidate_idx, before_prob = _topk_pairwise_before_from_priority_logits(
+        priorities,
+        topk=topk,
+        temperature=temperature,
+    )
+    if candidate_idx.numel() == 0:
+        return F_source.new_empty((0, F_source.shape[0]))
+
+    resource_prob = before_prob * lane_prob[candidate_idx] * lane_prob.unsqueeze(0)
+    resource_logits = F_source[candidate_idx] + float(resource_logit_alpha) * torch.log(
+        resource_prob + float(order_eps)
+    )
+    if float(min_prob) > 0.0:
+        neg_inf = torch.full_like(resource_logits, -1e9)
+        resource_logits = torch.where(resource_prob >= float(min_prob), resource_logits, neg_inf)
+    return resource_logits
 
 
 def _softmax_beta(vals: torch.Tensor, beta: float, dim: int = 0) -> torch.Tensor:
@@ -549,6 +628,104 @@ def _priority_array_to_node_scores(priorities: np.ndarray | None, node_list) -> 
     return {node_list[i]: float(arr[i]) for i in range(len(node_list))}
 
 
+def _partition_from_thresholded_probs(node_list, probs, threshold: float = 0.5) -> dict[str, int]:
+    arr = np.asarray(probs, dtype=float).ravel()
+    return {
+        node_list[i]: int(float(arr[i]) > float(threshold))
+        for i in range(len(node_list))
+    }
+
+
+def _partition_hw_area(TG, partition: Mapping[str, int]) -> float:
+    return float(
+        sum(float(TG.hardware_area.get(node, 0.0)) for node, assign in partition.items() if int(assign) == 1)
+    )
+
+
+def _evaluate_partition_lssp_safe(
+    TG,
+    partition: Mapping[str, int],
+    *,
+    software_priority_scores: Mapping | None = None,
+) -> tuple[float, bool]:
+    try:
+        result = evaluate_partition_lssp(
+            TG,
+            dict(partition),
+            auto_repair=False,
+            software_priority_scores=software_priority_scores,
+        )
+        finish_times = result.get("finish_times", {}) or {}
+        raw_makespan = max((float(v) for v in finish_times.values()), default=0.0)
+        is_valid = bool(result.get("is_valid", not TG.violates(partition)))
+        return float(raw_makespan), is_valid
+    except Exception as exc:
+        logger.warning("Ablation LSSP evaluation failed: %s", str(exc))
+        return float("inf"), False
+
+
+def _append_ablation_trace_row(rows: list[dict] | None, **payload) -> None:
+    if rows is None:
+        return
+    rows.append(dict(payload))
+
+
+def _write_ablation_trace_csv(rows: list[dict], output_csv: str | os.PathLike | None) -> None:
+    if not output_csv or not rows:
+        return
+    out_path = Path(output_csv)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    preferred = [
+        "graph_name",
+        "graph_file",
+        "source_config",
+        "phase",
+        "event",
+        "stage",
+        "candidate_label",
+        "candidate_mode",
+        "epoch",
+        "global_step",
+        "operation_index",
+        "iteration",
+        "accepted",
+        "training_end",
+        "soft_seq_makespan",
+        "threshold_lssp_static",
+        "threshold_lssp_learned_swprio",
+        "postprocess_lssp_cost",
+        "delta_from_prev",
+        "threshold_partition_valid",
+        "threshold_hw_nodes",
+        "threshold_hw_area",
+        "threshold_budget",
+        "tau",
+        "order_tau",
+        "loss",
+        "area_frac",
+        "area_penalty",
+        "selection_metric_train",
+        "selection_metric_final",
+        "notes",
+    ]
+    seen = set()
+    fieldnames = []
+    for key in preferred:
+        if any(key in row for row in rows):
+            fieldnames.append(key)
+            seen.add(key)
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                fieldnames.append(key)
+                seen.add(key)
+    with out_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
 def _decode_repair_candidates(
     TG,
     base_probs: np.ndarray,
@@ -633,10 +810,12 @@ def _dual_lssp_postprocess(
     candidate_include_neighbors: bool,
     candidate_include_cut_endpoints: bool,
     sw_priority_scores: Mapping | None,
+    prefer_sw_priority: bool = False,
     use_dual_mode: bool = False,
     print_progress: bool = False,
     print_every: int = 10,
     print_prefix: str = "[diff_gnn_order][postprocess]",
+    trace_rows: list[dict] | None = None,
 ):
     """
     Run LSSP local search on candidate partition.
@@ -658,21 +837,70 @@ def _dual_lssp_postprocess(
         candidate_include_cut_endpoints=candidate_include_cut_endpoints,
     )
 
-    # Evaluate with dual mode if explicitly enabled AND SW scores available
-    enable_dual_eval = use_dual_mode and isinstance(sw_priority_scores, Mapping) and len(sw_priority_scores) > 0
-    
+    has_sw_priority = isinstance(sw_priority_scores, Mapping) and len(sw_priority_scores) > 0
+
+    if use_dual_mode and has_sw_priority:
+        static_trace_rows = [] if trace_rows is not None else None
+        swprio_trace_rows = [] if trace_rows is not None else None
+
+        sol_static, info_static = improve_with_lssp_local_search(
+            TG,
+            solution,
+            software_priority_scores=None,
+            eval_both_modes=False,
+            progress=print_progress,
+            progress_every=print_every,
+            progress_prefix=f"{print_prefix}[mode=static]",
+            trace_rows=static_trace_rows,
+            **common_kwargs,
+        )
+        sol_swprio, info_swprio = improve_with_lssp_local_search(
+            TG,
+            solution,
+            software_priority_scores=sw_priority_scores,
+            eval_both_modes=False,
+            progress=print_progress,
+            progress_every=print_every,
+            progress_prefix=f"{print_prefix}[mode=sw_priority]",
+            trace_rows=swprio_trace_rows,
+            **common_kwargs,
+        )
+
+        cost_static = float(info_static.get("cost", float("inf")))
+        cost_swprio = float(info_swprio.get("cost", float("inf")))
+        if cost_swprio + 1e-9 < cost_static:
+            chosen_mode = "sw_priority"
+            chosen_sol = sol_swprio
+            chosen_info = info_swprio
+            chosen_trace_rows = swprio_trace_rows
+        else:
+            chosen_mode = "static"
+            chosen_sol = sol_static
+            chosen_info = info_static
+            chosen_trace_rows = static_trace_rows
+
+        if trace_rows is not None and chosen_trace_rows:
+            trace_rows.extend(chosen_trace_rows)
+
+        return chosen_mode, chosen_sol, chosen_info, [
+            ("static", sol_static, info_static),
+            ("sw_priority", sol_swprio, info_swprio),
+        ]
+
+    single_use_sw_priority = bool(prefer_sw_priority) and has_sw_priority
     sol_best, info_best = improve_with_lssp_local_search(
         TG,
         solution,
-        software_priority_scores=sw_priority_scores if enable_dual_eval else None,
-        eval_both_modes=enable_dual_eval,
+        software_priority_scores=sw_priority_scores if single_use_sw_priority else None,
+        eval_both_modes=False,
         progress=print_progress,
         progress_every=print_every,
-        progress_prefix=f"{print_prefix}[mode={'dual' if enable_dual_eval else 'static'}]",
+        progress_prefix=f"{print_prefix}[mode={'sw_priority' if single_use_sw_priority else 'static'}]",
+        trace_rows=trace_rows,
         **common_kwargs,
     )
-    
-    mode = "dual" if enable_dual_eval else "static"
+
+    mode = "sw_priority" if single_use_sw_priority else "static"
     return mode, sol_best, info_best, [(mode, sol_best, info_best)]
 
 
@@ -683,7 +911,7 @@ def _differentiable_makespan_loss_with_order(
     prio_sw,
     node_list,
     beta_softmax=20.0,
-    area_penalty_coeff=1e5,
+    area_penalty_coeff=1e3,
     entropy_coeff=0.0,
     usage_balance_coeff=0.0,
     target_hw_frac=None,
@@ -700,10 +928,13 @@ def _differentiable_makespan_loss_with_order(
     pairwise_mode="rank_sigmoid",
     pairwise_temp=0.5,
     soft_makespan_mode="jacobi",
+    soft_makespan_coeff=1.0,
     jacobi_iters=1,
     use_hw_ordering=False,
     resource_candidate_topk=0,
     resource_candidate_min_prob=0.0,
+    large_graph_order_approx=False,
+    large_graph_order_topk=64,
     loss_cache=None,
 ):
     """
@@ -712,6 +943,8 @@ def _differentiable_makespan_loss_with_order(
       - Ordering uses Gumbel-Sinkhorn soft permutations for SW lane.
       - HW lane ordering is optional and disabled by default (use_hw_ordering=False).
       - Makespan surrogate combines DAG precedence and resource precedence.
+      - Large graphs can skip Sinkhorn entirely and use sparse top-k direct-logit
+        precedence for O(NK) resource interactions.
     """
     device = probs_tensor.device
     dtype = probs_tensor.dtype
@@ -727,48 +960,53 @@ def _differentiable_makespan_loss_with_order(
 
     exec_time = probs_tensor * hw_times + (1.0 - probs_tensor) * sw_times
 
-    # Soft permutation and pairwise "before" probabilities.
-    # SW ordering stays active; HW ordering is optional.
-    P_sw = _soft_permutation_from_priority(
-        prio_sw,
-        temperature=order_tau,
-        sinkhorn_iters=sinkhorn_iters,
-        add_gumbel=bool(gumbel_noise),
-        gumbel_scale=gumbel_scale,
-    )
+    approx_active = bool(large_graph_order_approx) and N > 1
+    P_sw = None
     P_hw = None
-    if bool(use_hw_ordering):
-        P_hw = _soft_permutation_from_priority(
-            prio_hw,
+    before_resource = None
+    p_sw = 1.0 - probs_tensor
+    gate_hw = None
+
+    if not approx_active:
+        # Soft permutation and pairwise "before" probabilities.
+        # SW ordering stays active; HW ordering is optional.
+        P_sw = _soft_permutation_from_priority(
+            prio_sw,
             temperature=order_tau,
             sinkhorn_iters=sinkhorn_iters,
             add_gumbel=bool(gumbel_noise),
             gumbel_scale=gumbel_scale,
         )
+        if bool(use_hw_ordering):
+            P_hw = _soft_permutation_from_priority(
+                prio_hw,
+                temperature=order_tau,
+                sinkhorn_iters=sinkhorn_iters,
+                add_gumbel=bool(gumbel_noise),
+                gumbel_scale=gumbel_scale,
+            )
 
-    mode = str(pairwise_mode).lower()
-    if mode == "exact":
-        before_sw = _pairwise_before_from_perm(P_sw)
-        before_hw = _pairwise_before_from_perm(P_hw) if P_hw is not None else torch.zeros_like(before_sw)
-    elif mode in ("rank", "rank_sigmoid", "fast"):
-        before_sw = _pairwise_before_from_expected_rank(P_sw, temperature=pairwise_temp)
-        before_hw = (
-            _pairwise_before_from_expected_rank(P_hw, temperature=pairwise_temp)
-            if P_hw is not None
-            else torch.zeros_like(before_sw)
-        )
-    else:
-        raise ValueError(f"Unsupported pairwise_mode '{pairwise_mode}'. Use 'rank_sigmoid' or 'exact'.")
+        mode = str(pairwise_mode).lower()
+        if mode == "exact":
+            before_sw = _pairwise_before_from_perm(P_sw)
+            before_hw = _pairwise_before_from_perm(P_hw) if P_hw is not None else torch.zeros_like(before_sw)
+        elif mode in ("rank", "rank_sigmoid", "fast"):
+            before_sw = _pairwise_before_from_expected_rank(P_sw, temperature=pairwise_temp)
+            before_hw = (
+                _pairwise_before_from_expected_rank(P_hw, temperature=pairwise_temp)
+                if P_hw is not None
+                else torch.zeros_like(before_sw)
+            )
+        else:
+            raise ValueError(f"Unsupported pairwise_mode '{pairwise_mode}'. Use 'rank_sigmoid' or 'exact'.")
 
-    gate_hw = probs_tensor.unsqueeze(1) * probs_tensor.unsqueeze(0)
-    p_sw = 1.0 - probs_tensor
-    gate_sw = p_sw.unsqueeze(1) * p_sw.unsqueeze(0)
-
-    before_resource = before_sw * gate_sw
-    if bool(use_hw_ordering):
-        before_resource = before_resource + (before_hw * gate_hw)
-    if N > 0:
-        before_resource = before_resource * (1.0 - loss_cache["eye"])
+        gate_hw = probs_tensor.unsqueeze(1) * probs_tensor.unsqueeze(0)
+        gate_sw = p_sw.unsqueeze(1) * p_sw.unsqueeze(0)
+        before_resource = before_sw * gate_sw
+        if bool(use_hw_ordering):
+            before_resource = before_resource + (before_hw * gate_hw)
+        if N > 0:
+            before_resource = before_resource * (1.0 - loss_cache["eye"])
 
     topo_idx = loss_cache["topo_idx"]
     topo_depth = int(loss_cache.get("topo_depth", max(1, len(topo_idx))))
@@ -788,6 +1026,45 @@ def _differentiable_makespan_loss_with_order(
     def _resource_start_times(F_source: torch.Tensor) -> torch.Tensor:
         if N <= 1:
             return exec_time.new_zeros((N,))
+
+        if approx_active:
+            min_prob = float(resource_candidate_min_prob)
+            topk = min(max(int(large_graph_order_topk), 1), N - 1)
+            logits_parts = [
+                _sparse_resource_logits_from_priority(
+                    F_source,
+                    p_sw,
+                    prio_sw,
+                    topk=topk,
+                    temperature=pairwise_temp,
+                    resource_logit_alpha=resource_logit_alpha,
+                    order_eps=order_eps,
+                    min_prob=min_prob,
+                )
+            ]
+            if bool(use_hw_ordering):
+                p_hw = probs_tensor
+                logits_parts.append(
+                    _sparse_resource_logits_from_priority(
+                        F_source,
+                        p_hw,
+                        prio_hw,
+                        topk=topk,
+                        temperature=pairwise_temp,
+                        resource_logit_alpha=resource_logit_alpha,
+                        order_eps=order_eps,
+                        min_prob=min_prob,
+                    )
+                )
+            logits_parts = [part for part in logits_parts if part.numel() > 0]
+            if not logits_parts:
+                return exec_time.new_zeros((N,))
+            resource_logits = (
+                torch.cat(logits_parts, dim=0)
+                if len(logits_parts) > 1
+                else logits_parts[0]
+            )
+            return _softmax_beta(resource_logits, beta_softmax, dim=0)
 
         resource_prob = before_resource
         resource_logits = F_source.unsqueeze(1) + float(resource_logit_alpha) * torch.log(
@@ -854,10 +1131,45 @@ def _differentiable_makespan_loss_with_order(
 
     makespan_soft = _softmax_beta(F_prev, beta_softmax)
 
+    
+    # Previous area-violation implementations (kept for reference):
     area_used = torch.dot(probs_tensor, areas)
     area_frac = area_used / float(total_area)
-    area_violation = F.relu(area_frac - float(TG.area_constraint))
+    budget = float(TG.area_constraint)
+    #area_violation = F.relu(area_frac - float(TG.area_constraint))
+    # area_violation = F.relu(area_frac - float(TG.area_constraint)) ** 2
+    area_violation = torch.square(area_frac - float(TG.area_constraint))
+    # area_violation = F.softplus(area_frac - float(TG.area_constraint))**2
+    # area_violation = (area_frac - float(TG.area_constraint))**2
     area_penalty = area_penalty_coeff * area_violation
+
+    # # Compute soft (expected) area usage for monitoring and downstream soft penalties
+    # area_used = torch.dot(probs_tensor, areas)
+    # area_frac = area_used / float(total_area)
+    # budget = float(TG.area_constraint)
+    
+    # # Straight-through (ST) binary mask at threshold=0.5
+    # # Forward pass uses hard 0/1 assignment; backward pass uses gradients of the
+    # # original soft `probs_tensor` (standard ST reparameterization trick).
+    # threshold = 0.5
+    # hard_mask = (probs_tensor > threshold).float()
+    # # ST trick: hard forward, soft backward
+    # hard_st = hard_mask.detach() + (probs_tensor - probs_tensor.detach())
+
+    # # Hard-area computed from ST mask (used for discrete constraint evaluation)
+    # area_used_hard = torch.dot(hard_st, areas)
+    # area_frac_hard = area_used_hard / float(total_area)
+
+    # # Violation computed on the discrete fraction (squared-hinge gives stronger
+    # # gradients when violated but zero when under budget).
+    # area_violation_hard = F.relu(area_frac_hard - budget) ** 2
+    # area_penalty = area_penalty_coeff * area_violation_hard
+
+    # Keep soft metrics for logging/monitoring alongside hard metrics
+    area_used_soft = area_used
+    area_frac_soft = area_frac
+
+    print(area_penalty.item(), area_penalty_coeff)
 
     if target_hw_frac is None:
         target_hw_frac = float(TG.area_constraint)
@@ -875,15 +1187,21 @@ def _differentiable_makespan_loss_with_order(
         comm_cost = torch.tensor(0.0, dtype=dtype, device=device)
     expected_partition_cost = exec_cost + comm_cost
 
-    if P_hw is None:
+    if approx_active:
+        perm_reg = zero
+        perm_entropy = zero
+    elif P_hw is None:
         perm_reg = _doubly_stochastic_penalty(P_sw)
         perm_entropy = _entropy_rows_cols(P_sw)
     else:
         perm_reg = _doubly_stochastic_penalty(P_hw) + _doubly_stochastic_penalty(P_sw)
         perm_entropy = _entropy_rows_cols(P_hw) + _entropy_rows_cols(P_sw)
 
+    # Scale the makespan surrogate to allow stronger emphasis when desired.
+    makespan_term = float(soft_makespan_coeff) * makespan_soft
+
     loss = (
-        makespan_soft
+        makespan_term
         + area_penalty
         + usage_balance
         + entropy_coeff * entropy_like
@@ -892,15 +1210,30 @@ def _differentiable_makespan_loss_with_order(
         + perm_entropy_coeff * perm_entropy
     )
 
+    # Ensure hard-area fields exist even if ST block was commented out.
+    if "area_frac_hard" not in locals():
+        area_frac_hard = area_frac_soft
+    if "area_violation_hard" not in locals():
+        try:
+            area_violation_hard = area_violation
+        except Exception:
+            area_violation_hard = torch.tensor(0.0, dtype=dtype, device=device)
+
     return loss, {
         "makespan_surrogate": makespan_soft.item(),
-        "area_frac": area_frac.item(),
+        # soft (expected) area fraction
+        "area_frac": float(area_frac_soft.item()),
+        "area_frac_soft": float(area_frac_soft.item()),
+        # hard (thresholded via ST) area fraction and its violation
+        "area_frac_hard": float(area_frac_hard.item()),
+        "area_violation_hard": float(area_violation_hard.item()),
         "area_penalty": area_penalty.item(),
         "usage_balance": usage_balance.item() if isinstance(usage_balance, torch.Tensor) else usage_balance,
         "entropy_like": entropy_like.item(),
         "expected_partition_cost": expected_partition_cost.item(),
         "perm_reg": perm_reg.item(),
         "perm_entropy": perm_entropy.item(),
+        "order_approx_active": bool(approx_active),
         "loss": loss.item(),
     }
 
@@ -925,8 +1258,13 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     use_hw_ordering = bool(config.get("use_hw_ordering", False))
 
     beta_softmax = float(config.get("beta_softmax", 20.0))
-    area_penalty_coeff = float(config.get("area_penalty_coeff", 1e5))
+    
+    area_penalty_coeff = float(config.get("area_penalty_coeff", 1e9))
+    soft_makespan_coeff = float(config.get("soft_makespan_coeff", 1e3))
+
+
     entropy_coeff = float(config.get("entropy_coeff", 0.0))
+
     usage_balance_coeff = float(config.get("usage_balance_coeff", 0.0))
     target_hw_frac = config.get("target_hw_frac", None)
     partition_cost_coeff = float(config.get("partition_cost_coeff", 0.0833333333))
@@ -937,11 +1275,18 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     pairwise_temp = float(config.get("pairwise_temp", 0.5))
     soft_makespan_mode = str(config.get("soft_makespan_mode", "jacobi")).lower()
     jacobi_iters = max(1, int(config.get("jacobi_iters", 10)))
+    
     soft_makespan_exact_mode = str(config.get("soft_makespan_exact_mode", "sequential")).lower()
     soft_makespan_exact_every = max(0, int(config.get("soft_makespan_exact_every", 10)))
     soft_makespan_exact_first_epoch = bool(config.get("soft_makespan_exact_first_epoch", False))
     resource_candidate_topk = max(0, int(config.get("resource_candidate_topk", 0)))
     resource_candidate_min_prob = max(0.0, float(config.get("resource_candidate_min_prob", 0.0)))
+    large_graph_order_approx_enabled = bool(config.get("large_graph_order_approx_enabled", True))
+    large_graph_order_approx_threshold = int(config.get("large_graph_order_approx_threshold", 900))
+    large_graph_order_topk = max(1, int(config.get("large_graph_order_topk", 64)))
+    large_graph_order_approx = (
+        large_graph_order_approx_enabled and len(node_list) > large_graph_order_approx_threshold
+    )
     # Paper-prior blending is opt-in. Keep disabled by default unless explicitly enabled.
     paper_sigma_enabled = bool(config.get("paper_sigma_enabled", config.get("paper_blend_enabled", False)))
     paper_sigma = float(config.get("paper_sigma", 0.0)) if paper_sigma_enabled else 0.0
@@ -962,6 +1307,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     logit_scale = float(config.get("logit_scale", 8.0))
     center_logits = bool(config.get("center_logits", True))
     hard_train_outputs = bool(config.get("hard_train_outputs", sampler != "soft"))
+
+    # Warn if area penalty coefficient is zero — the loss will not include area penalty.
+    if float(area_penalty_coeff) == 0.0:
+        logger.warning(
+            "area_penalty_coeff is 0.0; area penalty will NOT be included in the training loss."
+        )
     order_decode_weight = float(config.get("order_decode_weight", 0.25))
     if not use_hw_ordering:
         # Avoid using untrained HW-order head in decode-time scoring.
@@ -991,7 +1342,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     post_search_strategy = str(post_cfg.get("search_strategy", config.get("lssp_postprocess_search_strategy", "critical"))).lower()
     post_candidate_top_k = int(post_cfg.get("candidate_top_k", config.get("lssp_postprocess_candidate_top_k", 16)))
     post_use_sw_priority = bool(post_cfg.get("use_sw_priority", config.get("lssp_use_sw_priority", False)))
-    post_use_dual_lssp = bool(post_cfg.get("use_dual_lssp_postprocess", config.get("lssp_use_dual_postprocess", False)))
+    post_use_dual_lssp = bool(
+        post_cfg.get(
+            "use_dual_lssp_postprocess",
+            post_cfg.get("best_of_lssp_and_sw_order", config.get("lssp_use_dual_postprocess", False)),
+        )
+    )
     post_critical_slack_frac = float(post_cfg.get("critical_slack_frac", config.get("lssp_postprocess_critical_slack_frac", 0.05)))
     post_final_all_decode_candidates = bool(
         post_cfg.get("final_all_decode_candidates", config.get("lssp_postprocess_final_all_decode_candidates", True))
@@ -1018,6 +1374,20 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     dls_lssp_pri_coeff = float(post_cfg.get("dls_lssp_pri_coeff", config.get("dls_lssp_pri_coeff", 0.35)))
     dls_lssp_beta = float(post_cfg.get("dls_lssp_beta", config.get("dls_lssp_beta", 8.0)))
     dls_lssp_fill_eta = float(post_cfg.get("dls_lssp_fill_eta", config.get("dls_lssp_fill_eta", 0.20)))
+    ablation_cfg_raw = config.get("ablation_trace", {})
+    ablation_cfg = dict(ablation_cfg_raw) if isinstance(ablation_cfg_raw, Mapping) else {}
+    ablation_enabled = bool(ablation_cfg.get("enabled", False))
+    ablation_output_csv = str(ablation_cfg.get("output_csv", "") or "").strip()
+    ablation_every = max(1, int(ablation_cfg.get("compute_every", 1)))
+    ablation_threshold = float(ablation_cfg.get("discrete_threshold", 0.5))
+    ablation_include_static = bool(ablation_cfg.get("include_static_lssp", True))
+    ablation_include_swprio = bool(ablation_cfg.get("include_learned_swprio_lssp", True))
+    ablation_soft_mode = str(ablation_cfg.get("soft_mode", "sequential")).lower()
+    ablation_graph_name = str(
+        config.get("_graph_name", config.get("_dataset_name", config.get("graph_name", ""))) or ""
+    )
+    ablation_graph_file = str(config.get("_graph_file", config.get("graph-file", "")) or "")
+    ablation_source_config = str(config.get("_source_config_path", config.get("config", "")) or "")
     if adaptive_post_max_iters and len(node_list) >= adaptive_post_large_n and post_max_iters > adaptive_post_large_cap:
         logger.info(
             "DiffGNNOrder adaptive postprocess cap: max_iters %d -> %d for N=%d",
@@ -1063,6 +1433,25 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         str(paper_sigma_enabled),
         paper_sigma,
     )
+    logger.info(
+        "DiffGNNOrder large-graph order approx: enabled=%s active=%s N=%d threshold=%d topk=%d skip_sinkhorn=%s",
+        str(large_graph_order_approx_enabled),
+        str(large_graph_order_approx),
+        len(node_list),
+        large_graph_order_approx_threshold,
+        large_graph_order_topk,
+        str(large_graph_order_approx),
+    )
+    if large_graph_order_approx:
+        print(
+            "[diff_gnn_order] "
+            f"large_graph_order_approx=enabled "
+            f"nodes={len(node_list)} "
+            f"threshold={large_graph_order_approx_threshold} "
+            f"topk={large_graph_order_topk} "
+            f"skip_sinkhorn=True",
+            flush=True,
+        )
     logger.info(
         "DiffGNNOrder metrics: train_metric=%s final_metric=%s",
         selection_metric_train,
@@ -1127,8 +1516,18 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             str(post_final_all_decode_candidates),
             str(post_print_progress),
             post_print_every,
-            str(True),
+            str(post_use_dual_lssp),
             str(post_use_sw_priority),
+        )
+    if ablation_enabled:
+        logger.info(
+            "DiffGNNOrder ablation trace enabled: output=%s every=%d threshold=%.2f soft_mode=%s include_static=%s include_swprio=%s",
+            ablation_output_csv,
+            ablation_every,
+            ablation_threshold,
+            ablation_soft_mode,
+            str(ablation_include_static),
+            str(ablation_include_swprio),
         )
 
     best_sched_cost = float("inf")
@@ -1140,6 +1539,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     stagnant_epochs = 0
     early_stop_monitoring_started = False
     completed_epochs = 0
+    ablation_trace_rows: list[dict] | None = [] if ablation_enabled else None
 
     tau = tau_start
     order_tau = order_tau_start
@@ -1227,9 +1627,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             pairwise_temp=pairwise_temp,
             soft_makespan_mode=epoch_soft_makespan_mode,
             jacobi_iters=epoch_jacobi_iters,
+            soft_makespan_coeff=soft_makespan_coeff,
             use_hw_ordering=use_hw_ordering,
             resource_candidate_topk=resource_candidate_topk,
             resource_candidate_min_prob=resource_candidate_min_prob,
+            large_graph_order_approx=large_graph_order_approx,
+            large_graph_order_topk=large_graph_order_topk,
             loss_cache=loss_cache,
         )
 
@@ -1359,18 +1762,120 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     best_probs = np.asarray(decoded_probs, dtype=float).copy()
                     best_sw_priority_scores = sw_priority_scores_eval
 
+        if ablation_trace_rows is not None and (ep % ablation_every == 0 or ep == 1 or ep == epochs):
+            with torch.no_grad():
+                _, ablation_soft_info = _differentiable_makespan_loss_with_order(
+                    TG,
+                    probs.detach(),
+                    prio_hw.detach(),
+                    prio_sw.detach(),
+                    node_list,
+                    beta_softmax=beta_softmax,
+                    area_penalty_coeff=area_penalty_coeff,
+                    entropy_coeff=entropy_coeff,
+                    usage_balance_coeff=usage_balance_coeff,
+                    target_hw_frac=target_hw_frac,
+                    partition_cost_coeff=partition_cost_coeff,
+                    order_tau=order_tau,
+                    sinkhorn_iters=sinkhorn_iters,
+                    gumbel_noise=False,
+                    gumbel_scale=0.0,
+                    resource_logit_alpha=resource_logit_alpha,
+                    order_refine_steps=order_refine_steps,
+                    perm_reg_coeff=perm_reg_coeff,
+                    perm_entropy_coeff=perm_entropy_coeff,
+                    pairwise_mode=pairwise_mode,
+                    pairwise_temp=pairwise_temp,
+                    soft_makespan_mode=ablation_soft_mode,
+                    jacobi_iters=1,
+                    soft_makespan_coeff=soft_makespan_coeff,
+                    use_hw_ordering=use_hw_ordering,
+                    resource_candidate_topk=resource_candidate_topk,
+                    resource_candidate_min_prob=resource_candidate_min_prob,
+                    large_graph_order_approx=large_graph_order_approx,
+                    large_graph_order_topk=large_graph_order_topk,
+                    loss_cache=loss_cache,
+                )
+                threshold_partition = _partition_from_thresholded_probs(
+                    node_list,
+                    probs.detach().cpu().numpy(),
+                    threshold=ablation_threshold,
+                )
+                threshold_valid = not TG.violates(threshold_partition)
+                static_lssp = float("nan")
+                learned_lssp = float("nan")
+                if ablation_include_static:
+                    static_lssp, _ = _evaluate_partition_lssp_safe(TG, threshold_partition)
+                if ablation_include_swprio:
+                    sw_priority_scores_epoch = _priority_array_to_node_scores(
+                        prio_sw.detach().cpu().numpy().astype(float),
+                        node_list,
+                    )
+                    learned_lssp, _ = _evaluate_partition_lssp_safe(
+                        TG,
+                        threshold_partition,
+                        software_priority_scores=sw_priority_scores_epoch,
+                    )
+                _append_ablation_trace_row(
+                    ablation_trace_rows,
+                    graph_name=ablation_graph_name,
+                    graph_file=ablation_graph_file,
+                    source_config=ablation_source_config,
+                    phase="train",
+                    event="epoch",
+                    stage="train",
+                    candidate_label="thresholded_partition",
+                    candidate_mode="threshold",
+                    epoch=int(ep),
+                    global_step=float(ep),
+                    operation_index=0,
+                    iteration=int(ep),
+                    accepted=False,
+                    training_end=False,
+                    soft_seq_makespan=float(ablation_soft_info["makespan_surrogate"]),
+                    threshold_lssp_static=static_lssp,
+                    threshold_lssp_learned_swprio=learned_lssp,
+                    postprocess_lssp_cost=float("nan"),
+                    delta_from_prev=float("nan"),
+                    threshold_partition_valid=bool(threshold_valid),
+                    threshold_hw_nodes=int(sum(int(v) for v in threshold_partition.values())),
+                    threshold_hw_area=float(_partition_hw_area(TG, threshold_partition)),
+                    threshold_budget=float(TG.area_constraint * TG.total_area),
+                    tau=float(tau),
+                    order_tau=float(order_tau),
+                    loss=float(info["loss"]),
+                    area_frac=float(info["area_frac"]),
+                    # For ablation traces we do not record the computed area penalty;
+                    # keep loss computation unchanged so training still uses the penalty.
+                    area_penalty=float("nan"),
+                    selection_metric_train=selection_metric_train,
+                    selection_metric_final=selection_metric_final,
+                    notes="per_epoch_trace",
+                )
+
         if should_print_epoch:
             elapsed_sec = time.perf_counter() - train_t0
             avg_epoch_sec = elapsed_sec / max(1, ep)
             eta_sec = avg_epoch_sec * max(0, epochs - ep)
+            # compute expected (continuous) area and budget for logging
+            try:
+                expected_area = float(info.get("area_frac", float("nan"))) * float(TG.total_area)
+            except Exception:
+                expected_area = float("nan")
+            try:
+                area_budget = float(TG.area_constraint) * float(TG.total_area)
+            except Exception:
+                area_budget = float("nan")
             logger.info(
-                "Epoch %d/%d mode=%s loss=%.6f soft_makespan=%.6f area_frac=%.4f area_pen=%.3f perm_reg=%.4f perm_H=%.4f sched_best=%.6f elapsed=%.2fs avg_epoch=%.3fs eta=%.2fs",
+                "Epoch %d/%d mode=%s loss=%.6f soft_makespan=%.6f area_frac=%.4f expected_area=%.3f area_budget=%.3f area_pen=%.3f perm_reg=%.4f perm_H=%.4f sched_best=%.6f elapsed=%.2fs avg_epoch=%.3fs eta=%.2fs",
                 ep,
                 epochs,
                 epoch_soft_makespan_mode,
                 info["loss"],
                 info["makespan_surrogate"],
                 info["area_frac"],
+                expected_area,
+                area_budget,
                 info["area_penalty"],
                 info["perm_reg"],
                 info["perm_entropy"],
@@ -1385,6 +1890,8 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 f"mode={epoch_soft_makespan_mode} "
                 f"loss={info['loss']:.6f} "
                 f"soft_makespan={info['makespan_surrogate']:.6f} "
+                f"expected_area={expected_area:.3f} "
+                f"area_budget={area_budget:.3f} "
                 f"best_sched={best_sched_cost:.6f} "
                 f"elapsed={elapsed_sec:.2f}s "
                 f"avg_epoch={avg_epoch_sec:.3f}s "
@@ -1405,6 +1912,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             break
 
     logger.info("DiffGNNOrder final decode started after %d/%d training epochs.", completed_epochs, epochs)
+    if ablation_trace_rows:
+        for row in reversed(ablation_trace_rows):
+            if row.get("phase") == "train":
+                row["training_end"] = True
+                row["notes"] = "training_end"
+                break
     model.eval()
     with torch.no_grad():
         logits2, prio_hw, prio_sw = model(
@@ -1474,6 +1987,49 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             selection_metric_train,
             final_sched_cost_train,
         )
+        if ablation_trace_rows is not None:
+            decode_static_lssp, _ = _evaluate_partition_lssp_safe(TG, final_solution)
+            decode_learned_lssp = float("nan")
+            if ablation_include_swprio:
+                decode_learned_lssp, _ = _evaluate_partition_lssp_safe(
+                    TG,
+                    final_solution,
+                    software_priority_scores=final_sw_priority_scores,
+                )
+            _append_ablation_trace_row(
+                ablation_trace_rows,
+                graph_name=ablation_graph_name,
+                graph_file=ablation_graph_file,
+                source_config=ablation_source_config,
+                phase="postprocess",
+                event="decode_selected",
+                stage="decode",
+                candidate_label=str(final_choice_label),
+                candidate_mode="decode",
+                epoch=int(completed_epochs),
+                global_step=float(completed_epochs) + 0.25,
+                operation_index=0,
+                iteration=0,
+                accepted=False,
+                training_end=False,
+                soft_seq_makespan=float("nan"),
+                threshold_lssp_static=float(decode_static_lssp),
+                threshold_lssp_learned_swprio=float(decode_learned_lssp),
+                postprocess_lssp_cost=float("nan"),
+                delta_from_prev=float("nan"),
+                threshold_partition_valid=bool(not TG.violates(final_solution)),
+                threshold_hw_nodes=int(sum(int(v) for v in final_solution.values())),
+                threshold_hw_area=float(_partition_hw_area(TG, final_solution)),
+                threshold_budget=float(TG.area_constraint * TG.total_area),
+                tau=float("nan"),
+                order_tau=float("nan"),
+                loss=float("nan"),
+                area_frac=float("nan"),
+                area_penalty=float("nan"),
+                selection_metric_train=selection_metric_train,
+                selection_metric_final=selection_metric_final,
+                notes="decode_before_postprocess",
+            )
         if use_lssp_final:
             post_t0 = time.perf_counter()
             logger.info(
@@ -1511,6 +2067,7 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             selected_post_swprio_cost = float("nan")
 
             for cand_idx, (cand_label, cand_solution, _) in enumerate(post_seed_candidates, start=1):
+                candidate_trace_rows = [] if ablation_trace_rows is not None else None
                 print(
                     "[diff_gnn_order] "
                     f"postprocess_candidate_start idx={cand_idx}/{len(post_seed_candidates)} "
@@ -1532,10 +2089,12 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     candidate_include_neighbors=post_candidate_include_neighbors,
                     candidate_include_cut_endpoints=post_candidate_include_cut_endpoints,
                     sw_priority_scores=final_sw_priority_scores,
+                    prefer_sw_priority=post_use_sw_priority,
                     print_progress=post_print_progress,
                     print_every=post_print_every,
                     print_prefix=f"[diff_gnn_order][postprocess][{cand_idx}/{len(post_seed_candidates)}:{cand_label}]",
                     use_dual_mode=post_use_dual_lssp,
+                    trace_rows=candidate_trace_rows,
                 )
                 static_cost = float("nan")
                 swprio_cost = float("nan")
@@ -1559,6 +2118,42 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     f"swprio_cost={swprio_cost:.6f}",
                     flush=True,
                 )
+                if ablation_trace_rows is not None and candidate_trace_rows:
+                    for op_idx, trace_row in enumerate(candidate_trace_rows, start=1):
+                        _append_ablation_trace_row(
+                            ablation_trace_rows,
+                            graph_name=ablation_graph_name,
+                            graph_file=ablation_graph_file,
+                            source_config=ablation_source_config,
+                            phase="postprocess",
+                            event=str(trace_row.get("event", "")),
+                            stage=str(trace_row.get("stage", "")),
+                            candidate_label=str(cand_label),
+                            candidate_mode=str(post_choice_mode),
+                            epoch=int(completed_epochs),
+                            global_step=float(completed_epochs) + 0.25 + float(op_idx),
+                            operation_index=int(op_idx),
+                            iteration=int(trace_row.get("iteration", 0)),
+                            accepted=bool(trace_row.get("accepted", False)),
+                            training_end=False,
+                            soft_seq_makespan=float("nan"),
+                            threshold_lssp_static=float("nan"),
+                            threshold_lssp_learned_swprio=float("nan"),
+                            postprocess_lssp_cost=float(trace_row.get("postprocess_lssp_cost", float("nan"))),
+                            delta_from_prev=float(trace_row.get("delta_from_prev", float("nan"))),
+                            threshold_partition_valid=True,
+                            threshold_hw_nodes=int(trace_row.get("threshold_hw_nodes", sum(int(v) for v in candidate_solution.values()))),
+                            threshold_hw_area=float(trace_row.get("threshold_hw_area", _partition_hw_area(TG, candidate_solution))),
+                            threshold_budget=float(trace_row.get("threshold_budget", TG.area_constraint * TG.total_area)),
+                            tau=float("nan"),
+                            order_tau=float("nan"),
+                            loss=float("nan"),
+                            area_frac=float("nan"),
+                            area_penalty=float("nan"),
+                            selection_metric_train=selection_metric_train,
+                            selection_metric_final=selection_metric_final,
+                            notes="postprocess_trace",
+                        )
                 if post_cost <= final_sched_cost_train:
                     final_choice_label = cand_label
                     final_solution = candidate_solution
@@ -1650,6 +2245,47 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         f"final_makespan={best_final_cost:.6f}",
         flush=True,
     )
+    if ablation_trace_rows is not None:
+        final_global_step = (
+            max(float(row.get("global_step", 0.0)) for row in ablation_trace_rows) + 1.0
+            if ablation_trace_rows
+            else float(completed_epochs) + 1.0
+        )
+        _append_ablation_trace_row(
+            ablation_trace_rows,
+            graph_name=ablation_graph_name,
+            graph_file=ablation_graph_file,
+            source_config=ablation_source_config,
+            phase="final",
+            event="selected_final",
+            stage="final",
+            candidate_label=str(final_choice_label),
+            candidate_mode="final",
+            epoch=int(completed_epochs),
+            global_step=float(final_global_step),
+            operation_index=int(max(1, final_global_step - float(completed_epochs))),
+            iteration=0,
+            accepted=False,
+            training_end=False,
+            soft_seq_makespan=float("nan"),
+            threshold_lssp_static=float(best_final_cost),
+            threshold_lssp_learned_swprio=float("nan"),
+            postprocess_lssp_cost=float(best_sched_cost),
+            delta_from_prev=float("nan"),
+            threshold_partition_valid=bool(best_assign is not None and not TG.violates(best_assign)),
+            threshold_hw_nodes=int(sum(int(v) for v in best_assign.values())) if isinstance(best_assign, Mapping) else 0,
+            threshold_hw_area=float(_partition_hw_area(TG, best_assign or {})),
+            threshold_budget=float(TG.area_constraint * TG.total_area),
+            tau=float("nan"),
+            order_tau=float("nan"),
+            loss=float("nan"),
+            area_frac=float("nan"),
+            area_penalty=float("nan"),
+            selection_metric_train=selection_metric_train,
+            selection_metric_final=selection_metric_final,
+            notes="selected_final_solution",
+        )
+        _write_ablation_trace_csv(ablation_trace_rows, ablation_output_csv)
     return {
         "best_assign": best_assign,
         "best_probs": np.asarray(best_probs),
@@ -1741,6 +2377,10 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
     dataset_name = _apply_dataset_specific_diffgnn_defaults(diff_cfg, config)
     if dataset_name:
         logger.info("diff_gnn_order dataset context resolved as: %s", dataset_name)
+    diff_cfg.setdefault("_dataset_name", dataset_name or "")
+    diff_cfg.setdefault("_graph_name", dataset_name or Path(str(config.get("graph-file", "") or "")).stem)
+    diff_cfg.setdefault("_graph_file", str(config.get("graph-file", "") or ""))
+    diff_cfg.setdefault("_source_config_path", str(config.get("config", "") or ""))
 
     for key, value in _MKSPAN_DIFFGNN_ORDER_DEFAULTS.items():
         diff_cfg.setdefault(key, value)
@@ -1788,6 +2428,11 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
     for key, value in _MKSPAN_POSTPROCESS_DEFAULTS.items():
         post_cfg.setdefault(key, value)
     diff_cfg["postprocess"] = post_cfg
+    large_graph_dag_policy = _apply_large_graph_cheap_dag_policy(
+        TG,
+        diff_cfg,
+        method_label="diff_gnn_order",
+    )
 
     # Lightweight defaults when users keep configs minimal.
     if not any(
@@ -1884,6 +2529,37 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
         )
     ).lower()
     eval_cost = _evaluate_discrete_solution(TG, solution, metric=selection_metric)
+    if large_graph_dag_policy:
+        best_cost = float(result.get("best_mip_cost", eval_cost))
+        if not math.isfinite(best_cost):
+            best_cost = float(eval_cost)
+        logger.info(
+            "simulate_diff_GNN_order large-graph policy active: skipping wrapper-level LSSP "
+            "evaluation; final MethodRegistry reporting will evaluate the selected partition with LSSP."
+        )
+        print(
+            "[diff_gnn_order] "
+            f"eval_cost={eval_cost:.6f} "
+            "lssp_cost=deferred "
+            "lssp_swprio_cost=deferred "
+            f"best_cost={best_cost:.6f}",
+            flush=True,
+        )
+        simulate_diff_GNN_order.last_run_meta = {
+            "eval_cost": float(eval_cost),
+            "lssp_cost": None,
+            "lssp_swprio_cost": None,
+            "sw_priority_scores": (
+                dict(result.get("best_sw_priority_scores", {}))
+                if isinstance(result.get("best_sw_priority_scores", None), Mapping)
+                else None
+            ),
+            "selection_metric": selection_metric,
+            "selection_metric_train": str(result.get("selection_metric_train", "unknown")),
+            "large_graph_dag_policy": True,
+        }
+        return best_cost, sol_arr
+
     lssp_cost = float(evaluate_partition_lssp(TG, solution)["makespan"])
     sw_priority_scores = result.get("best_sw_priority_scores", None)
     lssp_swprio_cost = float("inf")

@@ -338,6 +338,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     tau_final = float(config.get("tau_final", 0.1))
     beta_softmax = float(config.get("beta_softmax", 20.0))
     area_penalty_coeff = float(config.get("area_penalty_coeff", 1e5))
+    soft_makespan_coeff = float(config.get("soft_makespan_coeff", 100.0))
     entropy_coeff = float(config.get("entropy_coeff", 1e-3))
     usage_balance_coeff = float(config.get("usage_balance_coeff", 0.5))
     target_hw_frac = config.get("target_hw_frac", None)
@@ -400,6 +401,14 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
             target_hw_frac=target_hw_frac,
             partition_cost_coeff=partition_cost_coeff,
         )
+        # Optionally scale the surrogate makespan term according to config.
+        if float(soft_makespan_coeff) != 1.0:
+            makespan_val = float(info.get("makespan_surrogate", 0.0))
+            makespan_tensor = torch.tensor(makespan_val, dtype=loss.dtype, device=loss.device)
+            loss = loss + (float(soft_makespan_coeff) - 1.0) * makespan_tensor
+            info["soft_makespan_coeff"] = float(soft_makespan_coeff)
+            info["loss"] = loss.item()
+
         loss.backward()
         optimizer.step()
 
