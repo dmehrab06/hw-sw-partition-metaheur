@@ -25,26 +25,26 @@ ALL_METHODS_ORDER=(
 
 METHODS=(
   # "mip"
-  "diff_gnn"
-  # "diff_gnn_order"
-  "gl25"
-  "gcps"
-  "esa"
-  "pso"
-  "dbpso"
-  "clpso"
-  "ccpso"
-  "shade"
-  "jade"
-  "random"
-  "greedy"
+  # "diff_gnn"
+  "diff_gnn_order"
+  # "gl25"
+  # "gcps"
+  # "esa"
+  # "pso"
+  # "dbpso"
+  # "clpso"
+  # "ccpso"
+  # "shade"
+  # "jade"
+  # "random"
+  # "greedy"
 )
 
 GRAPH_SIZES=(
   # "10"
   # "15"
-  "1000"
-  # "10000"
+  # "1000"
+  "10000"
 )
 
 # Extra non-synthetic datasets that can be run through the same batch path.

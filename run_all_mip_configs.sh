@@ -250,6 +250,9 @@ lp_makespan = np.nan
 lssp_makespan = np.nan
 makespan = np.nan
 partition_cost = np.nan
+optimization_time_sec = runtime_sec
+postprocess_time_sec = 0.0
+algorithm_total_time_sec = runtime_sec
 solution_valid = False
 initial_solution_valid = False
 was_repaired = False
@@ -275,6 +278,25 @@ if json_payload:
         lssp_makespan = float(json_payload.get("final_lssp_makespan", np.nan))
     except Exception:
         pass
+    try:
+        optimization_time_sec = float(json_payload.get("solve_time_sec", optimization_time_sec))
+    except Exception:
+        pass
+    try:
+        postprocess_time_sec = float(json_payload.get("postprocess_time_sec", np.nan))
+    except Exception:
+        pass
+    try:
+        algorithm_total_time_sec = float(json_payload.get("algorithm_total_time_sec", np.nan))
+    except Exception:
+        pass
+    if not np.isfinite(postprocess_time_sec):
+        if np.isfinite(algorithm_total_time_sec):
+            postprocess_time_sec = max(0.0, float(algorithm_total_time_sec) - float(optimization_time_sec))
+        else:
+            postprocess_time_sec = 0.0
+    if not np.isfinite(algorithm_total_time_sec):
+        algorithm_total_time_sec = float(optimization_time_sec) + float(postprocess_time_sec)
     if np.isfinite(lssp_makespan):
         makespan = lssp_makespan
     elif np.isfinite(model_makespan):
@@ -333,6 +355,9 @@ row = {
     "mip_bb": "milp_eval",
     "mip_makespan": makespan,
     "mip_time": runtime_sec,
+    "mip_optimization_time_sec": optimization_time_sec,
+    "mip_postprocess_time_sec": postprocess_time_sec,
+    "mip_total_runtime_sec": algorithm_total_time_sec,
     "mip_solution_valid": solution_valid,
     "mip_initial_solution_valid": initial_solution_valid,
     "mip_was_repaired": was_repaired,
@@ -794,6 +819,16 @@ solver_status = meta.get('solver_status') or json_payload.get('status', 'optimal
 model_makespan = float(meta.get('model_makespan', json_payload.get('makespan', np.nan)))
 lp_makespan = float(meta.get('lp_makespan', json_payload.get('lp_makespan', np.nan)))
 lssp_makespan = float(meta.get('final_lssp_makespan', json_payload.get('final_lssp_makespan', makespan)))
+optimization_time_sec = float(meta.get('solve_time_sec', json_payload.get('solve_time_sec', runtime_sec)))
+postprocess_time_sec = float(meta.get('postprocess_time_sec', json_payload.get('postprocess_time_sec', np.nan)))
+algorithm_total_time_sec = float(meta.get('algorithm_total_time_sec', json_payload.get('algorithm_total_time_sec', np.nan)))
+if not np.isfinite(postprocess_time_sec):
+    if np.isfinite(algorithm_total_time_sec):
+        postprocess_time_sec = max(0.0, float(algorithm_total_time_sec) - float(optimization_time_sec))
+    else:
+        postprocess_time_sec = max(0.0, float(runtime_sec) - float(optimization_time_sec))
+if not np.isfinite(algorithm_total_time_sec):
+    algorithm_total_time_sec = float(optimization_time_sec) + float(postprocess_time_sec)
 
 is_valid = bool(lssp_result.get('is_valid', True))
 was_repaired = bool(lssp_result.get('was_repaired', False))
@@ -841,6 +876,9 @@ row = {
     f'{method}_bb': 'milp_eval',
     f'{method}_makespan': makespan,
     f'{method}_time': runtime_sec,
+    f'{method}_optimization_time_sec': optimization_time_sec,
+    f'{method}_postprocess_time_sec': postprocess_time_sec,
+    f'{method}_total_runtime_sec': algorithm_total_time_sec,
     f'{method}_solution_valid': is_valid,
     f'{method}_initial_solution_valid': (not was_repaired),
     f'{method}_was_repaired': was_repaired,

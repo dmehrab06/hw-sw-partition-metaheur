@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from utils.logging_utils import LogManager
 from meta_heuristic.partition_schedule_evaluator import evaluate_partition_dag, evaluate_partition_lssp
 import time
+import math
 
 # Set up logging
 if __name__ == "__main__":
@@ -94,11 +95,21 @@ def _compute_lssp_makespan(task_graph, partition: dict) -> float:
     )
 
 
-def _extract_diff_gnn_order_meta(func: Callable) -> dict:
+def _extract_method_runtime_meta(func: Callable) -> dict:
     meta = getattr(func, "last_run_meta", None)
     if isinstance(meta, dict):
         return meta
     return {}
+
+
+def _coerce_runtime_seconds(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out):
+        return None
+    return max(0.0, out)
 
 
 def _use_large_graph_diff_lssp_only_final(
@@ -233,6 +244,8 @@ class MethodResult:
     partition_cost: float
     partition_assignment: Dict[str, Any]
     optimization_time: float
+    postprocess_time: float = 0.0
+    total_runtime: float = 0.0
     additional_metrics: Dict[str, Any] = None
 
 class MethodRegistry:
@@ -278,10 +291,10 @@ class MethodRegistry:
             
         logger.info(f"naive assignment has a opt_cost of {best_cost}")
 
-        start = time.time()
+        start = time.perf_counter()
         # Run the optimization method
         opt_cost, opt_solution = func(dim, func_to_optimize, config, **kwargs)
-        opt_time = time.time()-start
+        method_call_time = time.perf_counter() - start
 
         if opt_cost<best_cost:
             # Create partition from solution in the form of numpy array
@@ -293,14 +306,19 @@ class MethodRegistry:
         partition = _normalize_partition(partition)
         print(partition)
         method_key = str(name).lower()
-        diff_meta = _extract_diff_gnn_order_meta(func) if method_key == "diff_gnn_order" else {}
+        method_runtime_meta = _extract_method_runtime_meta(func)
+        learned_sw_scores = None
+        if method_key == "diff_gnn_order":
+            learned_sw_scores = method_runtime_meta.get("sw_priority_scores")
+        schedule_start = time.perf_counter()
         schedule_metrics = _compute_schedule_metrics(
             task_graph,
             partition,
             method_name=name,
-            learned_sw_scores=diff_meta.get("sw_priority_scores"),
+            learned_sw_scores=learned_sw_scores,
             final_lssp_only=large_graph_lssp_only,
         )
+        schedule_time = time.perf_counter() - schedule_start
         schedule_result = schedule_metrics["lssp_result"]
         partition = dict(schedule_metrics["partition"])
         makespan = float(schedule_metrics["lssp_makespan"])
@@ -308,6 +326,15 @@ class MethodRegistry:
         lssp_swprio_makespan = schedule_metrics["lssp_swprio_makespan"]
         best_makespan = float(schedule_metrics["best_makespan"])
         partition_cost = task_graph.evaluate_partition_cost(partition)
+        optimization_time = _coerce_runtime_seconds(
+            method_runtime_meta.get("optimization_time_sec", None)
+        )
+        if optimization_time is None:
+            optimization_time = max(0.0, method_call_time)
+        optimization_time = min(optimization_time, max(0.0, method_call_time))
+        wrapper_postprocess_time = max(0.0, method_call_time - optimization_time)
+        postprocess_time = wrapper_postprocess_time + schedule_time
+        total_runtime = optimization_time + postprocess_time
         reported_opt_cost = float(best_cost)
         if large_graph_lssp_only and method_key == "diff_gnn_order":
             reported_opt_cost = float(best_makespan)
@@ -346,7 +373,9 @@ class MethodRegistry:
             makespan = makespan,
             partition_cost = partition_cost,
             partition_assignment = partition,
-            optimization_time = opt_time,
+            optimization_time = optimization_time,
+            postprocess_time = postprocess_time,
+            total_runtime = total_runtime,
             additional_metrics = {
                 "solution_valid": bool(schedule_result.get("is_valid", True)),
                 "initial_solution_valid": not bool(schedule_result.get("was_repaired", False)),
@@ -360,8 +389,9 @@ class MethodRegistry:
                 "lssp_makespan": makespan,
                 "lssp_swprio_makespan": lssp_swprio_makespan,
                 "best_makespan": best_makespan,
+                "runtime_method_call_time_sec": float(method_call_time),
+                "runtime_schedule_eval_time_sec": float(schedule_time),
             },
-            ## later add time here
         )
         
         self.results[name] = result
@@ -375,7 +405,9 @@ class MethodRegistry:
         print(partition)
         partition = _normalize_partition(partition)
         print(partition)
+        schedule_start = time.perf_counter()
         schedule_metrics = _compute_schedule_metrics(task_graph, partition, method_name=name)
+        schedule_time = time.perf_counter() - schedule_start
         schedule_result = schedule_metrics["lssp_result"]
         partition = dict(schedule_metrics["partition"])
         makespan = float(schedule_metrics["lssp_makespan"])
@@ -383,7 +415,12 @@ class MethodRegistry:
         lssp_swprio_makespan = schedule_metrics["lssp_swprio_makespan"]
         best_makespan = float(schedule_metrics["best_makespan"])
         partition_cost = task_graph.evaluate_partition_cost(partition)
-        
+        optimization_time = _coerce_runtime_seconds(timing_info)
+        if optimization_time is None:
+            optimization_time = 0.0
+        postprocess_time = max(0.0, schedule_time)
+        total_runtime = optimization_time + postprocess_time
+
         result = MethodResult(
             method_name=name,
             best_optimization_cost = best_cost,
@@ -391,7 +428,9 @@ class MethodRegistry:
             makespan = makespan,
             partition_cost = partition_cost,
             partition_assignment = partition,
-            optimization_time = timing_info,
+            optimization_time = optimization_time,
+            postprocess_time = postprocess_time,
+            total_runtime = total_runtime,
             additional_metrics = {
                 "solution_valid": bool(schedule_result.get("is_valid", True)),
                 "initial_solution_valid": not bool(schedule_result.get("was_repaired", False)),
@@ -405,8 +444,8 @@ class MethodRegistry:
                 "lssp_makespan": makespan,
                 "lssp_swprio_makespan": lssp_swprio_makespan,
                 "best_makespan": best_makespan,
+                "runtime_schedule_eval_time_sec": float(schedule_time),
             },
-            ## add timing info later maybe
         )
         
         self.results[name] = result
@@ -425,7 +464,10 @@ class MethodRegistry:
             results_dict[f'{name}_bb'] = result.func_as_black_box
             results_dict[f'{name}_makespan'] = result.makespan
             results_dict[f'{name}_time'] = result.optimization_time
-            
+            results_dict[f'{name}_optimization_time_sec'] = result.optimization_time
+            results_dict[f'{name}_postprocess_time_sec'] = result.postprocess_time
+            results_dict[f'{name}_total_runtime_sec'] = result.total_runtime
+
             if result.additional_metrics:
                 for metric in result.additional_metrics:
                     results_dict[f'{name}_{metric}'] = result.additional_metrics[metric]

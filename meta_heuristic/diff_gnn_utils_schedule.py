@@ -1,3 +1,4 @@
+import csv
 import numpy as np
 import networkx as nx
 import torch
@@ -156,6 +157,10 @@ try:
     from .lssp_postprocess import improve_with_lssp_local_search
 except Exception:
     from lssp_postprocess import improve_with_lssp_local_search  # type: ignore
+try:
+    from .partition_schedule_evaluator import evaluate_partition_lssp
+except Exception:
+    from partition_schedule_evaluator import evaluate_partition_lssp  # type: ignore
 
 
 def _resolve_diffgnn_dataset_name(config):
@@ -619,6 +624,98 @@ def _blend_decode_scores(base_probs: np.ndarray, heuristic_pref: np.ndarray, wei
 
 def _solution_to_array(solution: dict, node_list) -> np.ndarray:
     return np.asarray([float(solution.get(n, 0)) for n in node_list], dtype=float)
+
+
+def _partition_from_thresholded_probs(node_list, probs, threshold: float = 0.5) -> dict[str, int]:
+    arr = np.asarray(probs, dtype=float).ravel()
+    return {
+        node_list[i]: int(float(arr[i]) > float(threshold))
+        for i in range(len(node_list))
+    }
+
+
+def _partition_hw_area(TG, partition: Mapping[str, int]) -> float:
+    return float(
+        sum(float(TG.hardware_area.get(node, 0.0)) for node, assign in partition.items() if int(assign) == 1)
+    )
+
+
+def _evaluate_partition_lssp_safe(TG, partition: Mapping[str, int]) -> tuple[float, bool]:
+    try:
+        result = evaluate_partition_lssp(
+            TG,
+            dict(partition),
+            auto_repair=False,
+        )
+        finish_times = result.get("finish_times", {}) or {}
+        raw_makespan = max((float(v) for v in finish_times.values()), default=0.0)
+        is_valid = bool(result.get("is_valid", not TG.violates(partition)))
+        return float(raw_makespan), is_valid
+    except Exception as exc:
+        logger.warning("DiffGNN ablation LSSP evaluation failed: %s", str(exc))
+        return float("inf"), False
+
+
+def _append_ablation_trace_row(rows: list[dict] | None, **payload) -> None:
+    if rows is None:
+        return
+    rows.append(dict(payload))
+
+
+def _write_ablation_trace_csv(rows: list[dict], output_csv: str | os.PathLike | None) -> None:
+    if not output_csv or not rows:
+        return
+    out_path = Path(output_csv)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    preferred = [
+        "graph_name",
+        "graph_file",
+        "source_config",
+        "phase",
+        "event",
+        "stage",
+        "candidate_label",
+        "candidate_mode",
+        "epoch",
+        "global_step",
+        "operation_index",
+        "iteration",
+        "accepted",
+        "training_end",
+        "soft_seq_makespan",
+        "threshold_lssp_static",
+        "threshold_lssp_learned_swprio",
+        "postprocess_lssp_cost",
+        "delta_from_prev",
+        "threshold_partition_valid",
+        "threshold_hw_nodes",
+        "threshold_hw_area",
+        "threshold_budget",
+        "tau",
+        "order_tau",
+        "loss",
+        "area_frac",
+        "area_penalty",
+        "selection_metric_train",
+        "selection_metric_final",
+        "notes",
+    ]
+    seen = set()
+    fieldnames = []
+    for key in preferred:
+        if any(key in row for row in rows):
+            fieldnames.append(key)
+            seen.add(key)
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                fieldnames.append(key)
+                seen.add(key)
+    with out_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
 
 
 def _decode_repair_candidates(
@@ -1168,6 +1265,19 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
     dls_lssp_pri_coeff = float(post_cfg.get("dls_lssp_pri_coeff", config.get("dls_lssp_pri_coeff", 0.35)))
     dls_lssp_beta = float(post_cfg.get("dls_lssp_beta", config.get("dls_lssp_beta", 8.0)))
     dls_lssp_fill_eta = float(post_cfg.get("dls_lssp_fill_eta", config.get("dls_lssp_fill_eta", 0.20)))
+    ablation_cfg_raw = config.get("ablation_trace", {})
+    ablation_cfg = dict(ablation_cfg_raw) if isinstance(ablation_cfg_raw, Mapping) else {}
+    ablation_enabled = bool(ablation_cfg.get("enabled", False))
+    ablation_output_csv = str(ablation_cfg.get("output_csv", "") or "").strip()
+    ablation_every = max(1, int(ablation_cfg.get("compute_every", 1)))
+    ablation_threshold = float(ablation_cfg.get("discrete_threshold", 0.5))
+    ablation_include_static = bool(ablation_cfg.get("include_static_lssp", True))
+    ablation_soft_mode = str(ablation_cfg.get("soft_mode", surrogate_mode)).lower()
+    ablation_graph_name = str(
+        config.get("_graph_name", config.get("_dataset_name", config.get("graph_name", ""))) or ""
+    )
+    ablation_graph_file = str(config.get("_graph_file", config.get("graph-file", "")) or "")
+    ablation_source_config = str(config.get("_source_config_path", config.get("config", "")) or "")
     if adaptive_post_max_iters and len(node_list) >= adaptive_post_large_n and post_max_iters > adaptive_post_large_cap:
         logger.info(
             "DiffGNN adaptive postprocess cap: max_iters %d -> %d for N=%d",
@@ -1259,10 +1369,21 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
             str(post_print_progress),
             post_print_every,
         )
+    if ablation_enabled:
+        logger.info(
+            "DiffGNN ablation trace enabled: output=%s every=%d threshold=%.2f soft_mode=%s include_static=%s",
+            ablation_output_csv,
+            ablation_every,
+            ablation_threshold,
+            ablation_soft_mode,
+            str(ablation_include_static),
+        )
 
     best_sched_cost = float('inf')
     best_assign = None
     best_probs = None
+    completed_epochs = 0
+    ablation_trace_rows: list[dict] | None = [] if ablation_enabled else None
 
     edge_weight = getattr(data, "edge_weight", None)
     edge_attr = getattr(data, "edge_attr", None)
@@ -1274,6 +1395,7 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
 
     tau = tau_start
     for ep in range(1, epochs + 1):
+        completed_epochs = ep
         model.train()
         optimizer.zero_grad()
         logits2 = model(data.x, data.edge_index, edge_weight=edge_weight, edge_attr=edge_attr)
@@ -1407,6 +1529,64 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                     best_assign = solution.copy()
                     best_probs = np.asarray(decoded_probs, dtype=float).copy()
 
+        if ablation_trace_rows is not None and (ep % ablation_every == 0 or ep == 1 or ep == epochs):
+            with torch.no_grad():
+                _, ablation_soft_info = _differentiable_makespan_loss(
+                    TG,
+                    probs.detach(),
+                    node_list,
+                    beta_softmax=beta_softmax,
+                    area_penalty_coeff=area_penalty_coeff,
+                    entropy_coeff=entropy_coeff,
+                    usage_balance_coeff=usage_balance_coeff,
+                    target_hw_frac=target_hw_frac,
+                    partition_cost_coeff=partition_cost_coeff,
+                    surrogate_mode=ablation_soft_mode,
+                )
+            threshold_partition = _partition_from_thresholded_probs(
+                node_list,
+                probs.detach().cpu().numpy(),
+                threshold=ablation_threshold,
+            )
+            threshold_valid = not TG.violates(threshold_partition)
+            static_lssp = float("nan")
+            if ablation_include_static:
+                static_lssp, _ = _evaluate_partition_lssp_safe(TG, threshold_partition)
+            _append_ablation_trace_row(
+                ablation_trace_rows,
+                graph_name=ablation_graph_name,
+                graph_file=ablation_graph_file,
+                source_config=ablation_source_config,
+                phase="train",
+                event="epoch",
+                stage="train",
+                candidate_label="thresholded_partition",
+                candidate_mode="threshold",
+                epoch=int(ep),
+                global_step=float(ep),
+                operation_index=0,
+                iteration=int(ep),
+                accepted=False,
+                training_end=False,
+                soft_seq_makespan=float(ablation_soft_info["makespan_surrogate"]),
+                threshold_lssp_static=float(static_lssp),
+                threshold_lssp_learned_swprio=float("nan"),
+                postprocess_lssp_cost=float("nan"),
+                delta_from_prev=float("nan"),
+                threshold_partition_valid=bool(threshold_valid),
+                threshold_hw_nodes=int(sum(int(v) for v in threshold_partition.values())),
+                threshold_hw_area=float(_partition_hw_area(TG, threshold_partition)),
+                threshold_budget=float(TG.area_constraint * TG.total_area),
+                tau=float(tau),
+                order_tau=float("nan"),
+                loss=float(info["loss"]),
+                area_frac=float(info["area_frac"]),
+                area_penalty=float("nan"),
+                selection_metric_train=selection_metric_train,
+                selection_metric_final=selection_metric_final,
+                notes="per_epoch_trace",
+            )
+
         should_log_epoch = (ep <= min(5, epochs)) or (ep % progress_log_every == 0) or (ep == epochs)
         if should_log_epoch:
             elapsed_sec = time.perf_counter() - train_t0
@@ -1438,8 +1618,17 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
                     flush=True,
                 )
 
+    optimization_elapsed_sec = time.perf_counter() - train_t0
+    postprocess_phase_t0 = time.perf_counter()
+
     # Final deterministic prediction using low-temperature hard sampling
-    logger.info("DiffGNN final decode started.")
+    logger.info("DiffGNN final decode started after %d/%d training epochs.", completed_epochs, epochs)
+    if ablation_trace_rows:
+        for row in reversed(ablation_trace_rows):
+            if row.get("phase") == "train":
+                row["training_end"] = True
+                row["notes"] = "training_end"
+                break
     model.eval()
     with torch.no_grad():
         logits2 = model(data.x, data.edge_index, edge_weight=edge_weight, edge_attr=edge_attr)
@@ -1487,6 +1676,42 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
             selection_metric_train,
             final_sched_cost_train,
         )
+        if ablation_trace_rows is not None:
+            decode_static_lssp, _ = _evaluate_partition_lssp_safe(TG, final_solution)
+            _append_ablation_trace_row(
+                ablation_trace_rows,
+                graph_name=ablation_graph_name,
+                graph_file=ablation_graph_file,
+                source_config=ablation_source_config,
+                phase="postprocess",
+                event="decode_selected",
+                stage="decode",
+                candidate_label=str(final_choice_label),
+                candidate_mode="decode",
+                epoch=int(completed_epochs),
+                global_step=float(completed_epochs) + 0.25,
+                operation_index=0,
+                iteration=0,
+                accepted=False,
+                training_end=False,
+                soft_seq_makespan=float("nan"),
+                threshold_lssp_static=float(decode_static_lssp),
+                threshold_lssp_learned_swprio=float("nan"),
+                postprocess_lssp_cost=float("nan"),
+                delta_from_prev=float("nan"),
+                threshold_partition_valid=bool(not TG.violates(final_solution)),
+                threshold_hw_nodes=int(sum(int(v) for v in final_solution.values())),
+                threshold_hw_area=float(_partition_hw_area(TG, final_solution)),
+                threshold_budget=float(TG.area_constraint * TG.total_area),
+                tau=float("nan"),
+                order_tau=float("nan"),
+                loss=float("nan"),
+                area_frac=float("nan"),
+                area_penalty=float("nan"),
+                selection_metric_train=selection_metric_train,
+                selection_metric_final=selection_metric_final,
+                notes="decode_before_postprocess",
+            )
         if use_lssp_final:
             post_t0 = time.perf_counter()
             logger.info(
@@ -1623,13 +1848,58 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         best_final_cost = _evaluate_discrete_solution(TG, best_assign, metric=selection_metric_final)
         logger.info("DiffGNN final metric eval elapsed: %.3fs", time.perf_counter() - metric_t0)
 
+    postprocess_elapsed_sec = time.perf_counter() - postprocess_phase_t0
+
     logger.info(
-        "Training finished. Best %s makespan: %.6f; selected assignment %s makespan: %.6f",
+        "Training finished after %d/%d epochs. Best %s makespan: %.6f; selected assignment %s makespan: %.6f",
+        completed_epochs,
+        epochs,
         selection_metric_train,
         best_sched_cost,
         selection_metric_final,
         best_final_cost,
     )
+    if ablation_trace_rows is not None:
+        final_global_step = (
+            max(float(row.get("global_step", 0.0)) for row in ablation_trace_rows) + 1.0
+            if ablation_trace_rows
+            else float(completed_epochs) + 1.0
+        )
+        _append_ablation_trace_row(
+            ablation_trace_rows,
+            graph_name=ablation_graph_name,
+            graph_file=ablation_graph_file,
+            source_config=ablation_source_config,
+            phase="final",
+            event="selected_final",
+            stage="final",
+            candidate_label=str(final_choice_label),
+            candidate_mode="final",
+            epoch=int(completed_epochs),
+            global_step=float(final_global_step),
+            operation_index=int(max(1, final_global_step - float(completed_epochs))),
+            iteration=0,
+            accepted=False,
+            training_end=False,
+            soft_seq_makespan=float("nan"),
+            threshold_lssp_static=float(best_final_cost),
+            threshold_lssp_learned_swprio=float("nan"),
+            postprocess_lssp_cost=float(best_sched_cost),
+            delta_from_prev=float("nan"),
+            threshold_partition_valid=bool(best_assign is not None and not TG.violates(best_assign)),
+            threshold_hw_nodes=int(sum(int(v) for v in best_assign.values())) if isinstance(best_assign, Mapping) else 0,
+            threshold_hw_area=float(_partition_hw_area(TG, best_assign or {})),
+            threshold_budget=float(TG.area_constraint * TG.total_area),
+            tau=float("nan"),
+            order_tau=float("nan"),
+            loss=float("nan"),
+            area_frac=float("nan"),
+            area_penalty=float("nan"),
+            selection_metric_train=selection_metric_train,
+            selection_metric_final=selection_metric_final,
+            notes="selected_final_solution",
+        )
+        _write_ablation_trace_csv(ablation_trace_rows, ablation_output_csv)
     return {
         "best_assign": best_assign,            # dict node -> {0,1}
         "best_probs": np.asarray(best_probs),  # numpy array 0/1
@@ -1637,6 +1907,11 @@ def _train_with_relaxed_binary(TG, model, data, node_list, config, device):
         "best_train_cost": float(best_sched_cost),
         "selection_metric_train": selection_metric_train,
         "selection_metric_final": selection_metric_final,
+        "completed_epochs": int(completed_epochs),
+        "configured_epochs": int(epochs),
+        "optimization_time_sec": float(optimization_elapsed_sec),
+        "postprocess_time_sec": float(postprocess_elapsed_sec),
+        "total_core_time_sec": float(optimization_elapsed_sec + postprocess_elapsed_sec),
         "model": model,
     }
 
@@ -1764,6 +2039,7 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
         (best_cost, best_solution_array) where best_solution_array has shape (dim,)
     """
     logger.info("Starting simulate_diff_GNN")
+    simulate_diff_GNN.last_run_meta = None
 
     TG = getattr(func_to_optimize, "__self__", None)
 
@@ -1891,4 +2167,15 @@ def simulate_diff_GNN(dim, func_to_optimize, config):
             "simulate_diff_GNN large-graph policy active: final MethodRegistry reporting will "
             "evaluate only the selected final partition with LSSP."
         )
+    simulate_diff_GNN.last_run_meta = {
+        "eval_cost": float(eval_cost),
+        "selection_metric": selection_metric,
+        "selection_metric_train": str(result.get("selection_metric_train", "unknown")),
+        "completed_epochs": int(result.get("completed_epochs", epochs)),
+        "configured_epochs": int(result.get("configured_epochs", epochs)),
+        "optimization_time_sec": float(result.get("optimization_time_sec", 0.0)),
+        "postprocess_time_sec": float(result.get("postprocess_time_sec", 0.0)),
+        "total_core_time_sec": float(result.get("total_core_time_sec", 0.0)),
+        "large_graph_dag_policy": bool(large_graph_dag_policy),
+    }
     return best_cost, sol_arr

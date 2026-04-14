@@ -1,0 +1,13 @@
+graph_name,seed,area_constraint,hw_scale_factor,hw_scale_variance,comm_scale_factor,method,optimization_time_sec,postprocess_time_sec,total_runtime_sec,key,family,nodes,edges
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,gl25,1511.011665651109,0.0901736370287835,1511.101839288138,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,esa,857.7334361700341,0.0926694329828023,857.8261056030169,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,diff_gnn_order,852.9960251417942,282.504982852377,1135.5010079941712,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,gcps,81.58083645720035,0.0882536321878433,81.66909008938819,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,pso,3675.460778478999,0.0878031831234693,3675.548581662122,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,dbpso,3773.273083072156,0.0901867398060858,3773.363269811962,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,clpso,163.78581598307937,0.0926665607839822,163.87848254386336,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,ccpso,165.150525375735,0.095228677149862,165.24575405288488,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,shade,1622.985740331933,0.0929260849952697,1623.0786664169282,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,jade,1612.5301531227306,0.0922130797989666,1612.6223662025295,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,random,409.2056032558903,0.0908933188766241,409.2964965747669,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066
+mobile_net_tosa,42,0.5,0.1,0.5,1.0,greedy,0.7327654147520661,0.0912695047445595,0.8240349194966257,"('mobile_net_tosa', 42, 0.5, 0.1, 0.5, 1.0)",pytorch-graphs,830,1066

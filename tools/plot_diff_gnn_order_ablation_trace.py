@@ -19,7 +19,7 @@ plt.rcParams["font.family"] = "serif"
 plt.rcParams["font.serif"] = ["Times New Roman", "Times", "Nimbus Roman", "DejaVu Serif"]
 plt.rcParams["axes.unicode_minus"] = False
 
-GLOBAL_FONT_SIZE = 24
+GLOBAL_FONT_SIZE = 32
 FIG_WIDTH = 22.0
 FIG_HEIGHT = 10.0
 TRAINING_WIDTH = 80.0
@@ -33,6 +33,7 @@ plt.rcParams["axes.labelsize"] = GLOBAL_FONT_SIZE
 plt.rcParams["xtick.labelsize"] = GLOBAL_FONT_SIZE
 plt.rcParams["ytick.labelsize"] = GLOBAL_FONT_SIZE
 plt.rcParams["legend.fontsize"] = GLOBAL_FONT_SIZE
+plt.rcParams["legend.title_fontsize"] = GLOBAL_FONT_SIZE
 
 SOFT_COLOR = "#2f5597"
 STATIC_COLOR = "#f28e2b"
@@ -121,7 +122,7 @@ def _build_train_ticks(train_df: pd.DataFrame, max_ticks: int = 5) -> tuple[list
     return positions, labels
 
 
-def _build_post_ticks(post_df: pd.DataFrame, max_total_labels: int = 4) -> tuple[list[float], list[str]]:
+def _build_post_ticks(post_df: pd.DataFrame, max_total_labels: int = 3) -> tuple[list[float], list[str]]:
     if post_df.empty:
         return [], []
 
@@ -350,7 +351,7 @@ def main() -> None:
     xlabels = train_tick_labels + post_tick_labels
     if xticks:
         ax.set_xticks(xticks)
-        ax.set_xticklabels(xlabels)
+        ax.set_xticklabels(xlabels, fontsize=GLOBAL_FONT_SIZE)
         tick_labels = ax.get_xticklabels()
         if post_tick_positions:
             first_post_label_index = len(train_tick_positions)
@@ -360,10 +361,12 @@ def main() -> None:
             if 0 <= last_post_label_index < len(tick_labels):
                 tick_labels[last_post_label_index].set_horizontalalignment("right")
 
-    ax.set_xlabel("Epoch / Post-Process Step")
-    ax.set_ylabel("Makespan")
-    ax2.set_ylabel("Area / Budget")
-    ax.set_title(title, pad=18)
+    ax.set_xlabel("Epoch / Post-Process Step", fontsize=GLOBAL_FONT_SIZE)
+    ax.set_ylabel("Makespan", fontsize=GLOBAL_FONT_SIZE)
+    ax2.set_ylabel("Area / Budget", fontsize=GLOBAL_FONT_SIZE)
+    ax.set_title(title, fontsize=GLOBAL_FONT_SIZE, pad=18)
+    ax.tick_params(axis="both", labelsize=GLOBAL_FONT_SIZE)
+    ax2.tick_params(axis="y", labelsize=GLOBAL_FONT_SIZE)
 
     ax.grid(axis="y", linestyle=":", alpha=0.35)
 
@@ -371,9 +374,10 @@ def main() -> None:
     ax.text(
         TRAINING_WIDTH / 2.0,
         text_y,
-        "TRAINING",
+        "OPTIMIZATION",
         ha="center",
         va="center",
+        fontsize=GLOBAL_FONT_SIZE,
         fontweight="bold",
         color="#444444",
     )
@@ -384,6 +388,7 @@ def main() -> None:
             "POST-PROCESSING",
             ha="center",
             va="center",
+            fontsize=GLOBAL_FONT_SIZE,
             fontweight="bold",
             color="#444444",
         )
@@ -418,6 +423,7 @@ def main() -> None:
         bbox_to_anchor=(0.5, -0.16),
         ncol=4,
         frameon=False,
+        fontsize=GLOBAL_FONT_SIZE,
     )
 
     args.output_png.parent.mkdir(parents=True, exist_ok=True)

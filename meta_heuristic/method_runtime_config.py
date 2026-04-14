@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-# Shared GCPS defaults. The user-provided makespan YAML does not carry a GCPS
-# block, so GCPS keeps its Python-side defaults under both profiles until an
-# explicit alternative is provided.
+# Legacy GCPS defaults kept here for compatibility with generic config queries.
+# The active GCPS runtime selection now lives in
+# meta_heuristic/gcps/gcps_runtime_config.py and is applied directly inside
+# simulate_gcps, intentionally ignoring the per-YAML `gcps:` block.
 _GCPS_RUNTIME_DEFAULTS: dict[str, Any] = {
     "lr": 1e-3,
     "dropout": 0.2,

@@ -9,6 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import pandas as pd
 
@@ -647,7 +648,9 @@ def _plot_dataset_grid(frame: pd.DataFrame, methods: list[str], datasets: list[s
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight")
-    fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
+    # Save PDF using PdfPages to ensure the PDF backend is used reliably
+    with PdfPages(output_path.with_suffix(".pdf")) as pdf:
+        pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -670,7 +673,9 @@ def _plot_area_grid(frame: pd.DataFrame, methods: list[str], areas: list[float],
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight")
-    fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
+    # Save PDF using PdfPages to ensure the PDF backend is used reliably
+    with PdfPages(output_path.with_suffix(".pdf")) as pdf:
+        pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
 
 

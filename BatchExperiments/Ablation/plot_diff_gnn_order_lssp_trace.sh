@@ -14,7 +14,7 @@ if [[ -z "${PYTHON:-}" ]]; then
 fi
 OUTROOT="${OUTROOT:-$ROOT/BatchExperiments/Ablation/diff_gnn_order_lssp_trace}"
 LATEST_ONLY="${LATEST_ONLY:-1}"
-EPOCH_STRIDE="${EPOCH_STRIDE:-20}"
+EPOCH_STRIDE="${EPOCH_STRIDE:-25}"
 RUN_OVERRIDE=""
 
 # Parse simple command-line options: --run RUN_ID to pick a specific run directory,

@@ -25,8 +25,8 @@ ALL_METHODS_ORDER=(
 
 METHODS=(
   # "mip"
-  "diff_gnn"
-  # "diff_gnn_order"
+  # "diff_gnn"
+  "diff_gnn_order"
   # "gl25"
   # "gcps"
   # "esa"
@@ -37,7 +37,7 @@ METHODS=(
   # "shade"
   # "jade"
   # "random"
-  # "greedy"
+  "greedy"
 )
 
 GRAPH_SIZES=(

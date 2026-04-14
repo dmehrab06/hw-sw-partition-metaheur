@@ -67,8 +67,8 @@ if __name__ == "__main__":
 logger = LogManager.get_logger(__name__)
 
 _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
-    "iter": 1000,
-    "verbose": 1000,
+    "iter": 2500,
+    "verbose": 2500,
     "device": "gpu",
     "hidden_dim": 256, #256,
     "num_layers": 3, #3,
@@ -89,6 +89,8 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "large_graph_order_approx_enabled": True,
     "large_graph_order_approx_threshold": 900,
     "large_graph_order_topk": 64,
+    "large_graph_order_candidate_mode": "rank_window",
+    "large_graph_order_candidate_pool_factor": 2.0,
     "order_refine_steps": 2,
     "use_hw_ordering": False,
     "gumbel_noise": False,
@@ -119,7 +121,7 @@ _MKSPAN_DIFFGNN_ORDER_DEFAULTS = {
     "selection_metric_final": "queue",  # metric used for final reported selection.
     "final_legacy_lp_if_mip": True,     # when optimizing against a MIP blackbox, final metric can auto-switch to legacy_lp.
     "early_stop_enabled": True,
-    "early_stop_min_epochs": 750,
+    "early_stop_min_epochs": 2000,
     "early_stop_patience": 10,
     "early_stop_min_delta": 1e-4,
     "progress_log_every": 50,
@@ -209,14 +211,29 @@ _FAST_MODE_DEFAULTS = {
 # still unset after reading YAML, so per-config values can override them.
 _DIFFGNN_ORDER_DATASET_OVERRIDES = {
     "paper_fig3_11node": {},
+    # "mobile_net_tosa": {
+    #     "iter": 500,
+    #     "verbose": 500,
+    #     "early_stop_min_epochs": 500,
+    #     "soft_makespan_exact_every": 5,
+    #     "large_graph_order_approx_enabled": True,
+    #     "large_graph_order_approx_threshold": 800,
+    #     "large_graph_order_topk": 64,
+    #     "postprocess": {
+    #         "candidate_top_k": 64,
+    #     },
+    # },
+    #for runtime
     "mobile_net_tosa": {
-        "iter": 500,
-        "verbose": 500,
-        "early_stop_min_epochs": 500,
-        "soft_makespan_exact_every": 5,
+        "iter": 1500,
+        "verbose": 50,
+        "early_stop_min_epochs": 1000,
+        "soft_makespan_exact_every": 2,
         "large_graph_order_approx_enabled": True,
         "large_graph_order_approx_threshold": 800,
         "large_graph_order_topk": 64,
+        "large_graph_order_candidate_mode": "rank_window",
+        "large_graph_order_candidate_pool_factor": 2.0,
         "postprocess": {
             "candidate_top_k": 64,
         },
@@ -225,18 +242,23 @@ _DIFFGNN_ORDER_DATASET_OVERRIDES = {
         "iter": 750,
         "verbose": 750,
         "early_stop_min_epochs": 500,
-        "soft_makespan_exact_every": 1,
+        "soft_makespan_exact_every": 2,
         "postprocess": {
             "candidate_top_k": 32,
         },
     },
     "squeezenet_like_10000": {
+        # "iter": 2500,
+        # "verbose": 2500,
+        # "early_stop_min_epochs": 2500,
+
         "iter": 500,
         "verbose": 500,
         "early_stop_min_epochs": 500,
+
         "soft_makespan_exact_every": 5,
         "postprocess": {
-            "candidate_top_k": 64,
+            "candidate_top_k": 16,
         },
     },
         
@@ -248,6 +270,12 @@ _DIFFGNN_ORDER_DATASET_OVERRIDES = {
         'iter': 2500,
         'early_stop_min_epochs': 2500,
     },
+
+    # "squeeze_net_tosa": {
+    #     'iter': 500,
+    #     'early_stop_min_epochs': 500,
+    # },
+
     "anomaly_detection_tosa": {},
     "image_classification_tosa": {},
     "keyword_spotting_tosa": {},
@@ -388,14 +416,23 @@ def _topk_pairwise_before_from_priority_logits(
     priorities: torch.Tensor,
     topk: int,
     temperature: float = 0.5,
+    candidate_mode: str = "rank_window",
+    candidate_pool_factor: float = 2.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Sparse O(NK) approximation of pairwise-before probabilities.
 
-    For each target task i, select the top-k highest-priority source tasks
-    excluding i, then compute before-probabilities directly from priority
-    differences instead of materializing a Sinkhorn permutation or dense NxN
-    pairwise matrix.
+    Candidate source tasks are selected without materializing a dense NxN
+    pairwise matrix. The default `rank_window` mode builds a target-specific
+    shortlist around each task's position in the learned priority order, which
+    avoids reusing nearly the same global source set for every target.
+
+    Modes:
+      - rank_window: immediate higher-ranked neighbors first, then nearby lower-
+        ranked neighbors as fallback; pool size is scaled by
+        `candidate_pool_factor` before the exact top-k prune.
+      - global_topk: legacy behavior that reuses the globally highest-priority
+        tasks (excluding self) for every target.
     """
     priorities = priorities.reshape(-1)
     n = int(priorities.shape[0])
@@ -408,10 +445,39 @@ def _topk_pairwise_before_from_priority_logits(
     sorted_idx = torch.argsort(priorities.reshape(-1), descending=True)
     inv_rank = torch.empty((n,), dtype=torch.long, device=priorities.device)
     inv_rank.scatter_(0, sorted_idx, torch.arange(n, device=priorities.device, dtype=torch.long))
+    mode = str(candidate_mode or "rank_window").lower()
 
-    rows = torch.arange(k_eff, device=priorities.device, dtype=torch.long).unsqueeze(1)
-    candidate_pos = rows + (rows >= inv_rank.unsqueeze(0)).to(torch.long)
-    candidate_idx = sorted_idx[candidate_pos.reshape(-1)].reshape(k_eff, n)
+    if mode in {"global_topk", "global_head", "legacy"}:
+        rows = torch.arange(k_eff, device=priorities.device, dtype=torch.long).unsqueeze(1)
+        candidate_pos = rows + (rows >= inv_rank.unsqueeze(0)).to(torch.long)
+        candidate_idx = sorted_idx[candidate_pos.reshape(-1)].reshape(k_eff, n)
+    elif mode in {"rank_window", "window", "local_rank"}:
+        pool_k = min(
+            max(k_eff, int(math.ceil(float(max(candidate_pool_factor, 1.0)) * k_eff))),
+            n - 1,
+        )
+        before_offsets = -torch.arange(1, pool_k + 1, device=priorities.device, dtype=torch.long)
+        after_offsets = torch.arange(1, pool_k + 1, device=priorities.device, dtype=torch.long)
+        offsets = torch.cat((before_offsets, after_offsets), dim=0)
+
+        candidate_pos = inv_rank.unsqueeze(0) + offsets.unsqueeze(1)
+        valid = (candidate_pos >= 0) & (candidate_pos < n)
+        candidate_pos = candidate_pos.clamp(0, n - 1)
+        gathered_idx = sorted_idx[candidate_pos.reshape(-1)].reshape(offsets.shape[0], n)
+
+        # Keep the first `pool_k` valid offsets per target according to the
+        # offset order above: closer higher-ranked tasks first, then nearby
+        # lower-ranked tasks when the target is already near the front.
+        valid_rank = torch.cumsum(valid.to(torch.long), dim=0) - 1
+        keep = valid & (valid_rank < pool_k)
+        col_idx = torch.arange(n, device=priorities.device, dtype=torch.long).unsqueeze(0).expand_as(valid_rank)
+        candidate_idx = torch.empty((pool_k, n), dtype=torch.long, device=priorities.device)
+        candidate_idx[valid_rank[keep], col_idx[keep]] = gathered_idx[keep]
+    else:
+        raise ValueError(
+            f"Unsupported large-graph candidate_mode '{candidate_mode}'. "
+            "Use rank_window or global_topk."
+        )
 
     src_prio = priorities[candidate_idx]
     tgt_prio = priorities.unsqueeze(0)
@@ -430,6 +496,8 @@ def _sparse_resource_logits_from_priority(
     resource_logit_alpha: float,
     order_eps: float,
     min_prob: float,
+    candidate_mode: str = "rank_window",
+    candidate_pool_factor: float = 2.0,
 ) -> torch.Tensor:
     """
     Build sparse resource-precedence logits for the top-k likely predecessors of
@@ -439,6 +507,8 @@ def _sparse_resource_logits_from_priority(
         priorities,
         topk=topk,
         temperature=temperature,
+        candidate_mode=candidate_mode,
+        candidate_pool_factor=candidate_pool_factor,
     )
     if candidate_idx.numel() == 0:
         return F_source.new_empty((0, F_source.shape[0]))
@@ -450,6 +520,9 @@ def _sparse_resource_logits_from_priority(
     if float(min_prob) > 0.0:
         neg_inf = torch.full_like(resource_logits, -1e9)
         resource_logits = torch.where(resource_prob >= float(min_prob), resource_logits, neg_inf)
+    k_eff = min(max(int(topk), 1), int(resource_logits.shape[0]))
+    if resource_logits.shape[0] > k_eff:
+        resource_logits, _ = torch.topk(resource_logits, k=k_eff, dim=0, sorted=False)
     return resource_logits
 
 
@@ -935,6 +1008,8 @@ def _differentiable_makespan_loss_with_order(
     resource_candidate_min_prob=0.0,
     large_graph_order_approx=False,
     large_graph_order_topk=64,
+    large_graph_order_candidate_mode="rank_window",
+    large_graph_order_candidate_pool_factor=2.0,
     loss_cache=None,
 ):
     """
@@ -944,7 +1019,8 @@ def _differentiable_makespan_loss_with_order(
       - HW lane ordering is optional and disabled by default (use_hw_ordering=False).
       - Makespan surrogate combines DAG precedence and resource precedence.
       - Large graphs can skip Sinkhorn entirely and use sparse top-k direct-logit
-        precedence for O(NK) resource interactions.
+        precedence for O(NK) resource interactions with target-specific shortlist
+        selection.
     """
     device = probs_tensor.device
     dtype = probs_tensor.dtype
@@ -1040,6 +1116,8 @@ def _differentiable_makespan_loss_with_order(
                     resource_logit_alpha=resource_logit_alpha,
                     order_eps=order_eps,
                     min_prob=min_prob,
+                    candidate_mode=large_graph_order_candidate_mode,
+                    candidate_pool_factor=large_graph_order_candidate_pool_factor,
                 )
             ]
             if bool(use_hw_ordering):
@@ -1054,6 +1132,8 @@ def _differentiable_makespan_loss_with_order(
                         resource_logit_alpha=resource_logit_alpha,
                         order_eps=order_eps,
                         min_prob=min_prob,
+                        candidate_mode=large_graph_order_candidate_mode,
+                        candidate_pool_factor=large_graph_order_candidate_pool_factor,
                     )
                 )
             logits_parts = [part for part in logits_parts if part.numel() > 0]
@@ -1284,6 +1364,13 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
     large_graph_order_approx_enabled = bool(config.get("large_graph_order_approx_enabled", True))
     large_graph_order_approx_threshold = int(config.get("large_graph_order_approx_threshold", 900))
     large_graph_order_topk = max(1, int(config.get("large_graph_order_topk", 64)))
+    large_graph_order_candidate_mode = str(
+        config.get("large_graph_order_candidate_mode", "rank_window")
+    ).lower()
+    large_graph_order_candidate_pool_factor = max(
+        1.0,
+        float(config.get("large_graph_order_candidate_pool_factor", 2.0)),
+    )
     large_graph_order_approx = (
         large_graph_order_approx_enabled and len(node_list) > large_graph_order_approx_threshold
     )
@@ -1434,12 +1521,14 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         paper_sigma,
     )
     logger.info(
-        "DiffGNNOrder large-graph order approx: enabled=%s active=%s N=%d threshold=%d topk=%d skip_sinkhorn=%s",
+        "DiffGNNOrder large-graph order approx: enabled=%s active=%s N=%d threshold=%d topk=%d candidate_mode=%s pool_factor=%.2f skip_sinkhorn=%s",
         str(large_graph_order_approx_enabled),
         str(large_graph_order_approx),
         len(node_list),
         large_graph_order_approx_threshold,
         large_graph_order_topk,
+        large_graph_order_candidate_mode,
+        large_graph_order_candidate_pool_factor,
         str(large_graph_order_approx),
     )
     if large_graph_order_approx:
@@ -1449,6 +1538,8 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             f"nodes={len(node_list)} "
             f"threshold={large_graph_order_approx_threshold} "
             f"topk={large_graph_order_topk} "
+            f"candidate_mode={large_graph_order_candidate_mode} "
+            f"pool_factor={large_graph_order_candidate_pool_factor:.2f} "
             f"skip_sinkhorn=True",
             flush=True,
         )
@@ -1633,6 +1724,8 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
             resource_candidate_min_prob=resource_candidate_min_prob,
             large_graph_order_approx=large_graph_order_approx,
             large_graph_order_topk=large_graph_order_topk,
+            large_graph_order_candidate_mode=large_graph_order_candidate_mode,
+            large_graph_order_candidate_pool_factor=large_graph_order_candidate_pool_factor,
             loss_cache=loss_cache,
         )
 
@@ -1794,6 +1887,8 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                     resource_candidate_min_prob=resource_candidate_min_prob,
                     large_graph_order_approx=large_graph_order_approx,
                     large_graph_order_topk=large_graph_order_topk,
+                    large_graph_order_candidate_mode=large_graph_order_candidate_mode,
+                    large_graph_order_candidate_pool_factor=large_graph_order_candidate_pool_factor,
                     loss_cache=loss_cache,
                 )
                 threshold_partition = _partition_from_thresholded_probs(
@@ -1910,6 +2005,9 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
                 stagnant_epochs,
             )
             break
+
+    optimization_elapsed_sec = time.perf_counter() - train_t0
+    postprocess_phase_t0 = time.perf_counter()
 
     logger.info("DiffGNNOrder final decode started after %d/%d training epochs.", completed_epochs, epochs)
     if ablation_trace_rows:
@@ -2228,6 +2326,8 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         )
         logger.info("DiffGNNOrder final metric eval elapsed: %.3fs", time.perf_counter() - metric_t0)
 
+    postprocess_elapsed_sec = time.perf_counter() - postprocess_phase_t0
+
     logger.info(
         "DiffGNNOrder training finished after %d/%d epochs. Best %s makespan: %.6f; selected assignment %s makespan: %.6f",
         completed_epochs,
@@ -2294,6 +2394,11 @@ def _train_with_relaxed_binary_order(TG, model, data, node_list, config, device)
         "best_sw_priority_scores": best_sw_priority_scores,
         "selection_metric_train": selection_metric_train,
         "selection_metric_final": selection_metric_final,
+        "completed_epochs": int(completed_epochs),
+        "configured_epochs": int(epochs),
+        "optimization_time_sec": float(optimization_elapsed_sec),
+        "postprocess_time_sec": float(postprocess_elapsed_sec),
+        "total_core_time_sec": float(optimization_elapsed_sec + postprocess_elapsed_sec),
         "model": model,
     }
 
@@ -2556,6 +2661,11 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
             ),
             "selection_metric": selection_metric,
             "selection_metric_train": str(result.get("selection_metric_train", "unknown")),
+            "completed_epochs": int(result.get("completed_epochs", epochs)),
+            "configured_epochs": int(result.get("configured_epochs", epochs)),
+            "optimization_time_sec": float(result.get("optimization_time_sec", 0.0)),
+            "postprocess_time_sec": float(result.get("postprocess_time_sec", 0.0)),
+            "total_core_time_sec": float(result.get("total_core_time_sec", 0.0)),
             "large_graph_dag_policy": True,
         }
         return best_cost, sol_arr
@@ -2608,5 +2718,10 @@ def simulate_diff_GNN_order(dim, func_to_optimize, config):
         "sw_priority_scores": (dict(sw_priority_scores) if isinstance(sw_priority_scores, Mapping) else None),
         "selection_metric": selection_metric,
         "selection_metric_train": str(result.get("selection_metric_train", "unknown")),
+        "completed_epochs": int(result.get("completed_epochs", epochs)),
+        "configured_epochs": int(result.get("configured_epochs", epochs)),
+        "optimization_time_sec": float(result.get("optimization_time_sec", 0.0)),
+        "postprocess_time_sec": float(result.get("postprocess_time_sec", 0.0)),
+        "total_core_time_sec": float(result.get("total_core_time_sec", 0.0)),
     }
     return best_cost, sol_arr

@@ -203,12 +203,16 @@ def main():
         print(f"  status: {solver_status}")
         print(f"  area_limit: {float(A_max):.6f}")
         print(f"  solve_time_sec: {solve_sec:.3f}")
+        print("  postprocess_time_sec: 0.000")
+        print(f"  algorithm_total_time_sec: {solve_sec:.3f}")
         print(f"  total_time_sec: {time.perf_counter() - t0:.3f}")
         if timed_out:
             raise SystemExit(124)
         raise RuntimeError("MILP solver failed to produce an accepted exact solution")
     
     
+
+    postprocess_t0 = time.perf_counter()
 
     partition_assignment = {}
     for n in solution['hardware_nodes']:
@@ -227,6 +231,8 @@ def main():
     lp_makespan, _ = compute_dag_makespan(graph, lp_assignment)
     lssp_result = evaluate_partition_lssp(task_graph_eval, partition_assignment)
     lssp_makespan = float(lssp_result["makespan"])
+    postprocess_sec = time.perf_counter() - postprocess_t0
+    algorithm_total_sec = solve_sec + postprocess_sec
     logger.info(f"LP makespan: {lp_makespan}")
     logger.info(f"LSSP makespan: {lssp_makespan}")
 
@@ -239,6 +245,8 @@ def main():
     print(f"  total_hw_area: {float(solution.get('total_hardware_area', float('nan'))):.6f}")
     print(f"  area_limit: {float(A_max):.6f}")
     print(f"  solve_time_sec: {solve_sec:.3f}")
+    print(f"  postprocess_time_sec: {postprocess_sec:.3f}")
+    print(f"  algorithm_total_time_sec: {algorithm_total_sec:.3f}")
     print(f"  total_time_sec: {time.perf_counter() - t0:.3f}")
     
     area_constraint_str = f"{config['area-constraint']:.2f}"
@@ -265,6 +273,8 @@ def main():
     json_solution["lp_makespan"] = float(lp_makespan)
     json_solution["final_lssp_makespan"] = float(lssp_makespan)
     json_solution["solve_time_sec"] = float(solve_sec)
+    json_solution["postprocess_time_sec"] = float(postprocess_sec)
+    json_solution["algorithm_total_time_sec"] = float(algorithm_total_sec)
     json_solution["total_time_sec"] = float(time.perf_counter() - t0)
     json_solution["solver_tool"] = config.get("solver-tool")
     json_solution["taskgraph_pickle"] = taskgraph_pickle_used
@@ -303,6 +313,8 @@ def main():
         "lp_makespan": float(lp_makespan),
         "final_lssp_makespan": float(lssp_makespan),
         "solve_time_sec": float(solve_sec),
+        "postprocess_time_sec": float(postprocess_sec),
+        "algorithm_total_time_sec": float(algorithm_total_sec),
         "total_time_sec": float(time.perf_counter() - t0),
     }
     meta_path = Path(output_dir) / f"{partition_base}_assignment-mip.meta.json"

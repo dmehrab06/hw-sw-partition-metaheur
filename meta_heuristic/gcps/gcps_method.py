@@ -6,7 +6,7 @@ import networkx as nx
 import numpy as np
 
 from utils.logging_utils import LogManager
-from ..Configuration import resolve_classical_method_config
+from .gcps_runtime_config import resolve_gcps_runtime_config
 
 try:
     import torch
@@ -236,8 +236,8 @@ def simulate_gcps(dim, func_to_optimize, config):
     if len(node_list) != int(dim):
         raise ValueError(f"dim ({dim}) does not match node count ({len(node_list)}).")
 
-    gcps_cfg = resolve_classical_method_config(config, "gcps")
-    seed = int(gcps_cfg.get("seed", config.get("seed", 42)))
+    gcps_cfg, gcps_preset = resolve_gcps_runtime_config(dim)
+    seed = int(config.get("seed", 42))
     random.seed(seed)
     np.random.seed(seed)
     if torch is not None:
@@ -248,7 +248,12 @@ def simulate_gcps(dim, func_to_optimize, config):
     lr = float(gcps_cfg.get("lr", 1e-3))
     dropout = float(gcps_cfg.get("dropout", 0.2))
     pretrain_iter = int(gcps_cfg.get("pretrain_iter", gcps_cfg.get("pretrain_epochs", 100)))
-    max_epochs = int(gcps_cfg.get("max_epochs", gcps_cfg.get("iter", 800)))
+    max_epochs = int(
+        gcps_cfg.get(
+            "posttrain_iter",
+            gcps_cfg.get("max_epochs", gcps_cfg.get("iter", 800)),
+        )
+    )
     schedule_skip = max(1, int(gcps_cfg.get("schedule_skip", gcps_cfg.get("s", 5))))
     sigma = float(gcps_cfg.get("sigma", 0.3))
     hidden1 = int(gcps_cfg.get("hidden_dim_1", gcps_cfg.get("h1", 10)))
@@ -261,6 +266,20 @@ def simulate_gcps(dim, func_to_optimize, config):
     if schedule_mode not in {"lssp", "taskgraph", "queue"}:
         raise ValueError("gcps.schedule_eval must be one of: lssp|taskgraph|queue")
     schedule_auto_repair = _as_bool(gcps_cfg.get("schedule_auto_repair", True), True)
+
+    logger.info(
+        "GCPS preset=%s nodes=%d pretrain_iter=%d posttrain_iter=%d hidden=(%d,%d) "
+        "schedule_skip=%d schedule_eval=%s device=%s",
+        gcps_preset,
+        dim,
+        pretrain_iter,
+        max_epochs,
+        hidden1,
+        hidden2,
+        schedule_skip,
+        schedule_mode,
+        str(gcps_cfg.get("device", config.get("device", "auto"))),
+    )
 
     alpha = float(gcps_cfg.get("alpha", 5.0))
     if "early_stop_k" in gcps_cfg:
