@@ -574,16 +574,30 @@ def _draw_method_boxplots(ax, frame: pd.DataFrame, methods: list[str], title: st
     for idx, method in enumerate(methods):
         timeout_count = int(frame.loc[frame["method"] == method, "is_timeout"].sum()) if "is_timeout" in frame else 0
         failed_count = int(frame.loc[frame["method"] == method, "is_failed"].sum()) if "is_failed" in frame else 0
-        status_labels = []
+        # Draw TLE and FAIL labels separately so we can increase TLE font size
+        label_y = status_y
+        # Use a larger font for TLE to make it more prominent
         if timeout_count:
-            status_labels.append(f"TLE {timeout_count}")
-        if failed_count:
-            status_labels.append(f"FAIL {failed_count}")
-        if status_labels:
+            tle_font = max(status_font, int(GLOBAL_FONT_SIZE * 0.65))
+            label_x = idx + 0.16 if method == "mip" else idx
             ax.text(
-                idx,
-                status_y,
-                "\n".join(status_labels),
+                label_x,
+                label_y,
+                f"TLE-{timeout_count}",
+                ha="center",
+                va="bottom",
+                color="#c62828",
+                fontsize=tle_font,
+                fontweight="bold",
+                zorder=4,
+            )
+            label_y += 0.035 * yrange
+        if failed_count:
+            label_x = idx + 0.16 if method == "mip" else idx
+            ax.text(
+                label_x,
+                label_y,
+                f"FAIL-{failed_count}",
                 ha="center",
                 va="bottom",
                 color="#c62828",
